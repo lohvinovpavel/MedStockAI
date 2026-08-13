@@ -1,0 +1,519 @@
+<title>MedStockAI — Solution Architecture (GCP)</title>
+<style>
+:root{
+  --paper:#F2F4F3; --paper-raised:#FFFFFF; --ink:#1B2321; --ink-soft:#3C4643;
+  --muted:#5B655F; --line:#C7CDC9;
+  --accent:#1E6E74; --accent-soft:#DCEEEC; --accent-ink:#0F4448;
+  --risk:#B5541F; --risk-soft:#F5E3D6;
+  --safe:#3F7A55; --safe-soft:#E1EEE4;
+  --font-serif: ui-serif, Georgia, "Iowan Old Style", "Noto Serif", "Times New Roman", serif;
+  --font-sans: ui-sans-serif, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#10161A; --paper-raised:#161F1E; --ink:#E7ECE9; --ink-soft:#C4CFCA;
+    --muted:#8FA099; --line:#2E3A36;
+    --accent:#57BAB2; --accent-soft:#17332F; --accent-ink:#BFEAE5;
+    --risk:#E2905B; --risk-soft:#3A2517;
+    --safe:#7BC79A; --safe-soft:#1D3223;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#10161A; --paper-raised:#161F1E; --ink:#E7ECE9; --ink-soft:#C4CFCA;
+  --muted:#8FA099; --line:#2E3A36;
+  --accent:#57BAB2; --accent-soft:#17332F; --accent-ink:#BFEAE5;
+  --risk:#E2905B; --risk-soft:#3A2517;
+  --safe:#7BC79A; --safe-soft:#1D3223;
+}
+:root[data-theme="light"]{
+  --paper:#F2F4F3; --paper-raised:#FFFFFF; --ink:#1B2321; --ink-soft:#3C4643;
+  --muted:#5B655F; --line:#C7CDC9;
+  --accent:#1E6E74; --accent-soft:#DCEEEC; --accent-ink:#0F4448;
+  --risk:#B5541F; --risk-soft:#F5E3D6;
+  --safe:#3F7A55; --safe-soft:#E1EEE4;
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--font-sans); line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.page{ max-width:1000px; margin:0 auto; padding:56px 28px 96px; }
+.wide{ max-width:1520px; }
+
+.eyebrow{
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--accent-ink); background:var(--accent-soft); display:inline-block;
+  padding:4px 10px; border-radius:3px; font-weight:600;
+}
+h1{
+  font-family:var(--font-serif); font-weight:600; font-size:clamp(28px,4vw,40px);
+  margin:16px 0 6px; text-wrap:balance; letter-spacing:-.01em;
+}
+.subtitle{ color:var(--muted); font-size:16.5px; max-width:62ch; margin:0 0 8px; }
+.meta-line{ color:var(--muted); font-size:13px; font-family:var(--font-mono); margin-top:14px; }
+
+h2{
+  font-family:var(--font-serif); font-weight:600; font-size:24px; margin:0 0 4px;
+  padding-top:6px; letter-spacing:-.005em;
+}
+h2 .num{ color:var(--muted); font-weight:400; margin-right:10px; }
+.section-sub{ color:var(--muted); font-size:14.5px; margin:0 0 22px; max-width:68ch; }
+section{ margin-top:64px; }
+section > header{ margin-bottom:22px; border-top:1px solid var(--line); padding-top:22px; }
+
+p{ max-width:68ch; }
+code{ font-family:var(--font-mono); font-size:.92em; background:var(--accent-soft); color:var(--accent-ink); padding:.1em .35em; border-radius:3px; }
+
+/* decisions strip */
+.decisions{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:1px;
+  background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden;
+  margin-top:28px;
+}
+.decision{ background:var(--paper-raised); padding:16px 18px; }
+.decision .k{ font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.decision .v{ font-family:var(--font-serif); font-size:18px; margin-top:5px; }
+.decision .why{ font-size:12.5px; color:var(--muted); margin-top:6px; line-height:1.45; }
+
+/* diagram */
+figure{ margin:0; }
+.diagram-frame{
+  overflow-x:auto; background:var(--paper-raised); border:1px solid var(--line);
+  border-radius:10px; padding:18px;
+}
+.diagram-frame svg{ display:block; min-width:1100px; width:100%; height:auto; }
+figcaption{ color:var(--muted); font-size:13.5px; margin-top:10px; max-width:74ch; }
+
+/* tables */
+table{ width:100%; border-collapse:collapse; font-size:14.5px; margin-top:6px;}
+th{ text-align:left; font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:.06em; color:var(--muted); font-weight:600; padding:8px 14px 8px 0; border-bottom:1px solid var(--line);}
+td{ padding:11px 14px 11px 0; border-bottom:1px solid var(--line); vertical-align:top;}
+tr:last-child td{ border-bottom:none; }
+td.mono, .tag-mono{ font-family:var(--font-mono); font-size:13.5px; }
+td.num, th.num{ text-align:right; font-variant-numeric:tabular-nums; }
+.table-scroll{ overflow-x:auto; }
+.table-scroll table{ min-width:640px; }
+
+.pill{
+  display:inline-block; font-family:var(--font-mono); font-size:11px; padding:2px 8px;
+  border-radius:99px; border:1px solid var(--line); color:var(--muted);
+}
+.pill.workload{ border-color:var(--ink-soft); color:var(--ink-soft); }
+.pill.managed{ border-color:var(--accent); color:var(--accent-ink); background:var(--accent-soft); }
+.pill.external{ border-style:dashed; }
+
+/* flow list */
+.flow{ counter-reset:flow; list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:14px; }
+.flow li{
+  counter-increment:flow; position:relative; padding-left:38px; font-size:15px; max-width:70ch;
+}
+.flow li::before{
+  content: counter(flow); position:absolute; left:0; top:.05em; width:24px; height:24px;
+  border-radius:50%; background:var(--ink-soft); color:var(--paper); font-family:var(--font-mono);
+  font-size:12px; display:flex; align-items:center; justify-content:center; font-weight:600;
+}
+.flow b{ font-weight:600; }
+
+/* code block */
+pre.snippet{
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:8px;
+  padding:16px 18px; overflow-x:auto; font-family:var(--font-mono); font-size:13px;
+  line-height:1.6; color:var(--ink-soft);
+}
+pre.snippet .kw{ color:var(--accent-ink); }
+pre.snippet .cm{ color:var(--muted); font-style:italic; }
+
+/* open questions */
+.questions{ display:flex; flex-direction:column; gap:16px; margin-top:8px; }
+.question{
+  border:1px solid var(--line); border-radius:8px; padding:16px 18px; background:var(--paper-raised);
+}
+.question .q{ font-family:var(--font-serif); font-size:16.5px; margin:0 0 6px; }
+.question .a{ font-size:14px; color:var(--ink-soft); margin:0; }
+.question .default{ display:inline-block; margin-top:8px; font-family:var(--font-mono); font-size:11.5px;
+  color:var(--safe); background:var(--safe-soft); padding:3px 8px; border-radius:3px; }
+
+footer{
+  margin-top:80px; padding-top:20px; border-top:1px solid var(--line);
+  color:var(--muted); font-size:12.5px; font-family:var(--font-mono);
+}
+
+@media (prefers-reduced-motion:no-preference){ .decision{ transition:background .15s; } }
+</style>
+
+
+<div class="page">
+  <span class="eyebrow">Project SHIELD · MedStockAI</span>
+  <h1>Solution Architecture — GCP Deployment</h1>
+  <p class="subtitle">Formulary &amp; supply intelligence for hospital pharmacies. Two logical blocks — <b>WEB</b> and <b>API</b> — deployed as eight always-on workloads plus three scheduled <code>ingest</code> CronJobs on a single GKE cluster, over one Postgres database. Three GCP-managed services, one model provider. Sized to fit inside a $200 education credit for the length of the capstone.</p>
+  <div class="meta-line">draft · supersedes the four-process model · 2026-08-12</div>
+
+  <div class="decisions">
+    <div class="decision"><div class="k">Cloud</div><div class="v">GCP</div><div class="why">GKE control plane is free; EKS bills ~$73/mo flat regardless of use.</div></div>
+    <div class="decision"><div class="k">Orchestration</div><div class="v">GKE, zonal</div><div class="why">2× e2-medium Spot nodes. Real HPA + rolling updates across eight Deployments, plus three CronJobs.</div></div>
+    <div class="decision"><div class="k">Database</div><div class="v">One Cloud SQL · Postgres</div><div class="why">Shared by all seven domain services. Deploy boundary is real; data boundary is not — deliberately.</div></div>
+    <div class="decision"><div class="k">AI calls</div><div class="v">Direct + shared cache</div><div class="why"><code>ask_ai()</code> in <code>shared/</code>, called inline from <code>analogue</code>/<code>prediction</code>. No queue, no separate service — removed; see the trade-off below.</div></div>
+    <div class="decision"><div class="k">Model access</div><div class="v">Two callers, one function</div><div class="why">Gemini key on <code>analogue</code> and <code>prediction</code> only; every other service has no path to it at all.</div></div>
+    <div class="decision"><div class="k">Manifests</div><div class="v">Kustomize</div><div class="why">One base, image tags set in CI. No Helm chart for workloads only we deploy.</div></div>
+  </div>
+
+  <section class="wide" style="max-width:1560px;margin-left:auto;margin-right:auto;">
+    <header style="max-width:1000px;margin-left:auto;margin-right:auto;">
+      <h2>Architecture</h2>
+      <p class="section-sub">Box fill encodes who operates the component — us, GCP, or the outside world. Numbers match the data-flow walkthrough below. The one deliberately unfinished edge is drawn, not hidden: nothing polls the public feeds yet.</p>
+    </header>
+
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 1560 1010" role="img" aria-label="MedStockAI GCP architecture: hospital users reach a GKE cluster through an Ingress which serves the web UI and routes seven API paths to seven domain services; two of those services, analogue and prediction, call Gemini directly and cache answers in a shared ai_cache table — there is no separate AI service; all services share one Cloud SQL Postgres database protected by row-level security; Secret Manager and Cloud Logging serve the cluster; GitHub Actions builds images into Artifact Registry; the public health APIs currently have no scheduled poller even though the ingest CronJob code exists, which is marked as an open item.">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+      <polygon points="0,0 8,4 0,8" fill="var(--ink-soft)"></polygon>
+    </marker>
+    <marker id="arrow-risk" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+      <polygon points="0,0 8,4 0,8" fill="var(--risk)"></polygon>
+    </marker>
+  </defs>
+
+  <!-- ===== external sources ===== -->
+  <g>
+    <rect x="40" y="24" width="430" height="112" rx="7" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+    <text x="60" y="46" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">PUBLIC HEALTH APIS · KEYLESS</text>
+    <rect x="64" y="64" width="185" height="26" rx="13" fill="var(--paper-raised)" stroke="var(--line)"></rect>
+    <text x="156.5" y="81" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink-soft)">FDA Shortages</text>
+    <rect x="261" y="64" width="185" height="26" rx="13" fill="var(--paper-raised)" stroke="var(--line)"></rect>
+    <text x="353.5" y="81" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink-soft)">openFDA Recalls</text>
+    <rect x="64" y="98" width="185" height="26" rx="13" fill="var(--paper-raised)" stroke="var(--line)"></rect>
+    <text x="156.5" y="115" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink-soft)">RxNorm (NLM)</text>
+    <rect x="261" y="98" width="185" height="26" rx="13" fill="var(--paper-raised)" stroke="var(--line)"></rect>
+    <text x="353.5" y="115" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink-soft)">CMS NADAC</text>
+  </g>
+
+  <g>
+    <rect x="500" y="24" width="290" height="112" rx="7" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+    <text x="520" y="46" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">HOSPITAL FORMULARY / STOCK</text>
+    <text x="520" y="72" font-family="var(--font-sans)" font-size="13.5" fill="var(--ink-soft)">CSV upload — MVP</text>
+    <text x="520" y="92" font-family="var(--font-sans)" font-size="13.5" fill="var(--muted)">a human uploads it, so it enters</text>
+    <text x="520" y="108" font-family="var(--font-sans)" font-size="13.5" fill="var(--muted)">through the browser, not a feed</text>
+  </g>
+
+  <g>
+    <rect x="1190" y="24" width="330" height="112" rx="7" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+    <text x="1210" y="46" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">MODEL PROVIDER</text>
+    <text x="1210" y="72" font-family="var(--font-sans)" font-size="13.5" fill="var(--ink-soft)">Gemini</text>
+    <text x="1210" y="92" font-family="var(--font-sans)" font-size="13.5" fill="var(--muted)">ranking · forecasting ·</text>
+    <text x="1210" y="108" font-family="var(--font-sans)" font-size="13.5" fill="var(--muted)">citation extraction</text>
+  </g>
+
+  <!-- ===== users ===== -->
+  <g>
+    <rect x="40" y="250" width="290" height="110" rx="7" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+    <text x="60" y="273" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">HOSPITAL USERS · BROWSER</text>
+    <text x="60" y="298" font-family="var(--font-sans)" font-size="13.5" fill="var(--ink-soft)">Pharmacist · Physician</text>
+    <text x="60" y="318" font-family="var(--font-sans)" font-size="13.5" fill="var(--ink-soft)">Pharmacy Director</text>
+    <text x="60" y="342" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">JWT: hospital_id + role</text>
+  </g>
+
+  <!-- ===== cluster boundary ===== -->
+  <rect x="380" y="190" width="1160" height="470" rx="10" fill="var(--accent-soft)" fill-opacity="0.28" stroke="var(--ink-soft)" stroke-width="1.75" stroke-dasharray="7 5"></rect>
+  <text x="402" y="216" font-family="var(--font-mono)" font-size="11.5" letter-spacing=".05em" fill="var(--ink-soft)">GKE CLUSTER — ZONAL · 2× e2-medium SPOT</text>
+
+  <!-- Ingress -->
+  <rect x="410" y="250" width="180" height="100" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="428" y="276" font-family="var(--font-serif)" font-size="15" fill="var(--accent-ink)">Ingress</text>
+  <text x="428" y="296" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">L7 LB · managed cert</text>
+  <text x="428" y="314" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">path routing</text>
+  <text x="428" y="334" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">one origin, no CORS</text>
+
+  <!-- web -->
+  <rect x="620" y="250" width="180" height="100" rx="7" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+  <text x="638" y="276" font-family="var(--font-serif)" font-size="15" fill="var(--ink)">web</text>
+  <text x="638" y="296" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">Next.js · shell + assets</text>
+  <text x="638" y="314" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">Deployment · 2 replicas</text>
+  <text x="638" y="334" font-family="var(--font-sans)" font-size="11.5" fill="var(--muted)">serves no API traffic</text>
+
+  <!-- API group -->
+  <rect x="410" y="395" width="830" height="225" rx="8" fill="var(--paper)" fill-opacity="0.55" stroke="var(--ink-soft)" stroke-width="1.25"></rect>
+  <text x="428" y="418" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">API — 7 PUBLICLY ROUTED SERVICES · FastAPI · Deployment · 2 replicas + HPA each</text>
+
+  <g font-family="var(--font-serif)" font-size="13.5" fill="var(--ink)">
+    <rect x="425" y="430" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="441" y="452">auth</text>
+    <rect x="630" y="430" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="646" y="452">inventory</text>
+    <rect x="835" y="430" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="851" y="452">analogue</text>
+    <rect x="1040" y="430" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="1056" y="452">compliance</text>
+
+    <rect x="425" y="525" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="441" y="547">patient-profiling</text>
+    <rect x="630" y="525" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="646" y="547">prediction</text>
+    <rect x="835" y="525" width="195" height="80" rx="6" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"></rect>
+    <text x="851" y="547">warehouse</text>
+  </g>
+
+  <g font-family="var(--font-sans)" font-size="11.5" fill="var(--muted)">
+    <text x="441" y="470">issues + rotates tokens</text>
+    <text x="441" y="486">holds the private key</text>
+    <text x="646" y="470">stock · exposure query</text>
+    <text x="646" y="486">CSV formulary import</text>
+    <text x="851" y="470">equivalents · review queue</text>
+    <text x="851" y="486" fill="var(--accent-ink)">AI consumer</text>
+    <text x="1056" y="470">certificates · audit export</text>
+    <text x="1056" y="486">reads audit, never writes</text>
+
+    <text x="441" y="565">contraindications</text>
+    <text x="441" y="581">allergies · interactions</text>
+    <text x="646" y="565">days-of-supply forecast</text>
+    <text x="646" y="581" fill="var(--accent-ink)">AI consumer</text>
+    <text x="851" y="565">locations · connectors</text>
+    <text x="851" y="581">mapping-spec approval</text>
+  </g>
+
+  <text x="1056" y="547" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">every service:</text>
+  <text x="1056" y="565" font-family="var(--font-mono)" font-size="10.5" fill="var(--accent-ink)">SET LOCAL app.hospital_id</text>
+  <text x="1056" y="581" font-family="var(--font-mono)" font-size="10.5" fill="var(--muted)">JWT verified locally</text>
+  <text x="1056" y="597" font-family="var(--font-mono)" font-size="10.5" fill="var(--muted)">no key material</text>
+
+  <!-- no separate AI service: analogue/prediction call Gemini directly, annotated in place -->
+  <rect x="1280" y="395" width="230" height="130" rx="8" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+  <text x="1298" y="420" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">NO SEPARATE SERVICE HERE</text>
+  <text x="1298" y="444" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">removed: ai-handler</text>
+  <text x="1298" y="464" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">(queue + dequeue loop)</text>
+  <text x="1298" y="488" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">ask_ai() now runs inline</text>
+  <text x="1298" y="506" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">in analogue / prediction</text>
+
+  <!-- ===== managed data/ops row ===== -->
+  <rect x="410" y="700" width="430" height="140" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="430" y="726" font-family="var(--font-serif)" font-size="15" fill="var(--accent-ink)">Cloud SQL — PostgreSQL · one database</text>
+  <text x="430" y="748" font-family="var(--font-mono)" font-size="11.5" fill="var(--ink-soft)">formulary · stock · shortage_event · rxnorm_edge</text>
+  <text x="430" y="766" font-family="var(--font-mono)" font-size="11.5" fill="var(--ink-soft)">ai_cache (UNIQUE type+dedupe_key) — no RLS, not tenant data</text>
+  <text x="430" y="784" font-family="var(--font-mono)" font-size="11.5" fill="var(--ink-soft)">audit_log — append-only (no UPDATE/DELETE)</text>
+  <text x="430" y="802" font-family="var(--font-mono)" font-size="11.5" fill="var(--accent-ink)">row-level security keyed on hospital_id</text>
+  <text x="430" y="822" font-family="var(--font-sans)" font-size="11.5" fill="var(--muted)">one Alembic history — migration is a Job, never a startup step</text>
+
+  <rect x="880" y="700" width="200" height="140" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="900" y="726" font-family="var(--font-serif)" font-size="15" fill="var(--accent-ink)">Secret Manager</text>
+  <text x="900" y="750" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">DB creds, JWT keys,</text>
+  <text x="900" y="768" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">Gemini key</text>
+  <text x="900" y="790" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">via Workload Identity</text>
+  <text x="900" y="808" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">never in specs or logs</text>
+
+  <rect x="1120" y="700" width="200" height="140" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="1140" y="726" font-family="var(--font-serif)" font-size="15" fill="var(--accent-ink)">Cloud Logging</text>
+  <text x="1140" y="750" font-family="var(--font-sans)" font-size="12" fill="var(--ink-soft)">/ Monitoring</text>
+  <text x="1140" y="772" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">structured logs, metrics</text>
+  <text x="1140" y="790" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">50 GB/mo free tier</text>
+
+  <!-- ===== CI/CD ===== -->
+  <rect x="410" y="890" width="260" height="100" rx="7" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="5 4"></rect>
+  <text x="430" y="916" font-family="var(--font-mono)" font-size="11" letter-spacing=".04em" fill="var(--muted)">GITHUB ACTIONS</text>
+  <text x="430" y="940" font-family="var(--font-sans)" font-size="13" fill="var(--ink-soft)">ruff · alembic · pytest</text>
+  <text x="430" y="960" font-family="var(--font-sans)" font-size="13" fill="var(--ink-soft)">build matrix × 8 + web</text>
+  <text x="430" y="978" font-family="var(--font-sans)" font-size="12" fill="var(--muted)">migrate Job → then roll out</text>
+
+  <rect x="710" y="890" width="260" height="100" rx="7" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+  <text x="730" y="916" font-family="var(--font-serif)" font-size="14.5" fill="var(--accent-ink)">Artifact Registry</text>
+  <text x="730" y="940" font-family="var(--font-sans)" font-size="13" fill="var(--ink-soft)">9 images, one Dockerfile</text>
+  <text x="730" y="960" font-family="var(--font-sans)" font-size="13" fill="var(--muted)">tagged by commit SHA</text>
+
+  <!-- ===== legend ===== -->
+  <g font-family="var(--font-sans)" font-size="12.5" fill="var(--ink-soft)">
+    <text x="1010" y="906" font-family="var(--font-mono)" font-size="10.5" letter-spacing=".05em" fill="var(--muted)">LEGEND</text>
+    <rect x="1010" y="916" width="20" height="12" rx="2" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+    <text x="1038" y="926">workload we run</text>
+    <rect x="1180" y="916" width="20" height="12" rx="2" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+    <text x="1208" y="926">GCP managed</text>
+    <rect x="1010" y="940" width="20" height="12" rx="2" fill="var(--paper)" stroke="var(--muted)" stroke-width="1.25" stroke-dasharray="4 3"></rect>
+    <text x="1038" y="950">external system</text>
+    <line x1="1180" y1="946" x2="1200" y2="946" stroke="var(--risk)" stroke-width="1.75" stroke-dasharray="5 4"></line>
+    <text x="1208" y="950">not built yet</text>
+  </g>
+
+  <!-- ===== arrows ===== -->
+  <g fill="none" stroke="var(--ink-soft)" stroke-width="1.75">
+    <polyline points="330,300 405,300" marker-end="url(#arrow)"></polyline>
+    <polyline points="590,300 615,300" marker-end="url(#arrow)"></polyline>
+    <polyline points="500,350 500,372 825,372 825,390" marker-end="url(#arrow)"></polyline>
+    <polyline points="932,430 932,145 1300,145 1300,137" marker-end="url(#arrow)"></polyline>
+    <polyline points="727,525 727,360 900,360 900,160 1400,160 1400,137" marker-end="url(#arrow)"></polyline>
+    <polyline points="700,620 700,695" marker-end="url(#arrow)"></polyline>
+    <polyline points="500,136 500,162 185,162 185,245" stroke-dasharray="5 4" marker-end="url(#arrow)"></polyline>
+    <polyline points="980,660 980,695" stroke-dasharray="5 4" marker-end="url(#arrow)"></polyline>
+    <polyline points="1220,660 1220,695" stroke-dasharray="5 4" marker-end="url(#arrow)"></polyline>
+    <polyline points="670,940 705,940" stroke-dasharray="5 4" marker-end="url(#arrow)"></polyline>
+    <polyline points="840,890 840,862 1470,862 1470,665" stroke-dasharray="5 4" marker-end="url(#arrow)"></polyline>
+  </g>
+
+  <!-- the missing edge, drawn on purpose -->
+  <g fill="none" stroke="var(--risk)" stroke-width="1.75" stroke-dasharray="6 5">
+    <polyline points="255,136 255,178 700,178" marker-end="url(#arrow-risk)"></polyline>
+  </g>
+  <rect x="708" y="164" width="240" height="28" rx="6" fill="var(--risk-soft)" stroke="var(--risk)" stroke-width="1.2"></rect>
+  <text x="828" y="183" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--risk)">7 · no scheduled poller — OPEN</text>
+
+  <!-- arrow numbers + labels -->
+  <g font-family="var(--font-mono)">
+    <circle cx="348" cy="286" r="9" fill="var(--ink-soft)"></circle>
+    <text x="348" y="290" text-anchor="middle" font-size="10" fill="var(--paper)">1</text>
+    <text x="363" y="290" font-size="11" fill="var(--muted)">HTTPS · JWT(hospital_id, role)</text>
+
+    <circle cx="603" cy="286" r="9" fill="var(--ink-soft)"></circle>
+    <text x="603" y="290" text-anchor="middle" font-size="10" fill="var(--paper)">2</text>
+
+    <circle cx="530" cy="372" r="9" fill="var(--ink-soft)"></circle>
+    <text x="530" y="376" text-anchor="middle" font-size="10" fill="var(--paper)">3</text>
+    <text x="545" y="376" font-size="11" fill="var(--muted)">/api/* — 7 paths, same origin, XHR from the browser</text>
+
+    <circle cx="1100" cy="145" r="9" fill="var(--ink-soft)"></circle>
+    <text x="1100" y="149" text-anchor="middle" font-size="10" fill="var(--paper)">4</text>
+    <text x="1100" y="128" text-anchor="middle" font-size="10.5" fill="var(--muted)">ask_ai() — cache check, then Gemini inline</text>
+
+    <circle cx="700" cy="658" r="9" fill="var(--ink-soft)"></circle>
+    <text x="700" y="662" text-anchor="middle" font-size="10" fill="var(--paper)">5</text>
+    <text x="715" y="662" font-size="11" fill="var(--muted)">RLS-scoped SQL</text>
+
+    <circle cx="360" cy="158" r="9" fill="var(--ink-soft)"></circle>
+    <text x="360" y="162" text-anchor="middle" font-size="10" fill="var(--paper)">6</text>
+    <text x="375" y="162" font-size="11" fill="var(--muted)">CSV upload — a human path</text>
+
+    <text x="990" y="688" font-size="10.5" fill="var(--muted)" text-anchor="middle">secrets</text>
+    <text x="1230" y="688" font-size="10.5" fill="var(--muted)" text-anchor="middle">logs</text>
+    <text x="690" y="933" font-size="10.5" fill="var(--muted)" text-anchor="middle">push</text>
+    <text x="1250" y="855" font-size="10.5" fill="var(--muted)" text-anchor="middle">migrate Job, then kubectl apply -k</text>
+  </g>
+</svg>
+      </div>
+      <figcaption>Fill = who operates it (plain = us on GKE, teal = GCP-managed, dashed muted = outside our system). There is no boxed-off AI service anymore — <code>analogue</code> and <code>prediction</code> hold the Gemini key themselves and call it inline (edge 4). The red dashed edge 7 is the one thing the diagram admits is missing.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <header><h2>What runs where</h2><p class="section-sub">Eight always-on Deployments, plus three <code>ingest</code> CronJobs that only run on their own schedule. All the Python ones are built from one Dockerfile — they differ by env, route, or (for <code>ingest</code>) command, not by build.</p></header>
+    <div class="table-scroll">
+    <table>
+      <tr><th>Component</th><th>Kind</th><th>Owner</th><th>Scales on</th><th>Why it's separate</th></tr>
+      <tr><td class="mono">web</td><td><span class="pill workload">Deployment</span></td><td>—</td><td>fixed, 2</td><td>Next.js UI; own release cadence. Serves no API traffic.</td></tr>
+      <tr><td class="mono">auth</td><td><span class="pill workload">Deployment</span></td><td>Tymur</td><td>HPA · rps</td><td>Only holder of the signing key. Off the request path — everyone else verifies locally.</td></tr>
+      <tr><td class="mono">inventory</td><td><span class="pill workload">Deployment</span></td><td>Pavlo</td><td>HPA · rps</td><td>Stock and the exposure query (formulary × stock × shortage).</td></tr>
+      <tr><td class="mono">analogue</td><td><span class="pill workload">Deployment</span></td><td>Pavlo</td><td>HPA · rps</td><td>Equivalence search + pharmacist review queue. Calls Gemini directly via <code>ask_ai()</code> — only holder of the model key besides <code>prediction</code>.</td></tr>
+      <tr><td class="mono">compliance</td><td><span class="pill workload">Deployment</span></td><td>Andrii</td><td>HPA · rps</td><td>Certificate validation and audit export. Reads the audit log, never writes it.</td></tr>
+      <tr><td class="mono">patient-profiling</td><td><span class="pill workload">Deployment</span></td><td>Andrii</td><td>HPA · rps</td><td>Contraindications, allergies, interactions.</td></tr>
+      <tr><td class="mono">prediction</td><td><span class="pill workload">Deployment</span></td><td>Mykhailo</td><td>HPA · rps</td><td>Days-of-supply forecasting. Calls Gemini directly via <code>ask_ai()</code>.</td></tr>
+      <tr><td class="mono">warehouse</td><td><span class="pill workload">Deployment</span></td><td>Mykhailo</td><td>HPA · rps</td><td>Physical structure, locations, connector admin.</td></tr>
+      <tr><td class="mono">ingest</td><td><span class="pill workload">CronJob ×3</span></td><td>Tymur</td><td>schedule, not load</td><td>Three schedules (shortages hourly, pricing daily, RxNorm weekly) off one image. No HTTP surface, no Deployment — <a href="services.md#8-open-items">not yet scheduled, see open items</a>.</td></tr>
+      <tr><td class="mono">Cloud SQL</td><td><span class="pill managed">Managed</span></td><td>—</td><td>vertical, as needed</td><td>The audit log is the product's credibility — needs real backup/PITR.</td></tr>
+      <tr><td class="mono">Ingress</td><td><span class="pill managed">Managed</span></td><td>—</td><td>—</td><td>Single L7 entry point, managed TLS, one origin for UI and API.</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <header><h2>Data flow</h2><p class="section-sub">Numbered against the diagram above.</p></header>
+    <ol class="flow">
+      <li><b>Hospital user opens the app.</b> Browser → Ingress over HTTPS, carrying a JWT with <code>hospital_id</code> and role.</li>
+      <li><b>Ingress serves the UI</b> from <code>web</code> — the application shell and static assets, nothing else.</li>
+      <li><b>The browser calls the seven services directly</b> on the same origin, <code>/api/*</code>. Each verifies the JWT locally with a public key it already holds — <code>auth</code> is not on the request path — then opens a transaction with <code>SET LOCAL app.hospital_id</code>. Postgres row-level security does the tenant filtering; no hand-written <code>WHERE hospital_id = …</code> exists anywhere.</li>
+      <li><b><code>analogue</code> and <code>prediction</code> call <code>ask_ai()</code> directly</b> — no job, no queue, no poll. It checks <code>ai_cache</code> first (<code>UNIQUE (type, dedupe_key)</code> — the same question is free the second time, across every hospital, not just the one that asked it); on a miss it calls Gemini inline, with backoff on 429/5xx and a 20 s timeout, and validates the answer <i>before</i> caching it — a citation must be a verbatim substring of its source text, or the call fails and the caller gets a <code>503</code>. This is the one place a request thread blocks on a model call; there used to be a separate <code>ai-handler</code> service and queue here, removed because its real benefits (crash-survival mid-call, a hard concurrency ceiling) weren't in use at this system's volume — see the trade-off section below.</li>
+      <li><b>Every service reads and writes the one database</b> under RLS. State changes fire a trigger that writes <code>audit_log_entry</code>; that table has <code>UPDATE</code>/<code>DELETE</code> revoked at the grant level, not just by convention.</li>
+      <li><b>Formulary and stock arrive as a CSV upload</b> through the browser into <code>inventory</code> — a human is attached to it and needs synchronous validation feedback, so it is not an ingestion path.</li>
+      <li><b>Nothing polls the public feeds yet.</b> Drawn in red because it is still missing in practice — the <code>ingest</code> CronJob code exists (three scripts, one image) but isn't scheduled or migrated. Without it the system can rank alternatives but cannot notice that a drug entered shortage. See the open questions.</li>
+      <li><b>Secrets</b> (DB credentials, JWT keys, the Gemini key) reach pods via Workload Identity + Secret Manager — never an env file, never a log line.</li>
+      <li><b>CI builds and deploys</b> on merge to main: ruff, Alembic, pytest, then a build matrix of eight service images (seven domain services plus <code>ingest</code>) plus web, then the migration <code>Job</code> runs to completion, and only then does <code>kubectl apply -k</code> roll the Deployments.</li>
+    </ol>
+  </section>
+
+  <section>
+    <header><h2>Tenant isolation, enforced below the app</h2><p class="section-sub">With seven services the argument gets stronger: a policy in Postgres holds in one place, an application-level filter would have to hold in seven codebases written by four people.</p></header>
+<pre class="snippet"><span class="cm">-- every tenant table</span>
+ALTER TABLE formulary_item ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON formulary_item
+  USING (hospital_id = current_setting('app.hospital_id')::uuid);
+
+<span class="cm">-- ai_cache is deliberately NOT a tenant table — no hospital_id column,</span>
+<span class="cm">-- no RLS. Reference-data Gemini answers are shared across every hospital</span>
+<span class="cm">-- asking the same question (docs/services.md §1.1).</span>
+
+<span class="cm">-- audit log: append-only is a grant, not a promise</span>
+REVOKE UPDATE, DELETE ON audit_log_entry FROM app_role;</pre>
+    <p style="font-size:13.5px;color:var(--muted);max-width:68ch;">The application role has no <code>BYPASSRLS</code> and does not own the tables — a role that owns a table ignores its own policies. Object-level authorization is a side effect of this, not separate code: another hospital's row is simply not visible, and the handler returns <code>404</code>.</p>
+  </section>
+
+  <section>
+    <header><h2>The trade we made, stated plainly</h2><p class="section-sub">Better said by us on stage than asked by a reviewer.</p></header>
+    <div class="rule"><span class="label">This is a distributed monolith</span><p>Seven deploy units share one database and one <code>shared/</code> package. The <b>deploy</b> boundary is real — independent rollout, isolated process failure, four developers working in parallel. The <b>data</b> boundary is not, and that was deliberate: <code>prediction</code> needs to join stock against shortages, and over HTTP that becomes pagination, retries and fake-upstream fixtures instead of the drug logic that is the actual product. The price is that a breaking change in <code>shared/</code> redeploys all seven — which is why every service is built and tested on every PR.</p></div>
+    <div class="rule"><span class="label">The boundaries follow ownership, not load</span><p><code>compliance</code> and <code>analogue</code> will never need to scale apart. The split is two services per developer. That is an honest answer and a defensible one for a four-person team on a fixed timeline — inventing a technical justification for it would not survive a follow-up question.</p></div>
+    <div class="rule"><span class="label">We removed the one workload with a different shape</span><p>There used to be a ninth workload, <code>ai-handler</code>, that was latency-bound rather than CPU-bound — a runner blocked on Gemini instead of doing CPU work, so CPU-target HPA couldn't see its load and queue depth would have been the right signal, had it ever been wired up. It never was: replicas stayed fixed at 2 for the service's whole life. We removed it rather than keep paying for a Deployment, a NetworkPolicy, and an async job contract for a scaling story that was never built. <code>analogue</code> and <code>prediction</code> now block their own request thread on a Gemini call instead — the honest cost of that trade is in <code>docs/services.md</code> §4.</p></div>
+  </section>
+
+  <section>
+    <header><h2>Cost</h2><p class="section-sub">Everything runs on Spot nodes, scaled to zero between working sessions. GKE Autopilot billing is periodically revised — confirm current free-tier coverage before locking the number in the submission.</p></header>
+    <div class="table-scroll">
+    <table>
+      <tr><th>Line item</th><th class="num">$/mo</th></tr>
+      <tr><td>GKE zonal cluster, management fee</td><td class="num">0 <span style="color:var(--muted)">(credit)</span></td></tr>
+      <tr><td>2× e2-medium, Spot</td><td class="num">~15</td></tr>
+      <tr><td>Cloud SQL, db-g1-small</td><td class="num">~25</td></tr>
+      <tr><td>Ingress LB (static IP + rule)</td><td class="num">~18</td></tr>
+      <tr><td>Artifact Registry / Secret Manager / Logging</td><td class="num">~0 <span style="color:var(--muted)">(free tier)</span></td></tr>
+      <tr><td>Gemini API, development usage</td><td class="num">10–30</td></tr>
+      <tr><td><b>Total</b></td><td class="num"><b>~60</b></td></tr>
+    </table>
+    </div>
+    <p style="font-size:13.5px;color:var(--muted);max-width:68ch;">Eight workloads instead of four does not move this line: pods are scheduled against the same two nodes, and each service requests 50m CPU. What moves it is Cloud SQL tier and model spend — and the <code>ai_cache</code> dedupe constraint caps the second one by never paying for the same question twice, across hospitals.</p>
+    <div class="table-scroll" style="margin-top:22px;">
+    <table>
+      <tr><th>Deployment</th><th>Monthly infra</th><th>Driver</th></tr>
+      <tr><td>Pilot (this cluster)</td><td class="num mono">~$60</td><td>as above</td></tr>
+      <tr><td>10 hospitals</td><td class="num mono">~$250–350</td><td>more <code>analogue</code>/<code>prediction</code> replicas, bigger Cloud SQL tier</td></tr>
+      <tr><td>100 hospitals</td><td class="num mono">~$1.5k–2.5k</td><td>regional HA, read replicas</td></tr>
+    </table>
+    </div>
+    <p style="font-size:13.5px;color:var(--muted);max-width:68ch;">The curve is sub-linear because reference data is polled once for every hospital, not once per hospital — cost tracks model calls and data volume, not site count. That property depends on the scheduled poller that does not exist yet.</p>
+  </section>
+
+  <section>
+    <header><h2>Open questions</h2><p class="section-sub">Still yours to decide — each changes real code, not just config.</p></header>
+    <div class="questions">
+      <div class="question">
+        <p class="q">Who owns scheduled ingestion, and when?</p>
+        <p class="a">Nothing polls FDA, RxNorm or NADAC today. Without it the system can rank alternatives on demand but cannot notice a drug entering shortage — the product's core promise. The answer is <b>a CronJob off the same image</b>, most likely three of them (shortages hourly, pricing daily, RxNorm weekly), not a service. Decide the owner before feature work spreads polling into individual services: that path ends in eight schedules, a blown openFDA quota (1 000 req/day per IP), and no way to tell who spent it.</p>
+        <span class="default">blocks: at-risk detection, the sub-linear cost argument</span>
+      </div>
+      <div class="question">
+        <p class="q">RLS policies — when do they land?</p>
+        <p class="a">The session helper already sets <code>app.hospital_id</code> on every transaction, but no <code>CREATE POLICY</code> exists yet, and the app role must not own the tables. Until that migration ships, tenant isolation is a design, not a mechanism, and it cannot be demonstrated on stage.</p>
+        <span class="default">first migration</span>
+      </div>
+      <div class="question">
+        <p class="q">Where do MVP stock numbers actually come from?</p>
+        <p class="a">The public feeds give shortage events, not a hospital's own shelf counts — nobody publishes that. Days-of-supply math needs it. CSV upload, a generated synthetic dataset, or a mock "distributor" API you write yourselves — pick one, it changes the schema.</p>
+      </div>
+      <div class="question">
+        <p class="q">Does <code>patient-profiling</code> store PHI at all?</p>
+        <p class="a">It is the only service that touches clinical data about identifiable people. Storing none in the MVP — de-identified aggregates only — is defensible, cheaper, and removes a category of compliance argument you would otherwise have to make on stage. Decide before schema work.</p>
+      </div>
+      <div class="question">
+        <p class="q">Does a user belong to one hospital, or several?</p>
+        <p class="a">One hospital per user puts <code>hospital_id</code> straight in the JWT — half a day of work. Several (a hospital network, a fill-in pharmacist) moves tenancy from the user to the session: a <code>membership(user_id, hospital_id, role)</code> table, a hospital switcher in the UI. Hard to retrofit later.</p>
+        <span class="default">default: one hospital/user now, role lives in membership from day one</span>
+      </div>
+      <div class="question">
+        <p class="q">Token lifetime and revocation?</p>
+        <p class="a">Local verification is what keeps <code>auth</code> off the request path, but it also means a token stays valid until it expires — a role or hospital change does not take effect immediately, and there is no revocation list. Short TTL is the MVP answer; pick the number and say it out loud.</p>
+      </div>
+      <div class="question">
+        <p class="q">Does the cluster stay up, or spin up for demos?</p>
+        <p class="a">Always-on burns credit steadily but removes cold-start risk. On-demand saves money but means proving, well before the actual defense, that eight workloads (plus <code>ingest</code>'s CronJobs, once scheduled) reliably come back up inside your setup window.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>medstockai · solution architecture · seven-service model · not final — pending answers above</footer>
+</div>

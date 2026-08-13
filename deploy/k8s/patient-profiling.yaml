@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patient-profiling
+  labels: { app: patient-profiling, part-of: medstock }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: patient-profiling }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: patient-profiling, part-of: medstock }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: patient-profiling
+        image: ghcr.io/medstockai/patient-profiling:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            configMapKeyRef: { name: medstock-jwt, key: public-key }
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { memory: 512Mi }
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8000 }
+          periodSeconds: 10
+        readinessProbe:
+          httpGet: { path: /readyz, port: 8000 }
+          periodSeconds: 5
+        lifecycle:
+          preStop:
+            exec: { command: ["sleep", "5"] }   # let Ingress deregister first
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: patient-profiling
+spec:
+  selector: { app: patient-profiling }
+  ports:
+  - port: 8000
+    targetPort: 8000

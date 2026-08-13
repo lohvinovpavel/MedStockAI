@@ -1,0 +1,20 @@
+# Runs BEFORE the Deployments roll. Eight replicas racing on `alembic upgrade`
+# is a corrupted schema, so migration is a Job, never a container startup step.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: alembic
+        image: ghcr.io/medstockai/inventory:latest   # any image: all carry shared/ + migrations
+        workingDir: /srv
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }

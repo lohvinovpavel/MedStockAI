@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels: { app: web, part-of: medstock }
+spec:
+  replicas: 2                    # the two boxes on the architecture diagram
+  selector: { matchLabels: { app: web } }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata: { labels: { app: web, part-of: medstock } }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: web
+        image: ghcr.io/medstockai/web:latest
+        ports: [{ containerPort: 3000 }]
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { memory: 512Mi }
+        readinessProbe:
+          httpGet: { path: /, port: 3000 }
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector: { app: web }
+  ports: [{ port: 3000, targetPort: 3000 }]
