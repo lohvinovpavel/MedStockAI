@@ -11,6 +11,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
+        {process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_DEV_TOKEN ? (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `try{if(!localStorage.getItem("medstock_token"))localStorage.setItem("medstock_token",${JSON.stringify(process.env.NEXT_PUBLIC_DEV_TOKEN)});}catch(e){}`,
+            }}
+          />
+        ) : null}
         <nav>
           <Link href="/">home</Link>
           {Object.keys(SERVICES).map((name) => (
