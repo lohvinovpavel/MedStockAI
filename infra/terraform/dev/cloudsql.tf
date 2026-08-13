@@ -16,6 +16,11 @@ resource "google_sql_database_instance" "dev" {
   deletion_protection = false
 
   settings {
+    # New projects default new instances to Enterprise Plus edition, whose
+    # tiers are all db-perf-optimized-*. db-f1-micro is a legacy shared-core
+    # tier that only exists under Enterprise edition — must be pinned or the
+    # API rejects the tier outright.
+    edition           = "ENTERPRISE"
     tier              = "db-f1-micro"
     availability_type = "ZONAL"
     disk_type         = "PD_HDD"
