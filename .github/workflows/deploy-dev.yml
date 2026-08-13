@@ -94,7 +94,7 @@ jobs:
       - name: Migrate
         run: |
           kubectl -n medstock delete job migrate --ignore-not-found
-          sed "s|:latest|:${{ github.sha }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
+          sed "s|ghcr.io/medstockai/inventory:latest|${{ env.REGISTRY }}/inventory:${{ github.sha }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
           kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
 
       - name: Roll out
