@@ -128,10 +128,47 @@ sees the whole review queue for their hospital, not just their own actions.
 
 ---
 
+## Generating the signing keypair
+
+`auth` holds the private key; all eight deployments hold the public one. RS256,
+because the alternative (HS256) means shipping a signing secret to seven
+services that only need to verify.
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private-key.pem
+openssl rsa -pubout -in jwt-private-key.pem -out jwt-public-key.pem
+```
+
+Into the cluster — the two k8s objects `deploy/k8s/auth.yaml` already
+references by name:
+
+```bash
+kubectl create secret generic medstock-auth --from-file=jwt-private-key=jwt-private-key.pem
+kubectl create configmap medstock-jwt --from-file=public-key=jwt-public-key.pem
+```
+
+Delete `jwt-private-key.pem` from your machine afterwards. It is not in
+`.gitignore` by name — do not rely on that.
+
+**Rotation is a manual outage window.** Generate a new pair, replace both
+objects, roll all eight deployments, and everyone logs in again. There is no
+`kid`-based dual-key verification; build it when a second key must exist at
+the same time as the first.
+
+### For local development
+
+Generate a **separate** pair with the same two commands and point the two env
+vars at it. Never use the cluster's private key locally:
+
+```bash
+export JWT_PRIVATE_KEY="$(cat jwt-private-key.pem)"
+export JWT_PUBLIC_KEY="$(cat jwt-public-key.pem)"
+```
+
 ## Local development
 
 ```bash
-export JWT_PUBLIC_KEY="$(cat path/to/dev-public-key.pem)"
+export JWT_PUBLIC_KEY="$(cat jwt-public-key.pem)"
 uv run --package medstock-<yourservice> uvicorn app.main:app --reload --port 8002
 ```
 
@@ -141,7 +178,7 @@ Mint yourself a token for local testing:
 import jwt
 token = jwt.encode(
     {"sub": "dev-user", "hospital_id": "<uuid>", "role": "pharmacist", "aud": "medstock"},
-    open("path/to/dev-private-key.pem").read(),
+    open("jwt-private-key.pem").read(),
     algorithm="RS256",
 )
 ```
@@ -150,10 +187,6 @@ token = jwt.encode(
 
 ## Known gaps — don't design around these being solved
 
-- **`auth` itself is unbuilt.** `services/auth/app/main.py` is currently
-  `/healthz` + `/readyz` only — no `/login`, no user/hospital tables. The
-  contract above (claims, verification) is fixed; the issuing side isn't
-  written yet.
 - **RLS policies don't exist yet** (`docs/services.md` §8, open item #2).
   `session_scope()` sets `app.hospital_id`, but until `CREATE POLICY` lands,
   nothing reads it — tenant isolation is not actually enforced today, even
