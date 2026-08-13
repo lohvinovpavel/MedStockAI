@@ -5,5 +5,11 @@ members = ["shared", "services/*"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` in an argument default is FastAPI's idiom, not the mutable-
+# default bug B008 exists to catch. Every service hits this on its first real
+# route, so it is configured once here.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
+
 [tool.pytest.ini_options]
 testpaths = ["services"]
