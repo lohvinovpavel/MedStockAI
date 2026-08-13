@@ -1,20 +1,36 @@
 # Same origin for browser and API: the session cookie stays httpOnly/SameSite
 # and no CORS configuration exists anywhere in the system.
+#
+# Two objects, not one: rewrite-target is per-Ingress, and the /api/* paths
+# need the prefix stripped while web's / catch-all must not be touched.
+# Without the strip, a pod receives /api/auth/login while its route is
+# declared as /login — every browser call is a 404 (docs/auth-spec.md,
+# Defect B).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: medstock
+  name: medstock-api
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   rules:
   - http:
       paths:
-      - { path: /api/auth,       pathType: Prefix, backend: { service: { name: auth,              port: { number: 8000 } } } }
-      - { path: /api/inventory,  pathType: Prefix, backend: { service: { name: inventory,         port: { number: 8000 } } } }
-      - { path: /api/analogue,   pathType: Prefix, backend: { service: { name: analogue,          port: { number: 8000 } } } }
-      - { path: /api/compliance, pathType: Prefix, backend: { service: { name: compliance,        port: { number: 8000 } } } }
-      - { path: /api/patients,   pathType: Prefix, backend: { service: { name: patient-profiling, port: { number: 8000 } } } }
-      - { path: /api/prediction, pathType: Prefix, backend: { service: { name: prediction,        port: { number: 8000 } } } }
-      - { path: /api/warehouse,  pathType: Prefix, backend: { service: { name: warehouse,         port: { number: 8000 } } } }
-      - { path: /,               pathType: Prefix, backend: { service: { name: web,               port: { number: 3000 } } } }
+      - { path: "/api/auth(/|$)(.*)",       pathType: ImplementationSpecific, backend: { service: { name: auth,              port: { number: 8000 } } } }
+      - { path: "/api/inventory(/|$)(.*)",  pathType: ImplementationSpecific, backend: { service: { name: inventory,         port: { number: 8000 } } } }
+      - { path: "/api/analogue(/|$)(.*)",   pathType: ImplementationSpecific, backend: { service: { name: analogue,          port: { number: 8000 } } } }
+      - { path: "/api/compliance(/|$)(.*)", pathType: ImplementationSpecific, backend: { service: { name: compliance,        port: { number: 8000 } } } }
+      - { path: "/api/patients(/|$)(.*)",   pathType: ImplementationSpecific, backend: { service: { name: patient-profiling, port: { number: 8000 } } } }
+      - { path: "/api/prediction(/|$)(.*)", pathType: ImplementationSpecific, backend: { service: { name: prediction,        port: { number: 8000 } } } }
+      - { path: "/api/warehouse(/|$)(.*)",  pathType: ImplementationSpecific, backend: { service: { name: warehouse,         port: { number: 8000 } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medstock-web
+spec:
+  rules:
+  - http:
+      paths:
+      - { path: /, pathType: Prefix, backend: { service: { name: web, port: { number: 3000 } } } }
