@@ -211,7 +211,34 @@ connect to `localhost:5432`, database `medstock`, user `medstock`.
 another hospital's rows. Do not treat this environment as proof of tenant
 isolation.
 
-## 11. When something is broken
+## 11. CI deploy (`.github/workflows/deploy-dev.yml`)
+
+`workflow_dispatch` only — builds all nine images, pushes to Artifact
+Registry, migrates, then `kubectl apply -k deploy/overlays/dev`.
+
+No downloadable service account key: `ci.tf` provisions Workload Identity
+Federation, so GitHub's own OIDC token gets exchanged for a short-lived
+credential scoped to this one repo (`var.github_repo`) and one service
+account (`github-actions@...`, `roles/artifactregistry.writer` +
+`roles/container.developer` — same roles `dev_members` gets in `iam.tf`,
+for a machine identity instead of a person). Nothing to rotate, nothing to
+leak.
+
+Set `github_repo` in `terraform.tfvars` (`owner/repo`) before applying, then
+after apply, set two **repo Variables** (Settings → Secrets and variables →
+Actions → Variables — not Secrets, neither value is sensitive):
+
+```powershell
+terraform output -raw ci_workload_identity_provider
+```
+
+```powershell
+terraform output -raw ci_service_account_email
+```
+
+→ `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_CI_SERVICE_ACCOUNT` respectively.
+
+## 12. When something is broken
 
 | Symptom | Cause |
 |---|---|

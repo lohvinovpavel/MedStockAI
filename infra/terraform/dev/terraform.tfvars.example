@@ -2,6 +2,7 @@
 # gemini_api_key belongs in TF_VAR_gemini_api_key instead, never here.
 project_id         = "medstockai-dev"
 letsencrypt_email  = "you@example.com"
+github_repo        = "lohvinovpavel/MedStockAI" # owner/repo, for Workload Identity Federation (ci.tf)
 dev_members = [
   # "teammate1@example.com",
   # "teammate2@example.com",

@@ -1,0 +1,106 @@
+name: deploy-dev
+
+# Manual only — this is the $54/mo shared sandbox with a hand-rolled JWT key
+# and no RLS (docs/infra-dev-plan.md §6). Nobody should redeploy it on every
+# push to a branch. Bump to `push: branches: [main]` once that's wanted.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  # Matches deploy/overlays/dev/kustomization.yaml — infra/terraform/dev/registry.tf.
+  REGISTRY: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock
+  GCP_PROJECT_ID: project-f1b68703-0a5c-4fde-88a
+  GKE_CLUSTER: medstock-dev
+  GKE_ZONE: europe-west1-b
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    strategy:
+      matrix:
+        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: docker/login-action@v3
+        with:
+          registry: europe-west1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: SERVICE=${{ matrix.service }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=dev-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=dev-${{ matrix.service }}
+
+  build-web:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: docker/login-action@v3
+        with:
+          registry: europe-west1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          push: true
+          tags: ${{ env.REGISTRY }}/web:${{ github.sha }}
+
+  deploy:
+    needs: [build, build-web]
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+      - uses: imranismail/setup-kustomize@v2
+
+      # Schema first, always — see cd.yml for why.
+      - name: Migrate
+        run: |
+          kubectl -n medstock delete job migrate --ignore-not-found
+          sed "s|:latest|:${{ github.sha }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
+          kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
+
+      - name: Roll out
+        run: |
+          cd deploy/overlays/dev
+          for s in auth inventory analogue compliance patient-profiling prediction warehouse web ingest; do
+            kustomize edit set image "ghcr.io/medstockai/$s=${{ env.REGISTRY }}/$s:${{ github.sha }}"
+          done
+          kubectl apply -k .
+          for s in auth inventory analogue compliance patient-profiling prediction warehouse web; do
+            kubectl -n medstock rollout status "deploy/$s" --timeout=180s
+          done

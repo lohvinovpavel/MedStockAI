@@ -26,6 +26,11 @@ variable "dev_members" {
   default     = []
 }
 
+variable "github_repo" {
+  description = "owner/repo — the only repo whose GitHub Actions runs may impersonate the CI service account (ci.tf)."
+  type        = string
+}
+
 variable "letsencrypt_email" {
   description = "Used by the ClusterIssuer in deploy/overlays/dev/cluster-issuer.yaml, not by any Terraform resource — surfaced as an output so the README's replace step has one source of truth."
   type        = string

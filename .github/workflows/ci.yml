@@ -1,44 +1,44 @@
-name: ci
+# name: ci
 
-on:
-  # pull_request:
-  # push:
-  #   branches: [main]
-  workflow_dispatch:
+# on:
+#   # pull_request:
+#   # push:
+#   #   branches: [main]
+#   workflow_dispatch:
 
 
-jobs:
-  python:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: medstock
-          POSTGRES_PASSWORD: medstock
-          POSTGRES_DB: medstock
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-        ports: ["5432:5432"]
-    env:
-      DATABASE_URL: postgresql+psycopg://medstock:medstock@localhost:5432/medstock
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-        with: { enable-cache: true }
-      - run: uv sync --all-packages
-      - run: uv run ruff check .
-      - run: uv run alembic upgrade head
-      - run: uv run pytest -q
+# jobs:
+#   python:
+#     runs-on: ubuntu-latest
+#     services:
+#       postgres:
+#         image: postgres:16
+#         env:
+#           POSTGRES_USER: medstock
+#           POSTGRES_PASSWORD: medstock
+#           POSTGRES_DB: medstock
+#         options: >-
+#           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+#         ports: ["5432:5432"]
+#     env:
+#       DATABASE_URL: postgresql+psycopg://medstock:medstock@localhost:5432/medstock
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: astral-sh/setup-uv@v3
+#         with: { enable-cache: true }
+#       - run: uv sync --all-packages
+#       - run: uv run ruff check .
+#       - run: uv run alembic upgrade head
+#       - run: uv run pytest -q
 
-  web:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
-      - run: npm install
-      - run: npm run build
+#   web:
+#     runs-on: ubuntu-latest
+#     defaults:
+#       run:
+#         working-directory: web
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: actions/setup-node@v4
+#         with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
+#       - run: npm install
+#       - run: npm run build

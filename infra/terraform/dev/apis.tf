@@ -8,6 +8,7 @@ locals {
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
     "compute.googleapis.com",
+    "iamcredentials.googleapis.com", # token exchange for Workload Identity Federation (ci.tf)
   ]
 }
 
