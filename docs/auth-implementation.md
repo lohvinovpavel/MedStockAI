@@ -21,7 +21,57 @@ Companion to [auth-spec.md](auth-spec.md). The spec says *what* and *why*; this 
    of your PR description.
 5. **After each PR, run the verification block for that PR.** If it does not pass, fix it before
    starting the next PR. Do not proceed on a red check.
-6. Line length is 100 (`pyproject.toml` `[tool.ruff]`). `uv run ruff check .` must pass.
+6. Line length is 100 (`pyproject.toml` `[tool.ruff]`). **`uv run ruff check .` does not pass on a
+   clean tree** — see Defect C. Your bar is that you add no *new* errors, checked by running ruff
+   before and after your change and comparing the counts.
+
+## Defect C — `import app` always resolves to `analogue`, and the lint/test bars do not hold
+
+Discovered while running PR 1's verification. Three separate facts, all pre-existing, none caused by
+this work. **Read this before trusting any verification result in this document.**
+
+**`import app` is ambiguous across the whole workspace.** All seven services declare
+`packages = ["app"]` in their own `pyproject.toml`, so `uv sync --all-packages` installs seven
+different editable packages that all claim the top-level name `app`. The alphabetically-first one
+wins:
+
+```
+uv run python -c "import app.main; print(app.__path__, app.main.app.title)"
+# -> services/analogue/app   'analogue'
+```
+
+Consequences, all verified:
+
+- Every service's `tests/test_health.py` does `from app.main import app` and therefore imports
+  **analogue's** application, not its own. All seven pass, and all seven are vacuous.
+- `services/ingest/tests/test_row_mapping.py` fails with `ModuleNotFoundError: No module named
+  'app.pricing'` — analogue has no `pricing` module. This is the only place the collision is
+  currently visible.
+- This is a **local-development artifact only**. `Dockerfile` builds one service per image, so
+  nothing collides in a deployed pod. Do not "fix" it by renaming production packages.
+
+The fix is a two-line `conftest.py` per service, putting that service's own directory first on
+`sys.path`. **This document only adds it for `auth`** (PR 3, step 3.4) because that is the service
+in scope. The other six need the same file, which is their owners' work, not yours:
+
+```python
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+```
+
+**`uv run pytest -q` (whole suite) is broken and stays broken.** Beyond the collision above, the
+seven identically-named `test_health.py` files collide during collection (no `__init__.py`, no
+`--import-mode=importlib`), so the run aborts with 7 collection errors before executing anything.
+**Always verify with a per-service run:** `uv run pytest services/auth -q`.
+
+**`uv run ruff check .` reports 21 errors on a clean tree**, in files spread across all seven
+services, `migrations/env.py`, and `services/ingest`. Mostly `I001` import ordering. Fixing them
+means touching six other owners' files, so this work does not. One more (`RUF022`, `__all__` not
+sorted in `shared/medstock_shared/__init__.py`) pre-dates this work and survives it, because PR 1's
+`__all__` is written exactly as specified below.
+
+None of these three belongs to `auth`. All three should become their own small PR after this
+sequence lands.
 
 ## Prerequisites — do this once, before PR 1
 
@@ -316,17 +366,21 @@ __all__ = [
 ### Verify PR 1
 
 ```bash
-uv run ruff check . && uv run python -c "import medstock_shared; print(medstock_shared.COOKIE_NAME)"
+uv run python -c "import medstock_shared; print(medstock_shared.COOKIE_NAME)"
 ```
 
 Must print `medstock_token` with **no** `GEMINI_API_KEY` set. If it raises `ValueError: No API key
-was provided`, step 1.4 is wrong.
+was provided`, step 1.4 is wrong. This is the check that proves Defect A is fixed.
 
 ```bash
-uv run pytest -q
+uv run pytest services/auth -q
 ```
 
-The seven existing `test_health.py` files must pass. Before PR 1 they could not even import.
+Per-service, not the whole suite — see Defect C. Must be `1 passed`.
+
+`uv run ruff check .` will report 22 errors: 21 pre-existing plus one `RUF022` that also pre-exists.
+Confirm that count rather than trying to reach zero; Defect C explains why zero is not reachable
+from inside this PR.
 
 ---
 
@@ -672,11 +726,29 @@ def me(principal: Principal = Depends(current_principal)) -> MeResponse:
 between auth and the other six is only meaningful if a real signature is
 verified with a real public key, so these tests mint and verify for real."""
 
-import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+import pathlib
+import sys
 
-from medstock_shared import settings
+# MUST come before `from app...` anywhere in this package. Seven services each
+# install a top-level package named `app` into one venv, and analogue wins the
+# name by alphabetical order — so without this, `from app.main import app`
+# silently imports analogue's application and every test below is meaningless.
+# See Defect C at the top of docs/auth-implementation.md.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import pytest  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+
+from medstock_shared import settings  # noqa: E402
+
+
+def test_conftest_resolved_the_right_app() -> None:
+    """Guard for the line above. If this fails, every other test in this
+    directory is testing some other service."""
+    from app.main import app
+
+    assert app.title == "auth"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -832,12 +904,21 @@ def test_cookie_alone_authenticates_another_service(account: str) -> None:
 ### Verify PR 3
 
 ```bash
-uv run alembic upgrade head && uv run pytest services/auth -q && uv run ruff check .
+uv run alembic upgrade head && uv run pytest services/auth -q
 ```
 
 All tests must pass. `test_token_verifies_through_shared_current_principal` and
 `test_cookie_alone_authenticates_another_service` are the two that must not be skipped or weakened
-— they are the contract with the other six services.
+— they are the contract with the other six services. `test_conftest_resolved_the_right_app` is the
+guard for Defect C; if it fails, ignore every other result in the run until it is green.
+
+**If no PostgreSQL is reachable**, every test except `test_me_requires_a_token` will error on
+connection. That is expected and is not a signal about your code. In that case:
+
+- write the tests exactly as specified and do not weaken them to pass without a database,
+- verify what you can: `uv run python -c "import app.main"` must succeed, and
+  `uv run ruff check services/auth` must add no new errors,
+- report clearly that the suite was not run and why.
 
 ---
 
