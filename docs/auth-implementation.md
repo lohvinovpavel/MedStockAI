@@ -1210,10 +1210,13 @@ export JWT_PUBLIC_KEY="$(cat jwt-public-key.pem)"
 ```
 ````
 
-Then, in the existing `## Local development` section, replace
-`path/to/dev-private-key.pem` with `jwt-private-key.pem` in both places, and in
-`## Known gaps`, delete the bullet that begins **"`auth` itself is unbuilt"** — after PR 6 it is
-false. Leave the other two gap bullets (RLS, revocation); both are still true.
+Then, in the existing `## Local development` section, replace the two stale placeholders —
+`path/to/dev-private-key.pem` → `jwt-private-key.pem` and `path/to/dev-public-key.pem` →
+`jwt-public-key.pem`. They are two different strings appearing once each, not one string twice.
+Afterwards `grep "path/to/" services/auth/README.md` must return nothing.
+
+Finally, in `## Known gaps`, delete the bullet that begins **"`auth` itself is unbuilt"** — after
+PR 6 it is false. Leave the other two gap bullets (RLS, revocation); both are still true.
 
 ### Verify PR 7
 
