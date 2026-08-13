@@ -25,16 +25,28 @@ Companion to [auth-spec.md](auth-spec.md). The spec says *what* and *why*; this 
 
 ## Prerequisites — do this once, before PR 1
 
-`uv` is the package manager for this repo and is **not currently installed on this machine**
-(verified). Install it, then start a local Postgres.
+`uv` is the package manager for this repo. Install it, then a local Postgres.
 
 ```bash
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+pip install uv
+```
+
+**Postgres runs natively on this machine — no Docker.** Install PostgreSQL 16, then create the role
+and database the connection string expects:
+
+```bash
+winget install --id PostgreSQL.PostgreSQL.16 --silent --accept-package-agreements --accept-source-agreements
 ```
 
 ```bash
-docker run -d --name medstock-pg -p 5432:5432 -e POSTGRES_USER=medstock -e POSTGRES_PASSWORD=medstock -e POSTGRES_DB=medstock postgres:16
+psql -U postgres -c "CREATE ROLE medstock LOGIN PASSWORD 'medstock' SUPERUSER" -c "CREATE DATABASE medstock OWNER medstock"
 ```
+
+`SUPERUSER` is a local-development convenience so `CREATE EXTENSION citext` cannot fail. The
+deployed app role is the opposite of this — no `BYPASSRLS`, not a table owner (`docs/services.md`
+§1.2). Never mirror this grant into a real environment.
+
+`psql` lives in `C:\Program Files\PostgreSQL\16\bin`; add it to `PATH` if the command is not found.
 
 Then, in **every** shell you use for this work:
 
@@ -338,7 +350,7 @@ Make sure the database is **empty** first, or autogenerate will produce a diff i
 schema:
 
 ```bash
-docker exec medstock-pg psql -U medstock -d medstock -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+psql -U medstock -d medstock -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 ```
 
 ```bash
@@ -389,7 +401,7 @@ All three must succeed. The down-then-up proves `downgrade()` is real, which mat
 is the revision everyone else's first migration will build on.
 
 ```bash
-docker exec medstock-pg psql -U medstock -d medstock -c "\d membership"
+psql -U medstock -d medstock -c "\d membership"
 ```
 
 Confirm the unique constraint on `user_id` and the check constraint on `role` are both listed.
