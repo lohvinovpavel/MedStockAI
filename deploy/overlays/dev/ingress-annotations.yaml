@@ -1,0 +1,35 @@
+# Strategic-merge partial: annotations are a map, so this merges keys in
+# without touching medstock-api's existing use-regex/rewrite-target — a
+# JSON6902 patch can't add into a map that may not exist yet on medstock-web.
+# host/tls are added separately (JSON6902, in kustomization.yaml) because
+# spec.rules has no merge key and a strategic-merge patch would replace the
+# whole rules list, wiping out the /api/* paths.
+#
+# ingressClassName is set here, not in the base: on GKE an Ingress with no
+# class is claimed by the built-in GCE controller, which ignores
+# rewrite-target and re-introduces Defect B at the cluster level.
+#
+# Only ONE of the two Ingresses carries cert-manager.io/cluster-issuer.
+# Both serve the same host and both reference the same tls secretName, so
+# annotating both would make cert-manager create two Certificates racing to
+# populate one Secret — duplicate ACME orders against a Let's Encrypt rate
+# limit. medstock-web owns issuance; medstock-api just consumes the Secret
+# once it exists.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medstock-api
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medstock-web
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx

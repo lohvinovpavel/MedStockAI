@@ -126,7 +126,14 @@ applied by the same `kubectl apply -k` the team already runs.
 
 ---
 
-## 3. Dev overlay — `deploy/k8s/overlays/dev/`
+## 3. Dev overlay — `deploy/overlays/dev/`
+
+> Corrected during implementation. This was originally specified as
+> `deploy/k8s/overlays/dev/`, which kustomize rejects: the base root is
+> `deploy/k8s`, and an overlay nested inside its own base is a reference cycle
+> (`candidate root ... contains visited root ...`). Restructuring the base into
+> `deploy/k8s/base/` would have been the other fix, but that edits seven other
+> owners' manifests and every command already documented against them.
 
 The base manifests are production-shaped and will not run here as-is:
 
@@ -185,7 +192,8 @@ infra/terraform/dev/
   addons.tf      helm_release ingress-nginx, cert-manager
   iam.tf         dev_members bindings
   variables.tf outputs.tf terraform.tfvars.example
-infra/README.md  bootstrap → apply → sed the host → kubectl apply -k
+infra/README.md  bootstrap → apply → fill placeholders → kubectl apply -k
+deploy/overlays/dev/  kustomization.yaml, ingress-annotations.yaml, cluster-issuer.yaml
 ```
 
 One root module, no `modules/`. There is one environment; a module abstraction
