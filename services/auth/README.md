@@ -2,6 +2,11 @@
 
 Owner: **Tymur**. Read this before writing any route in your service.
 
+This file is the **contract** — claims, `Principal`, the permission map. For the
+day-to-day procedure (getting a token without running `auth`, protecting a
+route, testing your service locally, and the failure-mode cheat sheet), see
+[`docs/auth-integration.md`](../../docs/auth-integration.md).
+
 ---
 
 ## The one rule
