@@ -8,27 +8,27 @@ resources:
   - ../../k8s
   - cluster-issuer.yaml
 
-# REPLACE-ME-REGISTRY: infra/README.md's sed step fills this from
+# europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock: infra/README.md's sed step fills this from
 # `terraform output -raw artifact_registry_repo` after apply.
 images:
   - name: ghcr.io/medstockai/analogue
-    newName: REPLACE-ME-REGISTRY/analogue
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/analogue
   - name: ghcr.io/medstockai/auth
-    newName: REPLACE-ME-REGISTRY/auth
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/auth
   - name: ghcr.io/medstockai/compliance
-    newName: REPLACE-ME-REGISTRY/compliance
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/compliance
   - name: ghcr.io/medstockai/ingest
-    newName: REPLACE-ME-REGISTRY/ingest
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/ingest
   - name: ghcr.io/medstockai/inventory
-    newName: REPLACE-ME-REGISTRY/inventory
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/inventory
   - name: ghcr.io/medstockai/patient-profiling
-    newName: REPLACE-ME-REGISTRY/patient-profiling
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/patient-profiling
   - name: ghcr.io/medstockai/prediction
-    newName: REPLACE-ME-REGISTRY/prediction
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/prediction
   - name: ghcr.io/medstockai/warehouse
-    newName: REPLACE-ME-REGISTRY/warehouse
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/warehouse
   - name: ghcr.io/medstockai/web
-    newName: REPLACE-ME-REGISTRY/web
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/web
 
 patches:
   # Sixteen pods on two Spot e2-mediums for a sandbox — plan §3.
@@ -54,11 +54,11 @@ patches:
     patch: |-
       - op: add
         path: /spec/rules/0/host
-        value: medstock-dev.REPLACE-ME.sslip.io
+        value: medstock-dev.34-78-26-132.sslip.io
       - op: add
         path: /spec/tls
         value:
-          - hosts: [medstock-dev.REPLACE-ME.sslip.io]
+          - hosts: [medstock-dev.34-78-26-132.sslip.io]
             secretName: medstock-dev-tls
   - target:
       kind: Ingress
@@ -66,9 +66,9 @@ patches:
     patch: |-
       - op: add
         path: /spec/rules/0/host
-        value: medstock-dev.REPLACE-ME.sslip.io
+        value: medstock-dev.34-78-26-132.sslip.io
       - op: add
         path: /spec/tls
         value:
-          - hosts: [medstock-dev.REPLACE-ME.sslip.io]
+          - hosts: [medstock-dev.34-78-26-132.sslip.io]
             secretName: medstock-dev-tls

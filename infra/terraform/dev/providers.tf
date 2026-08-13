@@ -14,6 +14,7 @@ terraform {
   # deserves. Fill in with -backend-config or a bucket= line here.
   backend "gcs" {
     # bucket = "REPLACE-ME-tfstate-bucket"
+    bucket = "fde_terraform_state"
     prefix = "medstock-dev"
   }
 }
@@ -22,6 +23,8 @@ provider "google" {
   project = var.project_id
   region  = var.region
   zone    = var.zone
+
+  impersonate_service_account = "terraform-iac@project-f1b68703-0a5c-4fde-88a.iam.gserviceaccount.com"
 }
 
 # GKE cluster doesn't exist at plan time on a fresh apply, so kubernetes/helm

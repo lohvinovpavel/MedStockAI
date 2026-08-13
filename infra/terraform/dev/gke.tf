@@ -44,9 +44,9 @@ resource "google_container_node_pool" "spot" {
 
   autoscaling {
     min_node_count = 1
-    max_node_count = 3
+    max_node_count = 1
   }
-  initial_node_count = 2
+  initial_node_count = 1
 
   node_config {
     machine_type = "e2-medium"

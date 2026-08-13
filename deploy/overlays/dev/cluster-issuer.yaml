@@ -8,7 +8,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: REPLACE-ME@example.com
+    email: raimondross@gmail.com
     privateKeySecretRef:
       name: letsencrypt-account-key
     solvers:
