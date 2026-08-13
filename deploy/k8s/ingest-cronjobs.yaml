@@ -1,0 +1,81 @@
+# Three CronJobs, one image, no Deployment/Service — ingest has no HTTP
+# surface (docs/services.md §7/§8). Each write is ON CONFLICT DO UPDATE on a
+# natural key, so a doubled run (Spot preemption, manual re-trigger, a missed
+# schedule caught by startingDeadlineSeconds) is safe by construction.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-shortages
+spec:
+  schedule: "0 * * * *"   # hourly
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: shortages
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.shortages"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-pricing
+spec:
+  schedule: "0 3 * * *"   # daily
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: pricing
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.pricing"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-rxnorm
+spec:
+  schedule: "0 4 * * 0"   # weekly, Sunday
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: rxnorm
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.rxnorm"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }

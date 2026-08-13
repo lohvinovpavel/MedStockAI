@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analogue
+  labels: { app: analogue, part-of: medstock }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: analogue }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: analogue, part-of: medstock }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: analogue
+        image: ghcr.io/medstockai/analogue:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            configMapKeyRef: { name: medstock-jwt, key: public-key }
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef: { name: medstock-ai, key: gemini-api-key }
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { memory: 512Mi }
+        livenessProbe:
+          httpGet: { path: /healthz, port: 8000 }
+          periodSeconds: 10
+        readinessProbe:
+          httpGet: { path: /readyz, port: 8000 }
+          periodSeconds: 5
+        lifecycle:
+          preStop:
+            exec: { command: ["sleep", "5"] }   # let Ingress deregister first
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analogue
+spec:
+  selector: { app: analogue }
+  ports:
+  - port: 8000
+    targetPort: 8000

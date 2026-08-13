@@ -1,0 +1,20 @@
+# Same origin for browser and API: the session cookie stays httpOnly/SameSite
+# and no CORS configuration exists anywhere in the system.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medstock
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+  - http:
+      paths:
+      - { path: /api/auth,       pathType: Prefix, backend: { service: { name: auth,              port: { number: 8000 } } } }
+      - { path: /api/inventory,  pathType: Prefix, backend: { service: { name: inventory,         port: { number: 8000 } } } }
+      - { path: /api/analogue,   pathType: Prefix, backend: { service: { name: analogue,          port: { number: 8000 } } } }
+      - { path: /api/compliance, pathType: Prefix, backend: { service: { name: compliance,        port: { number: 8000 } } } }
+      - { path: /api/patients,   pathType: Prefix, backend: { service: { name: patient-profiling, port: { number: 8000 } } } }
+      - { path: /api/prediction, pathType: Prefix, backend: { service: { name: prediction,        port: { number: 8000 } } } }
+      - { path: /api/warehouse,  pathType: Prefix, backend: { service: { name: warehouse,         port: { number: 8000 } } } }
+      - { path: /,               pathType: Prefix, backend: { service: { name: web,               port: { number: 3000 } } } }

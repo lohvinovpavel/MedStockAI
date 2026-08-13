@@ -1,0 +1,9 @@
+.git
+.github
+docs
+deploy
+web
+**/__pycache__
+**/.pytest_cache
+**/.venv
+*.pdf

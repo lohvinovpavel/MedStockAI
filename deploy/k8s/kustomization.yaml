@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: medstock
+
+resources:
+  - namespace.yaml
+  - auth.yaml
+  - inventory.yaml
+  - analogue.yaml
+  - compliance.yaml
+  - patient-profiling.yaml
+  - prediction.yaml
+  - warehouse.yaml
+  - web.yaml
+  - ingress.yaml
+  - ingest-cronjobs.yaml
