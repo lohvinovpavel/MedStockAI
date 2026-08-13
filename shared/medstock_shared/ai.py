@@ -25,7 +25,18 @@ from .db import SessionLocal
 from .models import AICache
 
 _log = logging.getLogger(__name__)
-_client = genai.Client(api_key=settings.gemini_api_key)
+_client: genai.Client | None = None
+
+
+def _get_client() -> genai.Client:
+    """Built on first use, not at import. Five of the seven services have no
+    Gemini key and must still be able to `import medstock_shared`. Belt and
+    braces alongside __init__.py's lazy __getattr__: this also protects a
+    direct `import medstock_shared.ai`, which bypasses that wrapper."""
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=settings.gemini_api_key)
+    return _client
 
 
 def dedupe_key(task: str, payload: dict) -> str:
@@ -51,7 +62,7 @@ class _Retryable(Exception):
 )
 def _generate_json(prompt: str) -> dict:
     try:
-        response = _client.models.generate_content(
+        response = _get_client().models.generate_content(
             model=settings.gemini_model,
             contents=prompt,
             config={

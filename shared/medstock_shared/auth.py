@@ -11,6 +11,9 @@ from fastapi import Depends, HTTPException, Request
 
 from .config import settings
 
+# The one place the cookie name is written. auth sets it; all seven read it.
+COOKIE_NAME = "medstock_token"
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -21,11 +24,15 @@ class Principal:
 
 def current_principal(request: Request) -> Principal:
     header = request.headers.get("authorization", "")
-    if not header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
+    # Cookie is how the browser authenticates (httpOnly, docs/services.md §2).
+    # The Bearer header stays for curl and for local dev token minting — one
+    # `or`, and both paths land on the same verification below.
+    token = header[7:] if header.startswith("Bearer ") else request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="missing credentials")
     try:
         claims = jwt.decode(
-            header[7:],
+            token,
             settings.jwt_public_key,
             algorithms=[settings.jwt_algorithm],
             audience="medstock",

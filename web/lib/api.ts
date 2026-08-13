@@ -6,21 +6,15 @@ import { SERVICES, ServiceName } from "./services";
  * Use it from every service page below so there is exactly one place that
  * knows how a request is authenticated.
  *
- * ponytail: the auth header is a placeholder. There is no /login yet
- * (services/auth is a healthz-only stub — see services/auth/README.md), so
- * this reads a token from localStorage under a fixed key. Once real login
- * exists, change how `token` is obtained here — every page already calls
- * through apiFetch, so nothing else needs to change.
+ * Authentication is the medstock_token cookie: httpOnly, so no code here
+ * can read it and none needs to — the browser attaches it. That is the
+ * point (docs/auth-spec.md §4). Nothing in web/ ever holds a token.
  */
 export async function apiFetch(service: ServiceName, path: string, init?: RequestInit) {
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("medstock_token") : null;
-
   const res = await fetch(`${SERVICES[service]}${path}`, {
     ...init,
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
+    credentials: "include",
+    headers: { "content-type": "application/json", ...init?.headers },
   });
 
   if (!res.ok) {
@@ -35,5 +29,5 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
     }
     throw new Error(message);
   }
-  return res.json();
+  return res.status === 204 ? null : res.json();
 }

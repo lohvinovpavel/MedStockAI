@@ -1,7 +1,7 @@
 """UC-1 tenant tables: formulary boost + stock-by-rxcui.
 
 Revision ID: 20260813_uc1
-Revises:
+Revises: 92d0791b272e
 Create Date: 2026-08-13
 """
 
@@ -11,7 +11,11 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260813_uc1"
-down_revision: Union[str, None] = None
+# Chained after the auth branch's initial-schema revision rather than left as
+# a second root: two independent "first" migrations can't both exist, and
+# that revision already creates ai_cache — see the deleted 20260813_ai_cache
+# migration, now redundant.
+down_revision: Union[str, None] = "92d0791b272e"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
