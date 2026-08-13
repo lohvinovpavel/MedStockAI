@@ -460,6 +460,23 @@ psql -U medstock -d medstock -c "\d membership"
 
 Confirm the unique constraint on `user_id` and the check constraint on `role` are both listed.
 
+**With no database reachable**, use Alembic's offline mode, which renders the DDL without
+connecting. Note that the downgrade form requires an explicit `<from>:<to>` range — plain
+`downgrade base --sql` errors out:
+
+```bash
+uv run alembic upgrade head --sql
+```
+
+```bash
+uv run alembic downgrade <revision>:base --sql
+```
+
+Read the emitted SQL and confirm by eye: `CREATE EXTENSION` precedes `CREATE TABLE app_user`, all
+eight tables are present, `hospital`/`app_user` precede `membership`, and the named constraints
+appear verbatim. Rendered is not the same as run — a migration verified this way still needs one
+real `upgrade head` against Postgres before anyone trusts it.
+
 ---
 
 # PR 3 — `/login`, `/logout`, `/me`
