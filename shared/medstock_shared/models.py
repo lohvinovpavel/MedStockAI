@@ -1,10 +1,21 @@
 """Shared metadata. Alembic autogenerate reads Base.metadata, so any table a
 service owns must be imported here before a migration is generated."""
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -92,4 +103,67 @@ class RxnormEdge(Base):
 
     __table_args__ = (
         UniqueConstraint("rxcui_from", "rxcui_to", "relationship", name="uq_rxnorm_edge"),
+    )
+
+
+# --- Identity tables (docs/auth-spec.md §1): owned by `auth`, and the one
+# documented exception to the "always go through session_scope" rule. Login
+# runs *before* there is a hospital_id to set, so these three carry no RLS
+# policies and are queried through SessionLocal directly.
+
+
+class Hospital(Base):
+    __tablename__ = "hospital"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AppUser(Base):
+    """Not `user` — reserved word in Postgres."""
+
+    __tablename__ = "app_user"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # CITEXT so Ann@x.org and ann@x.org cannot become two accounts. The
+    # migration creates the extension before this table.
+    email: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Membership(Base):
+    """Role belongs to the membership, not the user — "director at A,
+    pharmacist at B" is the case that would otherwise force an auth rewrite.
+
+    `uq_membership_one_hospital_per_user` is the "one hospital per user"
+    decision (docs/services.md §8 #4). Dropping that one constraint plus
+    adding a hospital picker at login is the whole multi-hospital change.
+    """
+
+    __tablename__ = "membership"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="CASCADE"), primary_key=True
+    )
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), primary_key=True
+    )
+    # Must stay in sync with the keys of PERMS in auth.py.
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('pharmacist','physician','director','admin')", name="ck_membership_role"
+        ),
+        UniqueConstraint("user_id", name="uq_membership_one_hospital_per_user"),
     )
