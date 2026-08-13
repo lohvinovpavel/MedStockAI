@@ -38,7 +38,7 @@ Terraform actually reads.
 Chicken-and-egg: the backend must exist before `terraform init` can use it.
 
 ```bash
-gcloud storage buckets create gs://YOUR-PROJECT-ID-tfstate --project=YOUR-PROJECT-ID --location=us-central1 --uniform-bucket-level-access
+gcloud storage buckets create gs://YOUR-PROJECT-ID-tfstate --project=YOUR-PROJECT-ID --location=europe-west1 --uniform-bucket-level-access
 ```
 
 ```bash
@@ -118,7 +118,7 @@ kubectl kustomize deploy/overlays/dev | Select-String "host:|newName:|email:"
 The manifests point at Artifact Registry; nothing is there yet.
 
 ```powershell
-gcloud auth configure-docker us-central1-docker.pkg.dev
+gcloud auth configure-docker europe-west1-docker.pkg.dev
 ```
 
 ```powershell

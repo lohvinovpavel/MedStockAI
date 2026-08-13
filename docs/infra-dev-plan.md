@@ -36,8 +36,10 @@ Three facts from the existing repo, not preferences:
 
 ## 1. Resources
 
-Region **us-central1**, zone **us-central1-a**. Cheapest region, and a *zonal*
-cluster is what the GKE free tier covers.
+Region **europe-west1**, zone **europe-west1-b**. Switched from us-central1
+after that region ran out of Spot `e2-medium` capacity mid-rollout — Belgium is
+the cheapest, best-stocked EU region and the GKE free-tier zonal credit isn't
+region-specific. A *zonal* cluster is what that credit covers.
 
 ### Network
 - Custom VPC `medstock-dev` + one subnet `10.10.0.0/20`, with secondary ranges
@@ -76,7 +78,7 @@ cluster is what the GKE free tier covers.
 - One database `medstock`, one user `medstock` with a `random_password`.
 
 ### Artifact Registry — `medstock`
-Docker repo in us-central1. A cleanup policy deletes untagged images older than
+Docker repo in europe-west1. A cleanup policy deletes untagged images older than
 7 days, which keeps storage inside the 0.5GB free allowance. Replaces the
 `ghcr.io/medstockai/*` refs in the manifests.
 
@@ -152,7 +154,7 @@ no gain.
 
 ---
 
-## 4. Cost — estimate, us-central1
+## 4. Cost — estimate, europe-west1
 
 | Item | $/month |
 |---|---|

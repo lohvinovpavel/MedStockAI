@@ -4,14 +4,14 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Cheapest region with the GKE free-tier zonal cluster credit."
+  description = "GKE free-tier zonal cluster credit applies in any region. europe-west1 (Belgium): cheapest EU region, well-stocked for e2-medium Spot — switched from us-central1 after that region ran out of Spot capacity."
   type        = string
-  default     = "us-central1"
+  default     = "europe-west1"
 }
 
 variable "zone" {
   type    = string
-  default = "us-central1-a"
+  default = "europe-west1-b"
 }
 
 variable "gemini_api_key" {
@@ -27,6 +27,6 @@ variable "dev_members" {
 }
 
 variable "letsencrypt_email" {
-  description = "Used by the ClusterIssuer in deploy/k8s/overlays/dev/cluster-issuer.yaml, not by any Terraform resource — surfaced as an output so the README's replace step has one source of truth."
+  description = "Used by the ClusterIssuer in deploy/overlays/dev/cluster-issuer.yaml, not by any Terraform resource — surfaced as an output so the README's replace step has one source of truth."
   type        = string
 }
