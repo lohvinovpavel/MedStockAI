@@ -14,7 +14,8 @@ class Settings(BaseSettings):
 
     # ask_ai() only — set on analogue and prediction, unused elsewhere
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    # Single source for the Gemini model id. Override with env GEMINI_MODEL.
+    gemini_model: str = "gemini-3.5-flash"
     llm_timeout_seconds: float = 20.0
 
 

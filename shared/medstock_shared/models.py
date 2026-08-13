@@ -167,3 +167,54 @@ class Membership(Base):
         ),
         UniqueConstraint("user_id", name="uq_membership_one_hospital_per_user"),
     )
+
+
+# --- Tenant tables (UC-1): owned by `inventory` (writes) and read by
+# `analogue` to boost search hits. No application `WHERE hospital_id` — RLS
+# + `session_scope` are meant to be the tenant filter once policies exist
+# (services.md §8 #2); not yet enforced, so this is the shape they will
+# filter, not a working guarantee today.
+#
+# hospital_id here is Text, not a FK to hospital.id (UUID) above — the two
+# were modeled independently by different owners in parallel. Flag for
+# whoever owns inventory: worth a follow-up migration once both tables have
+# real rows, not something to silently retype in a merge conflict resolution.
+
+
+class FormularyItem(Base):
+    """Tenant formulary. Analogue reads `rxcui` to boost UC-1 search hits.
+    Inventory will own writes (`POST /formulary/import`). No application
+    `WHERE hospital_id` — RLS + `session_scope` are the tenant filter.
+    """
+
+    __tablename__ = "formulary_item"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("hospital_id", "rxcui", name="uq_formulary_hospital_rxcui"),)
+
+
+class StockSnapshot(Base):
+    """On-hand quantity per hospital / NDC / location. Empty string location
+    is the hospital-wide bucket until warehouse locations exist.
+    """
+
+    __tablename__ = "stock_snapshot"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    location_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("hospital_id", "ndc", "location_id", name="uq_stock_hospital_ndc_loc"),
+    )

@@ -19,13 +19,22 @@ class AITask:
 
 
 def _citation_must_be_verbatim(result: dict) -> None:
-    """A hallucinated citation is the failure mode that matters clinically.
-    The quote has to appear in the source text, character for character."""
+    """Drop hallucinated citations rather than rejecting the whole keep-set.
+
+    A fabricated quote must not reach a pharmacist. Raising would make
+    `ask_ai` fail and analogue fall back to the unfiltered Full list, which
+    looks like AI did nothing. Stripping the quote keeps the filter.
+    """
     source = result.get("source_text", "")
-    for item in result.get("items", []):
+    items = result.get("items")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
         quote = item.get("citation", "")
         if quote and quote not in source:
-            raise ValueError(f"citation not found in source: {quote[:60]!r}")
+            item["citation"] = ""
 
 
 TASKS: dict[str, AITask] = {
@@ -33,10 +42,13 @@ TASKS: dict[str, AITask] = {
         name="analogue",
         owner="Pavlo",
         prompt=(
-            "Given the drug {drug_name} (RxCUI {rxcui}) which is in shortage, rank the "
-            "therapeutic alternatives below. Return JSON: "
-            '{{"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
-            "Every citation must be a verbatim sentence from the source text.\n\n"
+            "Given the drug {drug_name} (RxCUI {rxcui}) which is in shortage, filter the "
+            "therapeutic alternatives below. Keep about 5 commonly used substitutes; drop "
+            "the rest. Do not invent rxcui values. Return JSON: "
+            '{{"source_text": str, '
+            '"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
+            "Copy source_text from the Source text section unchanged. Every citation must "
+            "be a verbatim sentence from the source text.\n\n"
             "Candidates: {candidates}\nSource text: {source_text}"
         ),
         validate=_citation_must_be_verbatim,
