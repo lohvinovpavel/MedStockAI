@@ -4,6 +4,7 @@ name: deploy-dev
 # and no RLS (docs/infra-dev-plan.md §6). Nobody should redeploy it on every
 # push to a branch. Bump to `push: branches: [main]` once that's wanted.
 on:
+  pull_request:
   workflow_dispatch:
 
 concurrency:
