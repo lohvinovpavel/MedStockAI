@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "type": "command",
+        "command": ".cursor/hooks/start-app-after-changes.sh",
+        "failClosed": false,
+        "timeout": 90,
+        "loop_limit": 50
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "command": ".cursor/hooks/start-app-after-changes.sh",
+        "failClosed": false,
+        "timeout": 90,
+        "loop_limit": 50
+      }
+    ]
+  }
+}

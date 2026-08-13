@@ -24,7 +24,16 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
   });
 
   if (!res.ok) {
-    throw new Error(`${service}${path} -> ${res.status} ${res.statusText}`);
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") {
+        message = body.detail;
+      }
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(message);
   }
   return res.json();
 }
