@@ -245,8 +245,8 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 | Service | Owner | Ingress path | Responsibility | Endpoints (sketch) |
 |---|---|---|---|---|
 | `auth` | Tymur | `/api/auth` | Authenticate and authorize users; issue and rotate tokens. Holds the **private** signing key; everyone else holds the public one. | `POST /login` · `POST /logout` · `GET /me` |
-| `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. | `GET /stock` · `GET /exposure` · `POST /formulary/import` (CSV) |
-| `analogue` | Pavlo | `/api/analogue` | Search for therapeutic equivalents. Walks RxNorm, filters by indication/form/dose, prices via NADAC, then calls `ask_ai()` to rank with a citation. | `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
+| `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. | `GET /stock?rxcui=` · `GET /exposure` · `POST /formulary/import` (CSV) |
+| `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
 | `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /export/compliance.csv` |
 | `patient-profiling` | Andrii | `/api/patients` | Analyze patient profile for substitution safety — contraindications, allergies, interactions. | `GET /profiles/{id}` · `POST /profiles/{id}/assess` |
 | `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
@@ -254,6 +254,48 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 
 Two of these — `analogue` and `prediction` — are AI consumers and call `ask_ai()` directly
 (§4). The other five are ordinary CRUD-plus-query services with no path to Gemini at all.
+
+#### UC-1 — resolve a drug from a typed name
+
+The front door for `GET /analogues/{rxcui}`, `GET /forecast/{rxcui}`, and `GET /stock?rxcui=`.
+A physician or pharmacist types a name (`Aspirin 100 mg`); analogue queries live RxNorm
+(NLM, keyless, from the service — not the browser), lifts ingredient/SCDC hits to `SCD`/`SBD`,
+and returns candidates for **explicit** selection. A single hit is still a list; the client
+must not auto-pick. Gemini is not involved.
+
+Canonical clinical id is **RxCUI**. NDC is the shelf id, fetched later.
+
+`GET /api/analogue/drugs/search?q=` — `drug:search`. `q` is 1–120 characters; `limit` defaults
+to 20 (max 50).
+
+```json
+{
+  "query": "Aspirin 100 mg",
+  "items": [
+    {
+      "rxcui": "246461",
+      "tty": "SCD",
+      "name": "aspirin 100 MG Oral Tablet",
+      "strength": "100 MG",
+      "dose_form": "Oral Tablet",
+      "in_formulary": true
+    }
+  ]
+}
+```
+
+Sort: `in_formulary` desc, then RxNorm score. `in_formulary` is a left join to
+`formulary_item.rxcui` for this hospital; until that table has rows (or does not exist yet)
+every item is `false` and the JSON shape does not change.
+
+`GET /api/analogue/drugs/{rxcui}/packages` — `drug:search`. NDCs for the chosen concept
+(step 2 of identity).
+
+`GET /api/inventory/stock?rxcui=` — `inventory:read`. Inventory asks the shared RxNorm client
+for those NDCs, then returns matching `stock_snapshot` rows for the hospital. Empty stock is
+an empty `items` list, not an error.
+
+RxNorm is US English. Ukrainian trade names are out of scope (same capstone feed choice as §7).
 
 `OPEN` — `patient-profiling` touches clinical data about identifiable people. Decide before
 schema work whether the MVP stores any PHI at all, or only de-identified aggregates. Storing
@@ -367,7 +409,7 @@ Therefore:
 ### Talks to
 
 - Cloud SQL (`ai_cache` read/write, from inside `analogue`/`prediction`'s own connection pool)
-- Gemini (out, from `analogue`/`prediction` directly) — exponential backoff on 429/5xx, 3
+- Gemini (out, from `analogue`/`prediction` directly) — model is `GEMINI_MODEL` / `settings.gemini_model`; exponential backoff on 429/5xx, 3
   attempts, 20 s per-call timeout
 - Cloud Logging (out)
 

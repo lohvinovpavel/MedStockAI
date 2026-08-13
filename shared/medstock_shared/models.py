@@ -3,7 +3,7 @@ service owns must be imported here before a migration is generated."""
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -92,4 +92,43 @@ class RxnormEdge(Base):
 
     __table_args__ = (
         UniqueConstraint("rxcui_from", "rxcui_to", "relationship", name="uq_rxnorm_edge"),
+    )
+
+
+class FormularyItem(Base):
+    """Tenant formulary. Analogue reads `rxcui` to boost UC-1 search hits.
+    Inventory will own writes (`POST /formulary/import`). No application
+    `WHERE hospital_id` — RLS + `session_scope` are the tenant filter.
+    """
+
+    __tablename__ = "formulary_item"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("hospital_id", "rxcui", name="uq_formulary_hospital_rxcui"),)
+
+
+class StockSnapshot(Base):
+    """On-hand quantity per hospital / NDC / location. Empty string location
+    is the hospital-wide bucket until warehouse locations exist.
+    """
+
+    __tablename__ = "stock_snapshot"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    location_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("hospital_id", "ndc", "location_id", name="uq_stock_hospital_ndc_loc"),
     )
