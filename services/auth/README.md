@@ -168,7 +168,7 @@ export JWT_PUBLIC_KEY="$(cat jwt-public-key.pem)"
 ## Local development
 
 ```bash
-export JWT_PUBLIC_KEY="$(cat path/to/dev-public-key.pem)"
+export JWT_PUBLIC_KEY="$(cat jwt-public-key.pem)"
 uv run --package medstock-<yourservice> uvicorn app.main:app --reload --port 8002
 ```
 
