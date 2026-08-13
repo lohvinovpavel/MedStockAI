@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 from argon2 import PasswordHasher
-
+from argon2.exceptions import Argon2Error, InvalidHashError
 from medstock_shared import settings
 
 # Library defaults, not hand-tuned parameters: they track the RFC 9106
@@ -29,9 +29,10 @@ def verify_password(stored_hash: str, password: str) -> bool:
     try:
         _ph.verify(stored_hash, password)
         return True
-    except Exception:
-        # Wrong password, or a stored hash we cannot parse. Both are a failed
-        # login, never a 500 — a corrupt hash must not become an outage.
+    except (Argon2Error, InvalidHashError):
+        # Argon2Error covers a wrong password; InvalidHashError (a ValueError,
+        # not an Argon2Error) covers a stored hash we cannot parse. Both are a
+        # failed login, never a 500 — a corrupt hash must not become an outage.
         return False
 
 

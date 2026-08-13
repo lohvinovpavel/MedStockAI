@@ -7,17 +7,26 @@ belong to migrations, not to this test's setup.
 import uuid
 
 import pytest
+from app.main import app
+from app.security import hash_password
 from fastapi.testclient import TestClient
-from sqlalchemy import text
-
 from medstock_shared import Base, current_principal
 from medstock_shared.db import SessionLocal, engine
 from medstock_shared.models import AppUser, Hospital, Membership
-
-from app.main import app
-from app.security import hash_password
+from sqlalchemy import text
 
 PASSWORD = "correct-horse-battery-staple"
+
+
+def test_conftest_resolved_the_right_app() -> None:
+    """Guard for the sys.path line in conftest.py. Seven services install a
+    top-level package named `app`; without that line `from app.main import app`
+    above imports analogue's application and every test below is meaningless.
+
+    It lives here rather than in conftest.py because pytest imports conftest as
+    a plugin and never collects test functions from it. Needs no database — if
+    it fails, ignore every other result in the run until it is green."""
+    assert app.title == "auth"
 
 
 @pytest.fixture

@@ -12,19 +12,14 @@ import sys
 # See Defect C at the top of docs/auth-implementation.md.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import pytest  # noqa: E402
-from cryptography.hazmat.primitives import serialization  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from medstock_shared import settings
 
-from medstock_shared import settings  # noqa: E402
-
-
-def test_conftest_resolved_the_right_app() -> None:
-    """Guard for the line above. If this fails, every other test in this
-    directory is testing some other service."""
-    from app.main import app
-
-    assert app.title == "auth"
+# The guard that proves the sys.path line above worked lives in test_login.py,
+# not here: pytest imports conftest.py as a plugin and never scans it for test
+# functions, so a test written here would silently never run.
 
 
 @pytest.fixture(scope="session", autouse=True)

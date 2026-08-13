@@ -2,11 +2,10 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Response
-from sqlalchemy import select, text
-
 from medstock_shared import COOKIE_NAME, Principal, current_principal, engine, settings
 from medstock_shared.db import SessionLocal
 from medstock_shared.models import AppUser, Hospital, Membership
+from sqlalchemy import select, text
 
 from .schemas import LoginRequest, LoginResponse, MeResponse
 from .security import (
