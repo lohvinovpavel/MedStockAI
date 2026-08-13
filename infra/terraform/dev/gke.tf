@@ -34,6 +34,20 @@ resource "google_container_cluster" "dev" {
   ]
 }
 
+# Nodes pull images as the default Compute Engine service account (node_config
+# has no service_account override below). cloud-platform oauth_scopes only
+# sets what scope a node's token CAN carry — it still needs the IAM role to
+# actually read Artifact Registry, or every pull 403s.
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
+resource "google_project_iam_member" "gke_nodes_artifact_reader" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+}
+
 # Spot: ~70% off on-demand, and preemption here just costs a pod restart —
 # a trade production can't make but a sandbox can.
 resource "google_container_node_pool" "spot" {
