@@ -158,8 +158,10 @@ def _source_drug_name(rxcui: str) -> str:
 def _analogue_source_text(drug_name: str, rxcui: str, items: list[dict]) -> str:
     parts = [
         f"The source drug is {_plain(drug_name)}, RxCUI {_plain(rxcui)}, which is in shortage.",
-        "Candidates are other ingredients in the same pharmacologic class, "
-        "not the same ingredient.",
+        (
+            "Candidates are other ingredients in the same pharmacologic class, "
+            "not the same ingredient."
+        ),
     ]
     for row in items:
         parts.append(
@@ -233,7 +235,7 @@ def _filter_full_with_ai(source: str, items: list[dict]) -> tuple[list[dict], bo
         kept = kept[:AI_ANALOGUE_KEEP_LIMIT]
         _log.info("Gemini keep-set rxcui=%s kept=%s", source, len(kept))
         return kept, False
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort AI filter, any failure falls back to unfiltered
         _log.exception("Gemini analogue filter failed for rxcui %s", source)
         return items, True
 

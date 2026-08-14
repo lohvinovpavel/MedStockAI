@@ -1,0 +1,42 @@
+name: infra-cd
+
+# Unattended apply — the review already happened on the PR (infra-ci.yml's
+# plan). Concurrency group serializes with itself so two merges in quick
+# succession don't race the same state file.
+on:
+  push:
+    branches: [main]
+    paths: ["infra/terraform/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: infra-cd
+  cancel-in-progress: false
+
+env:
+  # See infra-ci.yml for why these three and not dev_members too.
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_github_repo: ${{ github.repository }}
+  TF_VAR_letsencrypt_email: ${{ vars.LETSENCRYPT_EMAIL }}
+  TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    defaults:
+      run:
+        working-directory: infra/terraform/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: "~1.9" }
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+
+      - run: terraform init
+      - run: terraform apply -auto-approve -input=false

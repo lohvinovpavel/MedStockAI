@@ -48,3 +48,16 @@ resource "google_project_iam_member" "github_actions_roles" {
   role    = each.value
   member  = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+# The infra-ci/infra-cd workflows run `terraform plan`/`apply` as this SA,
+# and providers.tf always impersonates terraform-iac (same as a human's
+# local apply) — so this SA needs token-creation rights on that identity,
+# not just its own project roles above. terraform-iac itself isn't a
+# resource here (bootstrapped manually, like the state bucket); this grant
+# is chicken-and-egg the same way — a human applies it once locally before
+# the first infra-cd run can authenticate.
+resource "google_service_account_iam_member" "github_actions_impersonate_terraform_iac" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/terraform-iac@${var.project_id}.iam.gserviceaccount.com"
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.github_actions.email}"
+}

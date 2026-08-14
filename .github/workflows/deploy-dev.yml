@@ -1,9 +1,13 @@
 name: deploy-dev
 
-# Manual only — this is the $54/mo shared sandbox with a hand-rolled JWT key
-# and no RLS (docs/infra-dev-plan.md §6). Nobody should redeploy it on every
-# push to a branch. Bump to `push: branches: [main]` once that's wanted.
+# $54/mo shared sandbox with a hand-rolled JWT key and no RLS
+# (docs/infra-dev-plan.md §6) — every merge to main redeploys it. infra/
+# changes deploy separately (infra-cd.yml); path-ignored here so an
+# infra-only PR doesn't also rebuild and redeploy all nine images.
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["infra/**"]
   workflow_dispatch:
     inputs:
       seed_dev_users:
@@ -17,13 +21,60 @@ concurrency:
 
 env:
   # Matches deploy/overlays/dev/kustomization.yaml — infra/terraform/dev/registry.tf.
-  REGISTRY: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock
-  GCP_PROJECT_ID: project-f1b68703-0a5c-4fde-88a
+  REGISTRY: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/medstock
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   GKE_CLUSTER: medstock-dev
   GKE_ZONE: europe-west1-b
 
 jobs:
+  # Same gate as ci.yml's PR checks, re-run here because main can move
+  # between a PR's last green check and its merge (another PR landing
+  # first, a non-PR push). See ci.yml for why this is per-service instead
+  # of one combined `pytest services/`.
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: medstock
+          POSTGRES_PASSWORD: medstock
+          POSTGRES_DB: medstock
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+    env:
+      DATABASE_URL: postgresql+psycopg://medstock:medstock@localhost:5432/medstock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with: { enable-cache: true }
+      - run: uv sync --package medstock-${{ matrix.service }}
+      # --no-sync matters: a bare `uv run` re-syncs the whole workspace
+      # first (all 8 services' `app` back in one venv, the exact collision
+      # the scoped sync above exists to avoid). See ci.yml.
+      - run: uv run --no-sync alembic upgrade head
+      - run: uv run --no-sync pytest services/${{ matrix.service }}/tests -q
+
+  web-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
+      - run: npm install
+      - run: npm run lint
+      - run: npm run build
+
   build:
+    needs: [python-tests, web-tests]
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     strategy:
@@ -55,6 +106,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=dev-${{ matrix.service }}
 
   build-web:
+    needs: [python-tests, web-tests]
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:

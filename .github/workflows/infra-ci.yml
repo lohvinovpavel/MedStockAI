@@ -1,0 +1,44 @@
+name: infra-ci
+
+# Review gate for infra changes: a human reads the plan output on the PR
+# before merge — infra-cd.yml applies it unattended once that review lands.
+on:
+  pull_request:
+    paths: ["infra/terraform/**"]
+  workflow_dispatch:
+
+env:
+  # terraform.tfvars is gitignored (infra/README.md §3) — these are its CI
+  # equivalent, mirroring the values already in use there. dev_members has
+  # no override here: it defaults to [] in variables.tf, matching the
+  # currently-applied state — see infra/README.md §12 before changing that.
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_github_repo: ${{ github.repository }}
+  TF_VAR_letsencrypt_email: ${{ vars.LETSENCRYPT_EMAIL }}
+  TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    defaults:
+      run:
+        working-directory: infra/terraform/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: "~1.9" }
+
+      - run: terraform fmt -check -recursive -diff
+
+      # ADC-style auth (no token_format) — the google/kubernetes/helm
+      # providers in providers.tf pick this up automatically, same as a
+      # human's `gcloud auth application-default login` locally.
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+
+      - run: terraform init
+      - run: terraform validate
+      - run: terraform plan -input=false

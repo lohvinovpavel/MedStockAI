@@ -252,7 +252,36 @@ terraform output -raw ci_service_account_email
 
 → `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_CI_SERVICE_ACCOUNT` respectively.
 
-## 12. When something is broken
+## 12. Infra CI/CD (`infra-ci.yml`, `infra-cd.yml`)
+
+`infra-ci.yml` runs `terraform plan` on any PR touching `infra/terraform/**`
+— the plan output is the review. `infra-cd.yml` runs `terraform apply
+-auto-approve` on the same paths once that PR merges to main. Both use the
+WIF identity from §11 above (same two repo Variables).
+
+**One-time manual step, before the first run of either:** `ci.tf`'s
+`github_actions_impersonate_terraform_iac` grant lets the CI identity
+impersonate `terraform-iac` the same way a human's local `terraform apply`
+does (`providers.tf`). Nothing can apply that grant except a human's own
+local apply — run `terraform apply` locally once after pulling it in.
+
+**`terraform.tfvars` is gitignored, so CI can't read it.** The variables
+with no default in `variables.tf` are supplied as `TF_VAR_*` env vars in
+both workflow files instead — `project_id`, `github_repo` and
+`letsencrypt_email` are hardcoded there (none are secret, and they already
+match `terraform.tfvars`); `gemini_api_key` comes from repo **Secret**
+`GEMINI_API_KEY` (Settings → Secrets and variables → Actions → Secrets —
+**create this before the first run**, it has no fallback).
+
+`dev_members` is deliberately left unset in both workflows so it falls back
+to its `[]` default, which matches the currently-applied state (nobody's in
+it right now — see `terraform.tfvars`). **If that ever changes**, add the
+same list as a `TF_VAR_dev_members` env var to both workflow files — an
+apply that silently reverts to `[]` would revoke every teammate's
+`container.developer`/`cloudsql.client`/`secretmanager.secretAccessor`
+access (`iam.tf`) the next time `infra-cd.yml` runs.
+
+## 13. When something is broken
 
 | Symptom | Cause |
 |---|---|

@@ -6,11 +6,10 @@ getRelatedByType per RXCUI, which needs a starting RXCUI list. That list
 the upsert shape against a single test RXCUI.
 """
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
-
 from medstock_shared import engine
 from medstock_shared.models import RxnormEdge
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from ._source import fetch_json
 
