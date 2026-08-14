@@ -8,10 +8,16 @@ required: the colour is not secret, but the endpoint is not public either.
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from medstock_shared.auth import Principal, require
-from medstock_shared.certification import RULESET_VERSION, Status, ruleset
+from medstock_shared.certification import (
+    RULESET_VERSION,
+    Finding,
+    Status,
+    ruleset,
+    signal,
+)
 from medstock_shared.db import engine
 from medstock_shared.models import CertificationFinding, DrugCertification
-from sqlalchemy import case, func, select, text
+from sqlalchemy import case, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -89,35 +95,52 @@ def get_status(
             ),
         )
         known = {str(row_ndc): str(row_status) for row_ndc, row_status in rows}
-        counts = _finding_counts(session, list(known))
+        codes = _codes_by_ndc(session, list(known))
 
-    return {
-        "ruleset_version": RULESET_VERSION,
-        "results": [
-            {
-                "ndc": value,
-                "status": known.get(value, str(Status.UNKNOWN)),
-                "reasons": counts.get(value, 0),
-            }
-            for value in wanted
-        ],
-    }
+    results = []
+    for value in wanted:
+        if value not in known:
+            results.append(
+                {
+                    "ndc": value,
+                    "status": str(Status.UNKNOWN),
+                    "attention": str(Status.UNKNOWN),
+                    "reasons": 0,
+                    "transient": 0,
+                    "persistent": 0,
+                    "categories": {},
+                    "codes": [],
+                }
+            )
+            continue
+        detail = signal([Finding(code=c, message="", source="") for c in codes.get(value, [])])
+        # The stored colour wins over the recomputed one: it is what the feed
+        # decided, and a ruleset change must not silently repaint history
+        # without a re-ingest.
+        detail["status"] = known[value]
+        results.append({"ndc": value, **detail})
+
+    return {"ruleset_version": RULESET_VERSION, "results": results}
 
 
-def _finding_counts(session: Session, ndcs: list[str]) -> dict[str, int]:
-    """How many reasons sit behind each colour, so the UI can badge
-    '2 reasons' without fetching the evidence for every row."""
+def _codes_by_ndc(session: Session, ndcs: list[str]) -> dict[str, list[str]]:
+    """Finding codes per NDC. Severity, category and transience are all derived
+    from the code, so this is everything the badge detail needs — no need to
+    haul message text back for a page of stock."""
     if not ndcs:
         return {}
     # Through the same guard as everything else: one of the two tables existing
     # without the other is still "not migrated", not a 500.
     rows = _rows_or_503(
         session,
-        select(CertificationFinding.ndc, func.count())
-        .where(CertificationFinding.ndc.in_(ndcs))
-        .group_by(CertificationFinding.ndc),
+        select(CertificationFinding.ndc, CertificationFinding.code).where(
+            CertificationFinding.ndc.in_(ndcs)
+        ),
     )
-    return {str(n): int(c) for n, c in rows}
+    out: dict[str, list[str]] = {}
+    for ndc_value, code in rows:
+        out.setdefault(str(ndc_value), []).append(str(code))
+    return out
 
 
 @app.get("/certificates/{ndc}")
@@ -168,10 +191,13 @@ def get_certificate(
         ),
         "marketing_category": record.marketing_category,
         "labeler": record.labeler,
+        "signal": signal([Finding(code=f.code, message="", source="") for f in findings]),
         "findings": [
             {
                 "code": f.code,
                 "severity": f.severity,
+                "category": str(Finding(code=f.code, message="", source="").category),
+                "transient": Finding(code=f.code, message="", source="").transient,
                 "message": f.message,
                 "source": f.source,
                 "source_url": f.source_url,

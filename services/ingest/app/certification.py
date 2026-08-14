@@ -34,6 +34,7 @@ from medstock_shared import engine
 from medstock_shared.certification import (
     RULESET_VERSION,
     Recall,
+    Shortage,
     evaluate,
     ndc11,
     parse_fda_date,
@@ -49,6 +50,7 @@ from ._source import fetch_json
 
 NDC_URL = "https://api.fda.gov/drug/ndc.json"
 ENFORCEMENT_URL = "https://api.fda.gov/drug/enforcement.json"
+SHORTAGE_URL = "https://api.fda.gov/drug/shortages.json"
 
 PAGE_SIZE = 1000
 SKIP_MAX = 25_000  # openFDA answers 400 above this
@@ -158,6 +160,33 @@ def recalls_by_ndc() -> dict[str, list[Recall]]:
     return index
 
 
+def shortages_by_ndc() -> dict[str, list[Shortage]]:
+    """Active FDA drug shortages, indexed by canonical 11-digit package NDC.
+
+    Verified live: every record carries `package_ndc`, so unlike recalls this
+    feed joins completely. Note it is keyed per *package*, not per product —
+    one pack size can be in shortage while another is not.
+    """
+    index: dict[str, list[Shortage]] = {}
+    for row in _pages(SHORTAGE_URL, {}, max_pages=5):
+        ndc = row.get("package_ndc")
+        if not ndc:
+            continue
+        categories = row.get("therapeutic_category") or []
+        index.setdefault(ndc11(str(ndc)), []).append(
+            Shortage(
+                status=row.get("status"),
+                generic_name=str(row.get("generic_name") or ""),
+                therapeutic_category=", ".join(str(c) for c in categories)
+                if isinstance(categories, list)
+                else str(categories),
+                update_date=str(row.get("update_date") or ""),
+                raw=row,
+            )
+        )
+    return index
+
+
 def _quote(ndc: str) -> str:
     return '"' + ndc.replace('"', "") + '"'
 
@@ -188,14 +217,18 @@ def products_for_ndcs(ndcs: list[str], batch: int = 12) -> list[dict]:
 
 
 def _product_to_rows(
-    product: dict, recalls: list[Recall], today: date | None = None
+    product: dict,
+    recalls: list[Recall],
+    shortages: dict[str, list[Shortage]] | None = None,
+    today: date | None = None,
 ) -> list[tuple[dict, list[dict]]]:
     """One source record -> one certification row **per package NDC**.
 
-    A directory record describes a product; inventory holds package NDCs. Since
-    the badge has to be findable by the NDC on the shelf, each package gets its
-    own row carrying the product's status. Packages of one product share a
-    status by construction — approval and recalls apply to the product.
+    A directory record describes a product; inventory holds package NDCs, so the
+    badge has to be findable by the NDC on the shelf. Approval and recalls apply
+    to the whole product, but **shortages are declared per package** — one pack
+    size can be short while another is fine — so each key is evaluated
+    separately rather than sharing one status.
 
     Returns `[]` for a record with no usable NDC: there is nothing to key on.
     """
@@ -207,27 +240,24 @@ def _product_to_rows(
     if not keys:
         return []
 
-    marketing_end = parse_fda_date(product.get("marketing_end_date"))
-    listing_expiry = parse_fda_date(product.get("listing_expiration_date"))
-    category = product.get("marketing_category")
+    shortages = shortages or {}
+    common = {
+        "marketing_end_date": parse_fda_date(product.get("marketing_end_date")),
+        "marketing_start_date": parse_fda_date(product.get("marketing_start_date")),
+        "listing_expiration_date": parse_fda_date(product.get("listing_expiration_date")),
+        "marketing_category": product.get("marketing_category"),
+        "finished": product.get("finished"),
+    }
 
-    findings = evaluate(
-        marketing_end_date=marketing_end,
-        listing_expiration_date=listing_expiry,
-        marketing_category=category,
-        recalls=recalls,
-        today=today,
-    )
-
-    status = str(status_for(findings))
     rows: list[tuple[dict, list[dict]]] = []
     for key in keys:
+        findings = evaluate(**common, recalls=recalls, shortages=shortages.get(key, ()), today=today)
         certification = {
             "ndc": key,
-            "status": status,
-            "marketing_end_date": marketing_end,
-            "listing_expiration_date": listing_expiry,
-            "marketing_category": category,
+            "status": str(status_for(findings)),
+            "marketing_end_date": common["marketing_end_date"],
+            "listing_expiration_date": common["listing_expiration_date"],
+            "marketing_category": common["marketing_category"],
             "application_number": product.get("application_number"),
             "labeler": product.get("labeler_name"),
             "provenance": "scheduled",
@@ -289,6 +319,7 @@ def run(targeted: bool = True) -> int:
     download endpoint, which is the documented next step.
     """
     recalls = recalls_by_ndc()
+    shortages = shortages_by_ndc()
 
     if targeted:
         wanted = shelf_ndcs()
@@ -298,7 +329,11 @@ def run(targeted: bool = True) -> int:
     else:
         products = _pages(NDC_URL, {"search": "finished:true"}, DIRECTORY_PAGES)
 
-    mapped = [row for p in products for row in _product_to_rows(p, _recalls_for(p, recalls))]
+    mapped = [
+        row
+        for p in products
+        for row in _product_to_rows(p, _recalls_for(p, recalls), shortages)
+    ]
     return write(mapped) if mapped else 0
 
 

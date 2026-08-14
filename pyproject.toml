@@ -13,6 +13,7 @@ extend-immutable-calls = [
     "fastapi.Depends",
     "fastapi.Query",
     "fastapi.Header",
+    "fastapi.Body",
     # `require("perm")` builds the dependency callable; it is the same idiom as
     # Depends and is evaluated once at import, not per request.
     "medstock_shared.auth.require",

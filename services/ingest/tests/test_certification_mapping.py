@@ -8,7 +8,7 @@ shows up here rather than in production.
 from datetime import date
 
 from app.certification import _ndcs_of, _product_ndcs, _product_to_rows, _recalls_for
-from medstock_shared.certification import Recall
+from medstock_shared.certification import Recall, Shortage
 
 TODAY = date(2026, 8, 14)
 
@@ -27,8 +27,8 @@ DIFLUNISAL = {
 }
 
 
-def only(product, recalls=(), today=TODAY):
-    rows = _product_to_rows(product, list(recalls), today)
+def only(product, recalls=(), shortages=None, today=TODAY):
+    rows = _product_to_rows(product, list(recalls), shortages or {}, today)
     assert rows, "expected at least one row"
     return rows
 
@@ -40,9 +40,24 @@ def test_one_row_per_package_ndc_keyed_11_digit():
     assert [c["ndc"] for c, _ in rows] == ["00093922201", "00093922205", "00093922206"]
 
 
-def test_packages_of_one_product_share_its_status():
+def test_packages_share_product_level_status():
+    """Approval and recalls apply to the product, so absent a per-package signal
+    every package of one product reads the same."""
     rows = only(DIFLUNISAL)
     assert len({c["status"] for c, _ in rows}) == 1
+
+
+def test_a_shortage_on_one_pack_size_does_not_flag_the_others():
+    """Shortages are declared per package, unlike everything else. Verified
+    against the live feed: `package_ndc` is the key, not `product_ndc`."""
+    rows = only(
+        DIFLUNISAL,
+        shortages={"00093922205": [Shortage(status="Current", generic_name="Diflunisal")]},
+    )
+    by_ndc = {c["ndc"]: c["status"] for c, _ in rows}
+    assert by_ndc["00093922205"] == "yellow"
+    assert by_ndc["00093922201"] == "green"
+    assert by_ndc["00093922206"] == "green"
 
 
 def test_record_without_an_ndc_is_skipped():

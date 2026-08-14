@@ -6,19 +6,23 @@ down exactly like this.
 starts failing on its own schedule.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from medstock_shared.certification import (
     YELLOW_EXPIRY_WINDOW_DAYS,
+    Finding,
     Recall,
     Severity,
+    Shortage,
     Status,
+    attention_for,
     evaluate,
     ndc11,
     parse_fda_date,
     product_ndc_candidates,
     ruleset,
+    signal,
     status_for,
 )
 
@@ -245,18 +249,130 @@ def test_two_recalls_stay_distinct_under_the_natural_key():
 
 
 def test_ruleset_documents_every_code_the_rules_can_emit():
-    published = set(ruleset()["red"]) | set(ruleset()["yellow"]) | set(ruleset()["info"])
+    published = set(ruleset()["rules"])
     emitted = codes(
         evaluate(
             listing_expiration_date=date(2020, 1, 1),
             marketing_end_date=date(2026, 9, 1),
+            marketing_start_date=date(2027, 1, 1),
             marketing_category="UNAPPROVED DRUG OTHER",
+            finished=False,
             recalls=[
                 Recall(classification="Class I", status="Ongoing"),
                 Recall(classification="Class II", status="Ongoing"),
                 Recall(classification="Class III", status="Ongoing"),
             ],
+            shortages=[
+                Shortage(status="Current"),
+                Shortage(status="To Be Discontinued"),
+            ],
             today=TODAY,
         )
-    ) | {"DATES_UNKNOWN", "LISTING_EXPIRING_SOON", "MARKETING_ENDED"}
+    ) | {"DATES_UNKNOWN", "MARKETING_ENDED"}
     assert emitted <= published
+
+
+def test_every_published_rule_is_reachable():
+    """The inverse: a documented code nobody can emit is a lie in the ruleset."""
+    reachable = codes(
+        evaluate(
+            listing_expiration_date=date(2020, 1, 1),
+            marketing_end_date=date(2026, 9, 1),
+            marketing_start_date=date(2027, 1, 1),
+            marketing_category="UNAPPROVED DRUG OTHER",
+            finished=False,
+            recalls=[
+                Recall(classification=c, status="Ongoing") for c in ("Class I", "Class II", "Class III")
+            ],
+            shortages=[Shortage(status="Current"), Shortage(status="To Be Discontinued")],
+            today=TODAY,
+        )
+    )
+    reachable |= codes(evaluate(today=TODAY))  # DATES_UNKNOWN
+    reachable |= codes(evaluate(marketing_end_date=date(2020, 1, 1), today=TODAY))
+    assert set(ruleset()["rules"]) == reachable
+
+
+# --- the detailed signal ----------------------------------------------------
+
+
+def test_persistent_property_does_not_demand_attention():
+    """An unapproved marketing category is permanent. It colours the badge, but
+    it is not something happening now — 372 of 375 yellows in a real 3 000
+    product sample were exactly this, and burying a recall under them is the
+    failure mode the split exists to prevent."""
+    findings = evaluate(
+        marketing_end_date=date(2030, 1, 1),
+        marketing_category="UNAPPROVED DRUG OTHER",
+        today=TODAY,
+    )
+    assert status_for(findings) is Status.YELLOW
+    assert attention_for(findings) is Status.GREEN
+
+
+def test_an_event_does_demand_attention():
+    findings = evaluate(
+        marketing_end_date=date(2030, 1, 1),
+        marketing_category="UNAPPROVED DRUG OTHER",
+        recalls=[Recall(classification="Class II", status="Ongoing", recall_number="D-1")],
+        today=TODAY,
+    )
+    assert attention_for(findings) is Status.YELLOW
+
+
+def test_signal_groups_reasons_by_category():
+    findings = evaluate(
+        marketing_end_date=date(2026, 9, 1),
+        marketing_category="UNAPPROVED DRUG OTHER",
+        recalls=[Recall(classification="Class I", status="Ongoing", recall_number="D-1")],
+        shortages=[Shortage(status="Current")],
+        today=TODAY,
+    )
+    detail = signal(findings)
+    assert detail["categories"] == {
+        "lifecycle": "yellow",
+        "approval": "yellow",
+        "enforcement": "red",
+        "supply": "yellow",
+    }
+    assert detail["transient"] == 3 and detail["persistent"] == 1
+
+
+def test_listing_expiry_has_no_forward_window():
+    """70.5% of real products share a single annual listing expiry date. A
+    'expiring soon' rule on that field turns most of a formulary amber on one
+    October morning, so only a lapsed listing counts."""
+    soon = evaluate(listing_expiration_date=TODAY + timedelta(days=30), today=TODAY)
+    assert status_for(soon) is Status.GREEN
+    lapsed = evaluate(listing_expiration_date=TODAY - timedelta(days=1), today=TODAY)
+    assert status_for(lapsed) is Status.RED
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [("Current", Status.YELLOW), ("To Be Discontinued", Status.YELLOW), ("Resolved", Status.GREEN)],
+)
+def test_shortage_statuses(status, expected):
+    assert (
+        status_for(
+            evaluate(
+                marketing_end_date=date(2030, 1, 1),
+                shortages=[Shortage(status=status)],
+                today=TODAY,
+            )
+        )
+        is expected
+    )
+
+
+def test_bulk_ingredient_is_informational_only():
+    findings = evaluate(marketing_end_date=date(2030, 1, 1), finished=False, today=TODAY)
+    assert status_for(findings) is Status.GREEN
+    assert "NOT_FINISHED_PRODUCT" in codes(findings)
+
+
+def test_a_retired_rule_code_does_not_break_rendering():
+    """Stored rows outlive the ruleset that wrote them."""
+    stale = Finding(code="LISTING_EXPIRING_SOON", message="", source="")
+    assert stale.severity is Severity.INFO
+    assert signal([stale])["status"] == "green"
