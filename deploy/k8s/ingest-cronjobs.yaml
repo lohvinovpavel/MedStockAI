@@ -1,7 +1,11 @@
-# Three CronJobs, one image, no Deployment/Service — ingest has no HTTP
+# Four CronJobs, one image, no Deployment/Service — ingest has no HTTP
 # surface (docs/services.md §7/§8). Each write is ON CONFLICT DO UPDATE on a
 # natural key, so a doubled run (Spot preemption, manual re-trigger, a missed
 # schedule caught by startingDeadlineSeconds) is safe by construction.
+#
+# Schedules are staggered on purpose: openFDA's 1 000 req/day limit is per IP,
+# shared across every job here, so shortages, pricing and certification must not
+# page in bulk at the same hour.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -79,3 +83,32 @@ spec:
             resources:
               requests: { cpu: 50m, memory: 64Mi }
               limits: { memory: 256Mi }
+---
+# COMP-1: FDA approval, listing dates and open recalls -> drug_certification.
+# Pages the NDC Directory in bulk (1 000 records/request, MAX_PAGES cap) rather
+# than querying per drug — see the budget note at the top of this file.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-certification
+spec:
+  schedule: "0 5 * * *"   # daily, offset from pricing at 03:00
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: certification
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.certification"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 512Mi }

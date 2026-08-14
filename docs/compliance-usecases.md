@@ -12,10 +12,10 @@ and are not settled. Feed URLs marked `verify` follow the same convention as
 
 | | Case | Trigger | Output |
 |---|---|---|---|
-| **UC-1** | Certification traffic light | A pharmacist opens inventory | Green / Yellow / Red badge per stocked drug |
-| **UC-2** | Unknown-drug exploration | Analogue search returns a drug not in our certification table | A provisional certification record + citation |
+| **COMP-1** | Certification traffic light | A pharmacist opens inventory | Green / Yellow / Red badge per stocked drug |
+| **COMP-2** | Unknown-drug exploration | Analogue search returns a drug not in our certification table | A provisional certification record + citation |
 
-UC-1 is a scheduled read of formal government data. UC-2 is an on-demand reach into the same
+COMP-1 is a scheduled read of formal government data. COMP-2 is an on-demand reach into the same
 sources plus news, for a drug nobody has asked about before.
 
 ---
@@ -31,10 +31,10 @@ graph LR
 
   subgraph SYS["compliance"]
     direction TB
-    UC1(["UC-1<br/>Show certification<br/>traffic light"])
+    UC1(["COMP-1<br/>Show certification<br/>traffic light"])
     UC1A(["Compute status<br/>from formal sources"])
     UC1B(["Export compliance<br/>evidence"])
-    UC2(["UC-2<br/>Explore unknown drug"])
+    UC2(["COMP-2<br/>Explore unknown drug"])
     UC2A(["Sweep formal<br/>registries on demand"])
     UC2B(["Sweep news for<br/>informal signals"])
     UC2C(["Extract structured<br/>verdict + citation"])
@@ -91,13 +91,13 @@ graph LR
   class PH,PHY,DIR,CRON actor
 ```
 
-The dotted `includes` edges are UML `<<include>>`. The dotted edges from `ingest` to `UC-1A`
+The dotted `includes` edges are UML `<<include>>`. The dotted edges from `ingest` to `COMP-1A`
 are **not** calls — `ingest` writes reference tables and `compliance` reads them. There is no
 HTTP between them, consistent with [services.md](services.md) §1.1.
 
 ---
 
-## 2. UC-1 — the traffic light
+## 2. COMP-1 — the traffic light
 
 ### 2.1 Status rule
 
@@ -114,9 +114,9 @@ never produce Red — see §4.3.
 | 🟡 | Class II or III recall, status `ongoing` | Enforcement |
 | 🟡 | Open warning letter, or inspection classified OAI, against the labeler | Warning letters / ICD |
 | 🟡 | GMP non-compliance statement for a foreign site | EudraGMDP |
-| 🟡 | Informal signal above threshold | News (UC-2B) |
+| 🟡 | Informal signal above threshold | News (COMP-2B) |
 | 🟢 **Green** | Present, marketing status active, none of the above | — |
-| ⚪ **Unknown** | NDC not in the certification table | triggers UC-2 |
+| ⚪ **Unknown** | NDC not in the certification table | triggers COMP-2 |
 
 The 90-day Yellow window is a constant, not a judgement call baked into a query — one place,
 one number to defend.
@@ -142,15 +142,25 @@ Recommendation: two calls. Decide before the endpoint is written.
 
 ### 2.3 Endpoints
 
-| Method | Path | Permission | Notes |
-|---|---|---|---|
-| `GET` | `/status?ndc=…` | `inventory:read` | Batch: repeatable `ndc` param, one page of stock in one call |
-| `GET` | `/certificates/{ndc}` | `inventory:read` | Full evidence — every finding behind the colour, with source URLs |
-| `GET` | `/export/compliance.csv` | `audit:read` | Director surface, already sketched in services.md §3 |
+| Method | Path | Permission | Status | Notes |
+|---|---|---|---|---|
+| `GET` | `/status?ndc=…` | `inventory:read` | **built** | Batch: repeatable `ndc` param, max 100, one page of stock in one call |
+| `GET` | `/certificates/{ndc}` | `inventory:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
+| `GET` | `/ruleset` | `inventory:read` | **built** | Every rule and threshold that can produce a colour |
+| `GET` | `/export/compliance.csv` | `audit:read` | planned | Director surface, already sketched in services.md §3 |
+
+`inventory:read` is reused rather than adding a `certificate:read` permission: every role that
+can see the shelf needs to see the badge on it, and a change to `shared/auth.py` redeploys all
+seven services (services.md §0).
+
+**What is built today is COMP-1 only.** COMP-2 (§3) is designed but not implemented — an NDC with
+no row comes back `unknown` and nothing explores it. The status rules live in
+`shared/medstock_shared/certification.py`, the daily feed in
+`services/ingest/app/certification.py`.
 
 ---
 
-## 3. UC-2 — exploring a drug we have never seen
+## 3. COMP-2 — exploring a drug we have never seen
 
 Triggered when `analogue` surfaces a candidate whose NDC has no row in `drug_certification`.
 
@@ -187,7 +197,7 @@ sequenceDiagram
 3. **On-demand results expire.** A `scheduled` row is refreshed by its CronJob; an `on_demand`
    row has no schedule behind it, so it carries a TTL (proposed: 7 days) after which the next
    lookup re-explores.
-4. **Budget.** openFDA is 1 000 requests/day *per IP* ([services.md](services.md) §7) and UC-2
+4. **Budget.** openFDA is 1 000 requests/day *per IP* ([services.md](services.md) §7) and COMP-2
    spends from the same budget as the CronJobs. On-demand exploration is capped per hour and
    falls back to ⚪ Unknown rather than starving the scheduled pulls.
 
@@ -205,7 +215,7 @@ same convention as `services/ingest`. Do not schedule anything marked `verify`.
 | **openFDA NDC Directory** | `api.fda.gov/drug/ndc.json` | none | `marketing_start_date`, `marketing_end_date`, `listing_expiration_date`, `marketing_category`, labeler | daily |
 | **openFDA Drugs@FDA** | `api.fda.gov/drug/drugsfda.json` | none | NDA/ANDA application, approval date, submission status — "is it approved at all" | weekly |
 | **openFDA Enforcement** | `api.fda.gov/drug/enforcement.json` | none | Recall class I/II/III, `status` ongoing/terminated, reason text | daily |
-| **openFDA Drug Label** | `api.fda.gov/drug/label.json` | none | SPL text — the input to `extract` in UC-2 | on demand |
+| **openFDA Drug Label** | `api.fda.gov/drug/label.json` | none | SPL text — the input to `extract` in COMP-2 | on demand |
 | **FDA Import Alerts (DWPE)** | `accessdata.fda.gov/cms_ia/ialist.html` — alerts **66-40** (GMP failure) and **66-41** (unapproved drugs) | none | **The import-certification source.** Foreign manufacturers detained without physical examination | weekly · `verify` |
 | **FDA Warning Letters** | `fda.gov` compliance-actions listing | none | Open enforcement action against a labeler | weekly · `verify` |
 | **FDA Inspection Classification** | FDA inspections dataset export | none | OAI / VAI / NAI per site — OAI is the Yellow signal | monthly · `verify` |
@@ -258,11 +268,11 @@ findings are replayed, not re-fetched.
 ## 6. `OPEN` — decisions this design needs before code
 
 1. **`compliance` would call Gemini.** [services.md](services.md) §3 states plainly that *only*
-   `analogue` and `prediction` call `ask_ai()`. UC-2C breaks that. The `extract` task is already
+   `analogue` and `prediction` call `ask_ai()`. COMP-2C breaks that. The `extract` task is already
    assigned to this service's owner in §4's task table, so the intent seems to have been there —
-   but the rule as written says no. Either §3 gets amended to three AI consumers, or UC-2C is
+   but the rule as written says no. Either §3 gets amended to three AI consumers, or COMP-2C is
    dropped and unknown drugs stay ⚪ until a CronJob catches them. **Recommendation:** amend §3.
-   The alternative makes UC-2 a scheduled feature, which is not what it is for.
+   The alternative makes COMP-2 a scheduled feature, which is not what it is for.
 2. **Two new ingest CronJobs** (`certification` daily, `import-alerts` weekly) expand `ingest`
    past the three scripts documented in §7/§8. Cheap, but the docs must move with it.
 3. **HTML scraping enters the codebase** for import alerts and warning letters. No JSON

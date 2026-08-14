@@ -14,11 +14,11 @@ Status: **draft**. §2 is a recommendation, not a settled decision.
 
 | | Case | Trigger | Output |
 |---|---|---|---|
-| **UC-1** | Substitution safety check | `analogue` proposes an alternative drug | Risk score + ranked reasons + hard blocks |
-| **UC-2** | Profile risk assessment | Pharmacist opens a patient's assessment | Per-drug risk across the current regimen |
-| **UC-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations |
+| **PP-1** | Substitution safety check | `analogue` proposes an alternative drug | Risk score + ranked reasons + hard blocks |
+| **PP-2** | Profile risk assessment | Pharmacist opens a patient's assessment | Per-drug risk across the current regimen |
+| **PP-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations |
 
-UC-3 is not a nice-to-have. It is what keeps this system a decision *support* tool rather than a
+PP-3 is not a nice-to-have. It is what keeps this system a decision *support* tool rather than a
 regulated medical device (§6), and what satisfies the human-in-the-loop requirement the product
 brief already commits to.
 
@@ -40,9 +40,9 @@ graph LR
 
   subgraph SYS["patient-profiling — no PHI"]
     direction TB
-    UC1(["UC-1<br/>Substitution<br/>safety check"])
-    UC2(["UC-2<br/>Profile risk<br/>assessment"])
-    UC3(["UC-3<br/>Explain a<br/>prediction"])
+    UC1(["PP-1<br/>Substitution<br/>safety check"])
+    UC2(["PP-2<br/>Profile risk<br/>assessment"])
+    UC3(["PP-3<br/>Explain a<br/>prediction"])
     T0(["Tier 0<br/>deterministic rules"])
     T1(["Tier 1<br/>population signal"])
     T2(["Tier 2<br/>supervised model"])
@@ -193,7 +193,7 @@ training + signed DUA, free) is the realistic source. Features are exactly the v
 which means **the model is trained and served on the same de-identified shape**, no train/serve
 skew introduced by the privacy decision.
 
-**SHAP is not optional.** It is what powers UC-3, and UC-3 is what §6 and GDPR Art. 22 both
+**SHAP is not optional.** It is what powers PP-3, and PP-3 is what §6 and GDPR Art. 22 both
 lean on. A score without contributions is unusable for all three purposes.
 
 ### 3.1 No LLM on this path
@@ -261,7 +261,7 @@ attracts the question.
 FD&C Act §520(o)(1)(E) when it (a) does not analyse a signal or image from a device, (b)
 displays or analyses medical information, (c) supports recommendations to a healthcare
 professional, and (d) **lets that professional independently review the basis** for the
-recommendation. Criteria (a)–(c) already hold. Criterion (d) is precisely UC-3 — which is why
+recommendation. Criteria (a)–(c) already hold. Criterion (d) is precisely PP-3 — which is why
 SHAP contributions and guideline citations are load-bearing, not decoration. FDA's 2022 CDS
 guidance reads (d) strictly: a bare risk score with no reviewable basis does not qualify.
 
@@ -291,7 +291,7 @@ proves what was asked without recording who it was about. That is what makes the
 [services.md](services.md) §1.3 work under a no-PHI design.
 
 `model_version` exists so an assessment from six months ago can be explained with the model that
-produced it. Without it, UC-3 silently becomes a lie the moment the model is retrained.
+produced it. Without it, PP-3 silently becomes a lie the moment the model is retrained.
 
 ---
 

@@ -35,7 +35,7 @@ sequenceDiagram
         W->>CO: GET /status for A B C D
         CO->>DB: drug_certification lookup
         CO-->>W: A green · B yellow · C red · D unknown
-        Note over CO: D unknown triggers UC-2<br/>on-demand exploration
+        Note over CO: D unknown triggers COMP-2<br/>on-demand exploration
     and safety check
         W->>PP: POST /assess/batch — one vector, four candidates
         Note over PP: 13 deterministic stages<br/>run per candidate

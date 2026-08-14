@@ -3,6 +3,7 @@
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnaloguesList } from "@/components/AnaloguesList";
+import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
 import { apiFetch } from "@/lib/api";
 
 type StockItem = { ndc: string; quantity: number; location_id: string | null };
@@ -74,6 +75,10 @@ function StockLookupInner() {
   const emptyShelf = items !== null && (ndcCount ?? 0) > 0 && items.length === 0;
   const missingDrug = items !== null && (ndcCount ?? 0) === 0;
 
+  // Separate call to `compliance`, joined in the browser. If it fails the
+  // shelf still renders and every badge goes grey (COMP-1, §2.2).
+  const certification = useCertificationStatuses((items ?? []).map((row) => row.ndc));
+
   return (
     <section>
       <form className="row" onSubmit={onSubmit}>
@@ -114,6 +119,7 @@ function StockLookupInner() {
                 <thead>
                   <tr>
                     <th>NDC</th>
+                    <th>Certification</th>
                     <th>Location</th>
                     <th>Quantity</th>
                   </tr>
@@ -123,6 +129,9 @@ function StockLookupInner() {
                     <tr key={`${row.ndc}-${row.location_id ?? ""}`}>
                       <td>
                         <code>{row.ndc}</code>
+                      </td>
+                      <td>
+                        <CertificationBadge result={certification[row.ndc]} />
                       </td>
                       <td>{row.location_id || "—"}</td>
                       <td className={row.quantity === 0 ? "qty-out" : undefined}>

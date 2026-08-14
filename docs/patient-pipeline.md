@@ -312,7 +312,7 @@ ever hands us raw text, that extraction runs on their infrastructure, not ours.
 ### 9.4 So how much AI does the project have
 
 `analogue` ranks alternatives with citations, `prediction` forecasts, `compliance` explores
-unknown drugs (UC-2), and `patient-profiling` extracts rules from labels. Four services, one
+unknown drugs (COMP-2), and `patient-profiling` extracts rules from labels. Four services, one
 `ask_ai()`, one cache. `patient-profiling` does not need a model in its request path to make the
 project an AI project — and the request path is the one place where determinism is worth more
 than intelligence.

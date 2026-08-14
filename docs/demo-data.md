@@ -81,7 +81,7 @@ Random data will not produce the cases the demo needs. Seed these deliberately:
 | Interaction warning | 🟡 amber ~35 points, warfarin clash, pharmacist decides |
 | Renal dose limit | Kidney function excludes an otherwise ideal option |
 | Expired certification | 🔴 red from `compliance`, dropped before safety ever runs |
-| Unknown drug | ⚪ triggers the on-demand exploration path (UC-2) |
+| Unknown drug | ⚪ triggers the on-demand exploration path (COMP-2) |
 | Missing data | eGFR unknown → the result says the check was skipped, not "fine" |
 | Nothing left | Every candidate excluded — the honest empty state |
 
