@@ -11,7 +11,8 @@ RUN npm run build
 
 FROM node:22-alpine AS run
 WORKDIR /app
-ENV NODE_ENV=production
+ARG GIT_SHA=unknown
+ENV NODE_ENV=production GIT_SHA=${GIT_SHA}
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

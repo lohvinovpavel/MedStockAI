@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
-from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
+import os
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
 from medstock_shared.models import StockSnapshot
 from medstock_shared.rxnorm import RxNormError, ndcs_for_rxcui
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 app = FastAPI(title="inventory")
 stock = APIRouter()
@@ -23,6 +26,18 @@ def readyz() -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ready"}
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    """GIT_SHA is baked in at image build time (Dockerfile) — unset outside
+    a built container, e.g. running locally from source. semver comes from
+    the installed medstock-inventory package (pyproject.toml), not the image."""
+    try:
+        semver = pkg_version("medstock-inventory")
+    except PackageNotFoundError:
+        semver = "unknown"
+    return {"service": "inventory", "version": os.environ.get("GIT_SHA", "unknown"), "semver": semver}
 
 
 @stock.get("/stock")

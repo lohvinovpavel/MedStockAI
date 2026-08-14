@@ -1,11 +1,11 @@
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
 from medstock_shared.db import engine, session_scope
@@ -21,6 +21,8 @@ from medstock_shared.rxnorm import (
     therapeutic_scd_sbd,
 )
 from medstock_shared.stock import stock_fields
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 app = FastAPI(title="analogue")
 drugs = APIRouter()
@@ -47,6 +49,18 @@ def readyz() -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ready"}
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    """GIT_SHA is baked in at image build time (Dockerfile) — unset outside
+    a built container, e.g. running locally from source. semver comes from
+    the installed medstock-analogue package (pyproject.toml), not the image."""
+    try:
+        semver = pkg_version("medstock-analogue")
+    except PackageNotFoundError:
+        semver = "unknown"
+    return {"service": "analogue", "version": os.environ.get("GIT_SHA", "unknown"), "semver": semver}
 
 
 def load_formulary_rxcuis(session) -> set[str]:

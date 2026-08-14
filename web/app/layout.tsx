@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {name}
             </Link>
           ))}
+          <Link href="/version">version</Link>
         </nav>
         {children}
       </body>
