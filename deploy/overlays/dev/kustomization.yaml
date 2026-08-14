@@ -46,19 +46,22 @@ patches:
   # host + tls: JSON6902, not strategic merge — spec.rules has no merge key,
   # so a strategic-merge patch would replace the whole rules list and wipe
   # out the /api/* paths (docs/infra-dev-plan.md §0.1, Defect B).
-  # REPLACE-ME: infra/README.md's sed step fills this from
-  # `terraform output -raw ingress_host` after apply.
+  # REPLACE-ME stays a placeholder in git on purpose — the ingress IP changes
+  # every time the sandbox is destroyed and recreated. deploy-dev.yml's
+  # "Resolve ingress host" step fills it in fresh, from the live LoadBalancer
+  # Service, on every deploy. infra/README.md §6 has the manual equivalent
+  # for anyone applying this overlay by hand instead of through CI.
   - target:
       kind: Ingress
       name: medstock-api
     patch: |-
       - op: add
         path: /spec/rules/0/host
-        value: medstock-dev.34-78-26-132.sslip.io
+        value: medstock-dev.REPLACE-ME.sslip.io
       - op: add
         path: /spec/tls
         value:
-          - hosts: [medstock-dev.34-78-26-132.sslip.io]
+          - hosts: [medstock-dev.REPLACE-ME.sslip.io]
             secretName: medstock-dev-tls
   - target:
       kind: Ingress
@@ -66,9 +69,9 @@ patches:
     patch: |-
       - op: add
         path: /spec/rules/0/host
-        value: medstock-dev.34-78-26-132.sslip.io
+        value: medstock-dev.REPLACE-ME.sslip.io
       - op: add
         path: /spec/tls
         value:
-          - hosts: [medstock-dev.34-78-26-132.sslip.io]
+          - hosts: [medstock-dev.REPLACE-ME.sslip.io]
             secretName: medstock-dev-tls

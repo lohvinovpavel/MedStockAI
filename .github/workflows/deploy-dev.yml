@@ -102,9 +102,18 @@ jobs:
           sed "s|ghcr.io/medstockai/inventory:latest|${{ env.REGISTRY }}/inventory:${{ github.sha }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
           kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
 
+      # The static IP survives a normal apply but not a full destroy/recreate
+      # of the sandbox, so the hostname can't stay committed in git — read
+      # whatever the LoadBalancer Service actually has right now instead.
+      - name: Resolve ingress host
+        run: |
+          ip="$(kubectl -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+          echo "INGRESS_HOST=medstock-dev.${ip//./-}.sslip.io" >> "$GITHUB_ENV"
+
       - name: Roll out
         run: |
           cd deploy/overlays/dev
+          sed -i "s/medstock-dev\.REPLACE-ME\.sslip\.io/${{ env.INGRESS_HOST }}/g" kustomization.yaml
           for s in auth inventory analogue compliance patient-profiling prediction warehouse web ingest; do
             kustomize edit set image "ghcr.io/medstockai/$s=${{ env.REGISTRY }}/$s:${{ github.sha }}"
           done
