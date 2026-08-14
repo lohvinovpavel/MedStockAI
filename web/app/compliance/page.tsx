@@ -7,7 +7,7 @@ export default function CompliancePage() {
     <main>
       <h1>compliance</h1>
       <ServiceHealth service="compliance" />
-      <p>Build your page here. Call your endpoints with apiFetch("compliance", ...).</p>
+      <p>Build your page here. Call your endpoints with {'apiFetch("compliance", ...)'}.</p>
     </main>
   );
 }

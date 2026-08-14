@@ -6,7 +6,7 @@ export default function PatientsPage() {
     <main>
       <h1>patients</h1>
       <ServiceHealth service="patients" />
-      <p>Build your page here. Call your endpoints with apiFetch("patients", ...).</p>
+      <p>Build your page here. Call your endpoints with {'apiFetch("patients", ...)'}.</p>
     </main>
   );
 }

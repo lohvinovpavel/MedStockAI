@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock
 
-from sqlalchemy.exc import ProgrammingError
-
 from app.main import load_formulary_rxcuis
 from medstock_shared.rxnorm import (
     apply_formulary,
@@ -10,6 +8,7 @@ from medstock_shared.rxnorm import (
     search_concepts,
     therapeutic_scd_sbd,
 )
+from sqlalchemy.exc import ProgrammingError
 
 
 def test_parse_scd_name():

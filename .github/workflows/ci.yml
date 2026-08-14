@@ -1,15 +1,36 @@
 name: ci
 
+# App-code checks for every PR. infra/ has its own gate (infra-ci.yml) —
+# skip here when a change only touches infra so the two don't double-run.
 on:
-  # pull_request:
-  # push:
-  #   branches: [main]
+  pull_request:
+    paths-ignore: ["infra/**"]
   workflow_dispatch:
 
-
 jobs:
-  python:
+  lint:
     runs-on: ubuntu-latest
+    # Advisory, not a gate — shows up red on the run without blocking merge.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with: { enable-cache: true }
+      - run: uv run ruff check .
+
+  # One matrix leg per service instead of one combined `pytest services/`:
+  # every service installs as a top-level `app` package (see each
+  # pyproject.toml's [tool.hatch.build.targets.wheel]), so syncing all of
+  # them into one venv makes later services' `import app.x` silently resolve
+  # to whichever service's `app` landed in sys.path first. `uv sync
+  # --package` only ever installs one service's `app` at a time, which is
+  # also what each Docker image does — this matches production, not just CI.
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
     services:
       postgres:
         image: postgres:16
@@ -26,10 +47,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with: { enable-cache: true }
-      - run: uv sync --all-packages
-      - run: uv run ruff check .
-      - run: uv run alembic upgrade head
-      - run: uv run pytest -q
+      - run: uv sync --package medstock-${{ matrix.service }}
+      # --no-sync matters: a bare `uv run` re-syncs the whole workspace
+      # first (all 8 services' `app` back in one venv, the exact collision
+      # the scoped sync above exists to avoid).
+      - run: uv run --no-sync alembic upgrade head
+      - run: uv run --no-sync pytest services/${{ matrix.service }}/tests -q
 
   web:
     runs-on: ubuntu-latest
@@ -41,4 +64,36 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
       - run: npm install
+      - run: npm run lint
+      # No test suite exists yet (web has no jest/vitest config) — build
+      # doubles as the type-check + compile gate. Add a real test job when
+      # there's something worth asserting beyond that.
       - run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: SERVICE=${{ matrix.service }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  docker-build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          push: false
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web

@@ -34,12 +34,17 @@ output "letsencrypt_email" {
   value = var.letsencrypt_email
 }
 
-# Not secret — these are what deploy-dev.yml's WIF config needs, and knowing
-# them grants nothing without a GitHub Actions run from github_repo itself.
+# Not secret — these are what the GitHub Actions workflows' WIF config
+# needs, and knowing them grants nothing without a run from github_repo
+# itself. One provider, two SAs — see ci.tf.
 output "ci_workload_identity_provider" {
   value = google_iam_workload_identity_pool_provider.github.name
 }
 
-output "ci_service_account_email" {
-  value = google_service_account.github_actions.email
+output "ci_deploy_service_account_email" {
+  value = google_service_account.github_actions_deploy.email
+}
+
+output "ci_infra_service_account_email" {
+  value = google_service_account.github_actions_infra.email
 }

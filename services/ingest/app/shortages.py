@@ -7,11 +7,10 @@ real). The upsert shape (_row_to_values + ON CONFLICT on source_id) is what
 matters and will not change once the real field names are swapped in.
 """
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
-
 from medstock_shared import engine
 from medstock_shared.models import ShortageEvent
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from ._source import fetch_json
 
