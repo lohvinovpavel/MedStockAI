@@ -36,7 +36,7 @@ jobs:
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_INFRA_SERVICE_ACCOUNT }}
 
       - run: terraform init
       - run: terraform apply -auto-approve -input=false
