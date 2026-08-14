@@ -92,26 +92,40 @@ Run what it prints. Then confirm the nodes came up:
 kubectl get nodes
 ```
 
-## 6. Fill the two placeholders in the overlay
+## 6. Fill the overlay placeholders
 
-The overlay ships placeholders because the hostname is derived from an IP
-Terraform only knows after apply.
+`deploy-dev.yml` (§11) resolves the **hostname** automatically on every CI
+deploy — the ingress IP is reserved by Terraform but does not survive a full
+`destroy`/recreate of the sandbox, so `medstock-dev.REPLACE-ME.sslip.io`
+stays a placeholder in git on purpose. Do not commit a real IP into
+`kustomization.yaml`.
+
+The **email** placeholder in `cluster-issuer.yaml` is different — it doesn't
+change, so it's a one-time fill-in you do commit:
 
 ```powershell
-$host_name = terraform output -raw ingress_host
-$repo = terraform output -raw artifact_registry_repo
 $email = terraform output -raw letsencrypt_email
 cd ..\..\..
-(Get-Content deploy\overlays\dev\kustomization.yaml) -replace 'medstock-dev\.REPLACE-ME\.sslip\.io', $host_name -replace 'REPLACE-ME-REGISTRY', $repo | Set-Content deploy\overlays\dev\kustomization.yaml
 (Get-Content deploy\overlays\dev\cluster-issuer.yaml) -replace 'REPLACE-ME@example\.com', $email | Set-Content deploy\overlays\dev\cluster-issuer.yaml
 ```
 
-Check it before applying — this is a local edit you are expected to commit
-once, not on every apply:
+Deploying by hand instead of through CI? Fill the hostname the same way CI
+does, but don't commit the result:
+
+```powershell
+$ip = kubectl -n ingress-nginx get svc ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+$host_name = "medstock-dev.$($ip -replace '\.', '-').sslip.io"
+(Get-Content deploy\overlays\dev\kustomization.yaml) -replace 'medstock-dev\.REPLACE-ME\.sslip\.io', $host_name | Set-Content deploy\overlays\dev\kustomization.yaml
+```
+
+Check it before applying:
 
 ```bash
 kubectl kustomize deploy/overlays/dev | Select-String "host:|newName:|email:"
 ```
+
+then `git checkout deploy/overlays/dev/kustomization.yaml` afterward so the
+placeholder doesn't end up committed.
 
 ## 7. Build and push images
 
