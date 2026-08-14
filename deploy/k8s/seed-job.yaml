@@ -1,0 +1,22 @@
+# One-off, run by hand per infra/README.md §8 — not part of any kustomize
+# base (see app/seed.py's own docstring for why this must stay manual).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: seed
+        image: REPLACE-ME-IMAGE
+        workingDir: /srv/services/auth
+        command: ["python", "-m", "app.seed"]
+        env:
+        # No SEED_PASSWORD: app/seed.py generates and prints one when it's
+        # unset, so nothing gets baked into a file or repeated across runs.
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }

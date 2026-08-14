@@ -6,6 +6,11 @@ name: deploy-dev
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      seed_dev_users:
+        description: "Also (re)create the 4 demo users in St Mary's General — safe to re-run, skips existing ones"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-dev
@@ -107,3 +112,32 @@ jobs:
           for s in auth inventory analogue compliance patient-profiling prediction warehouse web; do
             kubectl -n medstock rollout status "deploy/$s" --timeout=180s
           done
+
+  seed:
+    needs: [deploy]
+    if: ${{ inputs.seed_dev_users }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      # app/seed.py is idempotent and prints the password only for users it
+      # actually creates — this job's log is the only place to read it.
+      - name: Seed demo users
+        run: |
+          kubectl -n medstock delete job seed --ignore-not-found
+          sed "s|REPLACE-ME-IMAGE|${{ env.REGISTRY }}/auth:${{ github.sha }}|" deploy/k8s/seed-job.yaml | kubectl -n medstock apply -f -
+          kubectl -n medstock wait --for=condition=complete job/seed --timeout=60s
+          kubectl -n medstock logs job/seed
+          kubectl -n medstock delete job seed

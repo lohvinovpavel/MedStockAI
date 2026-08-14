@@ -64,4 +64,8 @@ resource "google_sql_user" "medstock" {
   project  = var.project_id
   instance = google_sql_database_instance.dev.name
   password = random_password.db.result
+
+  depends_on = [
+    google_sql_database.medstock
+  ]
 }
