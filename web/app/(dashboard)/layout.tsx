@@ -1,21 +1,67 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { CopilotProvider } from "@/lib/copilot-context";
-import { TopNav } from "@/components/dashboard/TopNav";
+import { SideNav } from "@/components/dashboard/SideNav";
 import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
+import { systemStatus } from "@/lib/mock-data";
 
-// Persistent dashboard shell: top nav + main content + AI Copilot drawer.
-// Mock-data driven — see lib/mock-data.ts — no session gate here, that
-// stays scoped to app/(legacy).
+// Footer's live telemetry strip — ticks the RxNorm sync clock forward once
+// a minute so the footer reads as a monitored system, not a static mock.
+function LiveTelemetry() {
+  const [elapsedMin, setElapsedMin] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsedMin((m) => m + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <span className="flex items-center gap-2">
+      <span className="flex items-center gap-1.5 uppercase tracking-wider text-emerald-400">
+        <span className="relative flex size-1.5">
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+          <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+        </span>
+        Live
+      </span>
+      <span className="text-neutral-700">|</span>
+      <span>RxNorm Sync: {systemStatus.rxNormSyncMinutesAgo + elapsedMin}m ago</span>
+      <span className="text-neutral-700">|</span>
+      <span>
+        GKE: <span className="text-emerald-400">healthy</span>
+      </span>
+    </span>
+  );
+}
+
+// Persistent dashboard shell: left nav + main content + AI Copilot drawer +
+// status/audit footer. No header — search lives on the Inventory page and
+// the Copilot drawer has its own open/collapse control. Mock-data driven —
+// see lib/mock-data.ts — no session gate here, that stays scoped to
+// app/(legacy).
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <CopilotProvider>
       <div className="flex h-screen flex-col overflow-hidden bg-muted/30 text-sm">
-        <TopNav />
         <div className="flex min-h-0 flex-1">
+          <SideNav />
           <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
           <CopilotDrawer />
         </div>
+        <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t bg-neutral-950 px-3 font-mono text-[10px] tracking-wide text-neutral-500">
+          <LiveTelemetry />
+          <span className="ml-auto flex items-center gap-2">
+            <span>
+              Audit Hash: <span className="text-neutral-300">SHA256:{systemStatus.auditHash}&hellip;</span>
+            </span>
+            <span className="text-neutral-700">&bull;</span>
+            <span>
+              Node: <span className="text-neutral-300">{systemStatus.gkeCluster}</span>
+            </span>
+            <span className="text-neutral-700">&bull;</span>
+            <span className="text-neutral-300">{systemStatus.complianceStandard}</span>
+          </span>
+        </footer>
       </div>
     </CopilotProvider>
   );

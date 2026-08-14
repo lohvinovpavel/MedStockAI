@@ -251,6 +251,85 @@ export const inventoryKpis = {
 };
 
 // ---------------------------------------------------------------------
+// Audit Log & Compliance (per-SKU history)
+// ---------------------------------------------------------------------
+
+export type AuditActorType = "clinician" | "ai" | "system" | "regulator";
+
+export interface AuditEntry {
+  id: string;
+  timestamp: string; // ISO, always relative to `today` so it stays current
+  actor: string;
+  actorType: AuditActorType;
+  action: string;
+  refId?: string;
+}
+
+function auditTs(daysAgo: number, hour: number, minute: number): string {
+  const d = addDays(today, -daysAgo);
+  d.setUTCHours(hour, minute, 0, 0);
+  return d.toISOString();
+}
+
+export function formatAuditTimestamp(dateIso: string): string {
+  const d = new Date(dateIso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+// Any SKU without a curated log below falls back to this generic-but-real
+// looking system trail, so every "Audit Log" click has something to show.
+const DEFAULT_AUDIT_LOG: AuditEntry[] = [
+  { id: "a-def-1", timestamp: auditTs(0, 7, 40), actor: "Warehouse System", actorType: "system", action: "synced stock count with regional warehouse" },
+  { id: "a-def-2", timestamp: auditTs(2, 16, 5), actor: "ML Pipeline", actorType: "ai", action: "updated the remaining stock forecast", refId: "trigger: batch consumption" },
+  { id: "a-def-3", timestamp: auditTs(6, 11, 20), actor: "OCR Engine", actorType: "ai", action: "re-verified certificate against manufacturer registry" },
+];
+
+export const auditLog: Record<string, AuditEntry[]> = {
+  "inv-001": [
+    { id: "a-001-1", timestamp: auditTs(0, 14, 22), actor: "Dr. Smirnov", actorType: "clinician", action: "confirmed the switch to Augmentin", refId: "#B-9021" },
+    { id: "a-001-2", timestamp: auditTs(1, 9, 15), actor: "ML Pipeline", actorType: "ai", action: "updated the remaining stock forecast", refId: "trigger: batch consumption" },
+    { id: "a-001-3", timestamp: auditTs(4, 18, 0), actor: "FDA certificate", actorType: "regulator", action: "verified", refId: "OCR Engine" },
+    { id: "a-001-4", timestamp: auditTs(9, 8, 45), actor: "Dr. Smirnov", actorType: "clinician", action: "received batch into inventory", refId: "AMX-24118-B" },
+  ],
+  "inv-003": [
+    { id: "a-003-1", timestamp: auditTs(0, 8, 10), actor: "Compliance Bot", actorType: "regulator", action: "flagged FDA renewal filing as still pending", refId: "ANDA-065432" },
+    { id: "a-003-2", timestamp: auditTs(2, 13, 30), actor: "Nurse Okafor", actorType: "clinician", action: "logged administration from active batch", refId: "CFX-25011-A" },
+    { id: "a-003-3", timestamp: auditTs(5, 17, 50), actor: "ML Pipeline", actorType: "ai", action: "escalated stockout risk to critical", refId: "days of supply < 3" },
+  ],
+  "inv-005": [
+    { id: "a-005-1", timestamp: auditTs(0, 6, 5), actor: "FDA Shortage Feed", actorType: "regulator", action: "confirmed national backorder continues through Q4" },
+    { id: "a-005-2", timestamp: auditTs(1, 12, 40), actor: "Dr. Smirnov", actorType: "clinician", action: "requested inter-facility transfer from Regional Warehouse North", refId: "TR-4821" },
+    { id: "a-005-3", timestamp: auditTs(3, 9, 0), actor: "ML Pipeline", actorType: "ai", action: "updated the remaining stock forecast", refId: "trigger: batch consumption" },
+  ],
+  "inv-007": [
+    { id: "a-007-1", timestamp: auditTs(0, 10, 15), actor: "Compliance Bot", actorType: "regulator", action: "flagged certificate as lapsed", refId: "EU/1/00/134" },
+    { id: "a-007-2", timestamp: auditTs(3, 15, 25), actor: "OCR Engine", actorType: "ai", action: "re-scanned renewal filing, still awaiting EMA approval" },
+    { id: "a-007-3", timestamp: auditTs(11, 8, 0), actor: "Dr. Smirnov", actorType: "clinician", action: "received batch into inventory", refId: "IGL-25102-A" },
+  ],
+  "inv-010": [
+    { id: "a-010-1", timestamp: auditTs(0, 9, 5), actor: "Compliance Bot", actorType: "regulator", action: "flagged EMA renewal filing as still pending", refId: "EU/1/12/778" },
+    { id: "a-010-2", timestamp: auditTs(2, 14, 50), actor: "Nurse Okafor", actorType: "clinician", action: "logged administration from active batch", refId: "HEP-24855-A" },
+    { id: "a-010-3", timestamp: auditTs(7, 18, 0), actor: "ML Pipeline", actorType: "ai", action: "escalated stockout risk to critical", refId: "days of supply < 3" },
+  ],
+};
+
+export function auditLogFor(itemId: string): AuditEntry[] {
+  return auditLog[itemId] ?? DEFAULT_AUDIT_LOG;
+}
+
+// ---------------------------------------------------------------------
+// System status / audit trail (header pill + footer)
+// ---------------------------------------------------------------------
+
+export const systemStatus = {
+  rxNormSyncMinutesAgo: 4,
+  gkeCluster: "gke-europe-west3-a",
+  auditHash: "7f8a3c1e9d2b6f04",
+  complianceStandard: "ISO-13485 Compliant Workflow",
+};
+
+// ---------------------------------------------------------------------
 // Restock & Forecasts
 // ---------------------------------------------------------------------
 
@@ -269,6 +348,7 @@ export interface ForecastDrug {
   model: string;
   seasonalityFactor: string;
   confidence: number;
+  currentStock: number;
   series: ForecastPoint[];
   purchaseOrder: {
     supplier: string;
@@ -316,6 +396,7 @@ export const forecastDrugs: ForecastDrug[] = [
     model: "Prophet v1.2",
     seasonalityFactor: "+35% Winter Surge",
     confidence: 94.2,
+    currentStock: 970,
     series: buildSeries(58, 6, 14, 22),
     purchaseOrder: {
       supplier: "PharmaSource Global Ltd.",
@@ -333,6 +414,7 @@ export const forecastDrugs: ForecastDrug[] = [
     model: "Prophet v1.2",
     seasonalityFactor: "+12% Elective Surgery Backlog",
     confidence: 89.7,
+    currentStock: 280,
     series: buildSeries(17, 2, 10, 6),
     purchaseOrder: {
       supplier: "Meditech Distribution Co.",
@@ -350,6 +432,7 @@ export const forecastDrugs: ForecastDrug[] = [
     model: "XGBoost v0.9",
     seasonalityFactor: "+28% Respiratory Season",
     confidence: 91.5,
+    currentStock: 420,
     series: buildSeries(23, 5, 12, 14),
     purchaseOrder: {
       supplier: "PharmaSource Global Ltd.",

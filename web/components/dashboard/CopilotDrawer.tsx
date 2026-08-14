@@ -1,20 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, FileText, Repeat2, ShieldCheck, Send, X, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, FileText, Plane, Repeat2, ShieldCheck, Send, X, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { useCopilot } from "@/lib/copilot-context";
+import { StatusBadge } from "@/components/dashboard/StatusBadge";
+import { useCopilot, type EmergencyPlanRequest } from "@/lib/copilot-context";
 import { cn } from "@/lib/utils";
 
 type ResponseCard =
   | { kind: "po"; supplier: string; quantity: number; unit: string; totalCost: number; coverageDays: number }
   | { kind: "analogues"; items: { name: string; facility: string; stock: number }[] }
-  | { kind: "certificate"; status: "valid" | "pending" | "expired"; authority: string; number: string };
+  | { kind: "certificate"; status: "valid" | "pending" | "expired"; authority: string; number: string }
+  | { kind: "emergency"; drugName: string; surgePct: number; depletionDays: number | null; airFreightDays: number; costPremiumPct: number };
 
 type Message = {
   id: string;
@@ -72,6 +74,19 @@ function replyFor(action: string, focusLabel: string): Message {
   };
 }
 
+function emergencyPlanReply(req: EmergencyPlanRequest): Message {
+  const costPremiumPct = req.surgePct >= 200 ? 45 : req.surgePct >= 150 ? 25 : 10;
+  return {
+    id: id(),
+    role: "assistant",
+    text:
+      req.depletionDays != null
+        ? `Emergency supply plan for ${req.drugName} at ${req.surgePct}% projected load — current stock depletes in ~${req.depletionDays} day${req.depletionDays === 1 ? "" : "s"}. Recommending expedited air freight to close the gap.`
+        : `Emergency supply plan for ${req.drugName} at ${req.surgePct}% projected load — stock holds beyond the 30-day forecast window at this rate.`,
+    card: { kind: "emergency", drugName: req.drugName, surgePct: req.surgePct, depletionDays: req.depletionDays, airFreightDays: 2, costPremiumPct },
+  };
+}
+
 function StreamingText({ text }: { text: string }) {
   const [shown, setShown] = useState("");
   useEffect(() => {
@@ -123,27 +138,62 @@ function ResponseCardView({ card }: { card: ResponseCard }) {
       </Card>
     );
   }
+  if (card.kind === "certificate") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Certificate Status</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-sm">
+          <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={card.status === "valid" ? "default" : "secondary"} className="capitalize">{card.status}</Badge></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Authority</span><span>{card.authority}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Number</span><span className="font-mono text-xs">{card.number}</span></div>
+        </CardContent>
+      </Card>
+    );
+  }
   return (
-    <Card className="gap-2 py-3">
+    <Card className="gap-2 border-red-500/30 py-3">
       <CardHeader className="px-3">
-        <CardTitle className="text-xs font-medium text-muted-foreground">Certificate Status</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <AlertTriangle className="size-3.5 text-red-500" />
+          Emergency Supply Plan
+        </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-1 px-3 text-sm">
-        <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={card.status === "valid" ? "default" : "secondary"} className="capitalize">{card.status}</Badge></div>
-        <div className="flex justify-between"><span className="text-muted-foreground">Authority</span><span>{card.authority}</span></div>
-        <div className="flex justify-between"><span className="text-muted-foreground">Number</span><span className="font-mono text-xs">{card.number}</span></div>
+      <CardContent className="grid gap-1.5 px-3 text-sm">
+        <div className="flex justify-between"><span className="text-muted-foreground">Scenario</span><span className="font-mono tabular-nums">{card.surgePct}% of baseline demand</span></div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Stock depletes in</span>
+          <StatusBadge tone={card.depletionDays != null && card.depletionDays <= 5 ? "critical" : "warning"}>
+            {card.depletionDays != null ? `${card.depletionDays}d` : "30d+"}
+          </StatusBadge>
+        </div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Freight mode</span><span className="flex items-center gap-1"><Plane className="size-3.5" /> Air (expedited)</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Lead time</span><span className="font-mono tabular-nums">{card.airFreightDays} days</span></div>
+        <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Cost premium</span><span className="font-mono tabular-nums">+{card.costPremiumPct}%</span></div>
       </CardContent>
     </Card>
   );
 }
 
 export function CopilotDrawer() {
-  const { open, setOpen, focus } = useCopilot();
+  const { open, setOpen, focus, emergencyRequest } = useCopilot();
   const [messages, setMessages] = useState<Message[]>([
     { id: id(), role: "assistant", text: "Hi, I'm the MedStock AI Copilot. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages." },
   ]);
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lastHandledNonce = useRef<number | null>(null);
+
+  // A page (e.g. the forecast scenario simulator) can fire a one-shot
+  // "emergency plan" ask via the copilot context — post it as a user
+  // message and stream back the structured plan, same as a quick action.
+  useEffect(() => {
+    if (!emergencyRequest || emergencyRequest.nonce === lastHandledNonce.current) return;
+    lastHandledNonce.current = emergencyRequest.nonce;
+    setMessages((m) => [...m, { id: id(), role: "user", text: `Generate emergency supply plan for current load — ${emergencyRequest.drugName}` }]);
+    window.setTimeout(() => setMessages((m) => [...m, emergencyPlanReply(emergencyRequest)]), 300);
+  }, [emergencyRequest]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -186,7 +236,7 @@ export function CopilotDrawer() {
   }
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-l bg-card lg:w-[380px]">
+    <aside className="flex w-full min-h-0 shrink-0 flex-col border-l bg-card lg:w-[380px]">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-primary" />
@@ -214,7 +264,7 @@ export function CopilotDrawer() {
         ))}
       </div>
 
-      <ScrollArea className="flex-1 px-3 py-3">
+      <ScrollArea className="min-h-0 flex-1 px-3 py-3">
         <div className="flex flex-col gap-3">
           {messages.map((m) => (
             <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>

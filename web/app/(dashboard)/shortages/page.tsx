@@ -9,23 +9,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
 import { shortageAlerts, shortageMatrix, type FacilityStockRow } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
-function coverageTone(row: FacilityStockRow): "stockout" | "critical" | "surplus" | "normal" {
+function coverageTone(row: FacilityStockRow): StatusTone {
   if (row.units === 0) return "stockout";
   if (row.daysOfSupply <= 5) return "critical";
   if (row.daysOfSupply >= 60) return "surplus";
   return "normal";
 }
-
-const TONE_CLASS: Record<ReturnType<typeof coverageTone>, string> = {
-  stockout: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400",
-  critical: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400",
-  surplus: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-400",
-  normal: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400",
-};
 
 export default function ShortagesPage() {
   const { setFocus } = useCopilot();
@@ -113,14 +107,18 @@ export default function ShortagesPage() {
                         </p>
                       </div>
                     </div>
-                    <Badge variant="outline" className={cn("shrink-0 text-[11px]", TONE_CLASS[tone])}>
+                    <StatusBadge tone={tone} className="shrink-0">
                       {row.units === 0 ? "Stockout" : `${row.units} units · ${row.daysOfSupply}d`}
-                    </Badge>
+                    </StatusBadge>
                   </li>
                 );
               })}
               {filteredRows.length === 0 && (
-                <li className="py-6 text-center text-xs text-muted-foreground">No facilities match this filter.</li>
+                <li className="flex flex-col items-center gap-1.5 py-8 text-center">
+                  <Building2 className="size-6 text-muted-foreground/40" />
+                  <p className="text-xs font-medium">No facilities match &ldquo;{search}&rdquo;</p>
+                  <p className="text-[11px] text-muted-foreground">Clear the filter to see the full network.</p>
+                </li>
               )}
             </ul>
           </CardContent>
@@ -166,7 +164,7 @@ export default function ShortagesPage() {
                     min={1}
                     value={transferQty}
                     onChange={(e) => setTransferQty(Math.max(1, Number(e.target.value)))}
-                    className="h-7 w-24 text-right text-xs"
+                    className="h-7 w-24 text-right font-mono text-xs tabular-nums"
                   />
                 </div>
 

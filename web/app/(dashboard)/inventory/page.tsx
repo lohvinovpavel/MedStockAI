@@ -1,16 +1,19 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import {
   Search,
+  SearchX,
   Plus,
   CalendarIcon,
   ChevronDown,
   MoreHorizontal,
   FileText,
   Repeat2,
+  ScrollText,
   Boxes,
   AlertTriangle,
   Clock,
@@ -55,6 +58,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
 import {
   inventory,
@@ -68,22 +72,17 @@ import {
 import { cn } from "@/lib/utils";
 
 const RISK_LABEL: Record<StockRisk, string> = { critical: "Critical", warning: "Warning", normal: "Normal" };
-const RISK_CLASS: Record<StockRisk, string> = {
-  critical: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400",
-  warning: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400",
-  normal: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400",
-};
 
-function expiryClass(days: number) {
-  if (days <= 14) return "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400";
-  if (days <= 30) return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400";
-  return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400";
+function expiryTone(days: number): StatusTone {
+  if (days <= 14) return "critical";
+  if (days <= 30) return "warning";
+  return "normal";
 }
 
-const CERT_CLASS: Record<InventoryItem["certStatus"], string> = {
-  valid: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400",
-  pending: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400",
-  expired: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400",
+const CERT_TONE: Record<InventoryItem["certStatus"], StatusTone> = {
+  valid: "normal",
+  pending: "warning",
+  expired: "critical",
 };
 
 function KpiCard({ icon: Icon, label, value, tone }: { icon: typeof Boxes; label: string; value: string | number; tone?: "critical" | "warning" }) {
@@ -101,7 +100,7 @@ function KpiCard({ icon: Icon, label, value, tone }: { icon: typeof Boxes; label
           <Icon className="size-4" />
         </span>
         <div>
-          <p className="text-lg font-semibold leading-none">{value}</p>
+          <p className="font-mono text-lg font-semibold leading-none tabular-nums">{value}</p>
           <p className="mt-1 text-xs text-muted-foreground">{label}</p>
         </div>
       </CardContent>
@@ -181,7 +180,7 @@ function CertificateDialog({ item }: { item: InventoryItem }) {
             <p className="text-sm font-medium">{item.certAuthority}-{item.certNumber}.pdf</p>
             <p className="text-xs text-muted-foreground">Mock certificate preview — document viewer not wired in this demo.</p>
           </div>
-          <Badge variant="outline" className={cn("capitalize", CERT_CLASS[item.certStatus])}>{item.certStatus}</Badge>
+          <StatusBadge tone={CERT_TONE[item.certStatus]}>{item.certStatus}</StatusBadge>
         </div>
       </DialogContent>
     </Dialog>
@@ -189,6 +188,7 @@ function CertificateDialog({ item }: { item: InventoryItem }) {
 }
 
 export default function InventoryPage() {
+  const router = useRouter();
   const { setFocus } = useCopilot();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | StockRisk>("all");
@@ -317,23 +317,23 @@ export default function InventoryPage() {
                         <span className="block font-normal text-muted-foreground">{item.form}</span>
                       </TableCell>
                       <TableCell className="py-2 text-muted-foreground">{item.inn}</TableCell>
-                      <TableCell className="py-2 font-mono text-[11px]">{item.batchNumber}</TableCell>
-                      <TableCell className="py-2">{item.currentStock} <span className="text-muted-foreground">{item.unit}</span></TableCell>
-                      <TableCell className="py-2 text-muted-foreground">{item.dailyBurnRate}/day</TableCell>
+                      <TableCell className="py-2 font-mono text-[11px] tabular-nums">{item.batchNumber}</TableCell>
+                      <TableCell className="py-2 font-mono tabular-nums">{item.currentStock} <span className="font-sans text-muted-foreground">{item.unit}</span></TableCell>
+                      <TableCell className="py-2 font-mono tabular-nums text-muted-foreground">{item.dailyBurnRate}/day</TableCell>
                       <TableCell className="py-2">
-                        <Badge variant="outline" className={cn("text-[11px]", RISK_CLASS[risk])}>
+                        <StatusBadge tone={risk}>
                           {RISK_LABEL[risk]} · {Number.isFinite(daysOfSupply(item)) ? `${daysOfSupply(item)}d` : "∞"}
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="py-2">
-                        <Badge variant="outline" className={cn("text-[11px]", expiryClass(expiryDays))}>
+                        <StatusBadge tone={expiryTone(expiryDays)}>
                           {item.expiryDate} ({expiryDays}d)
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="py-2">
-                        <Badge variant="outline" className={cn("text-[11px] capitalize", CERT_CLASS[item.certStatus])}>
+                        <StatusBadge tone={CERT_TONE[item.certStatus]} className="capitalize">
                           {item.certAuthority} · {item.certStatus}
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
@@ -346,6 +346,9 @@ export default function InventoryPage() {
                             <DropdownMenuGroup>
                               <DropdownMenuItem onSelect={() => selectRow(item)}>
                                 <Repeat2 /> Find analogues
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => router.push(`/audit?sku=${item.id}`)}>
+                                <ScrollText /> Audit Log
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
                           </DropdownMenuContent>
@@ -384,9 +387,11 @@ export default function InventoryPage() {
                 );
               })}
               {filtered.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} className="py-8 text-center text-xs text-muted-foreground">
-                    No SKUs match the current filters.
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={9} className="py-10 text-center">
+                    <SearchX className="mx-auto size-6 text-muted-foreground/50" />
+                    <p className="mt-2 text-xs font-medium">No SKUs match the current filters</p>
+                    <p className="text-[11px] text-muted-foreground">Try clearing the status filter or expiry date range.</p>
                   </TableCell>
                 </TableRow>
               )}

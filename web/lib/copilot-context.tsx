@@ -11,12 +11,24 @@ export type CopilotFocus =
   | { kind: "alert"; label: string; detail: string }
   | null;
 
+// A one-shot "do this now" ask fired by a page (e.g. the forecast scenario
+// simulator's emergency-plan button). `nonce` makes repeat clicks with the
+// same params distinguishable so the drawer's effect re-fires each time.
+export type EmergencyPlanRequest = {
+  drugName: string;
+  surgePct: number;
+  depletionDays: number | null;
+  nonce: number;
+};
+
 type CopilotContextValue = {
   open: boolean;
   setOpen: (open: boolean) => void;
   toggle: () => void;
   focus: CopilotFocus;
   setFocus: (focus: CopilotFocus) => void;
+  emergencyRequest: EmergencyPlanRequest | null;
+  requestEmergencyPlan: (req: Omit<EmergencyPlanRequest, "nonce">) => void;
 };
 
 const CopilotContext = createContext<CopilotContextValue | null>(null);
@@ -30,10 +42,15 @@ export function useCopilot() {
 export function CopilotProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(true);
   const [focus, setFocus] = useState<CopilotFocus>(null);
+  const [emergencyRequest, setEmergencyRequest] = useState<EmergencyPlanRequest | null>(null);
   const toggle = useCallback(() => setOpen((o) => !o), []);
+  const requestEmergencyPlan = useCallback((req: Omit<EmergencyPlanRequest, "nonce">) => {
+    setOpen(true);
+    setEmergencyRequest({ ...req, nonce: Date.now() });
+  }, []);
 
   return (
-    <CopilotContext.Provider value={{ open, setOpen, toggle, focus, setFocus }}>
+    <CopilotContext.Provider value={{ open, setOpen, toggle, focus, setFocus, emergencyRequest, requestEmergencyPlan }}>
       {children}
     </CopilotContext.Provider>
   );
