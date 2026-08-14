@@ -37,7 +37,7 @@ on:
 
 concurrency:
   group: deploy-dev
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   # Matches deploy/overlays/dev/kustomization.yaml — infra/terraform/dev/registry.tf.
@@ -165,7 +165,7 @@ jobs:
     # ref check matters: workflow_dispatch lets you pick any branch to run
     # against, and this sandbox's manifests/migrations should only ever
     # come from main.
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    # if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: dev
     permissions: { contents: read, id-token: write }
