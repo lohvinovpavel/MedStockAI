@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { CopilotProvider } from "@/lib/copilot-context";
+import { FacilityProvider } from "@/lib/facility-context";
+import { OrdersProvider } from "@/lib/orders-context";
 import { SideNav } from "@/components/dashboard/SideNav";
 import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
 import { systemStatus } from "@/lib/mock-data";
@@ -41,28 +43,32 @@ function LiveTelemetry() {
 // app/(legacy).
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <CopilotProvider>
-      <div className="flex h-screen flex-col overflow-hidden bg-muted/30 text-sm">
-        <div className="flex min-h-0 flex-1">
-          <SideNav />
-          <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
-          <CopilotDrawer />
-        </div>
-        <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t bg-neutral-950 px-3 font-mono text-[10px] tracking-wide text-neutral-500">
-          <LiveTelemetry />
-          <span className="ml-auto flex items-center gap-2">
-            <span>
-              Audit Hash: <span className="text-neutral-300">SHA256:{systemStatus.auditHash}&hellip;</span>
-            </span>
-            <span className="text-neutral-700">&bull;</span>
-            <span>
-              Node: <span className="text-neutral-300">{systemStatus.gkeCluster}</span>
-            </span>
-            <span className="text-neutral-700">&bull;</span>
-            <span className="text-neutral-300">{systemStatus.complianceStandard}</span>
-          </span>
-        </footer>
-      </div>
-    </CopilotProvider>
+    <FacilityProvider>
+      <OrdersProvider>
+        <CopilotProvider>
+          <div className="flex h-screen flex-col overflow-hidden bg-muted/30 text-sm">
+            <div className="flex min-h-0 flex-1">
+              <SideNav />
+              <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+              <CopilotDrawer />
+            </div>
+            <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t bg-neutral-950 px-3 font-mono text-[10px] tracking-wide text-neutral-500">
+              <LiveTelemetry />
+              <span className="ml-auto flex items-center gap-2">
+                <span>
+                  Audit Hash: <span className="text-neutral-300">SHA256:{systemStatus.auditHash}&hellip;</span>
+                </span>
+                <span className="text-neutral-700">&bull;</span>
+                <span>
+                  Node: <span className="text-neutral-300">{systemStatus.gkeCluster}</span>
+                </span>
+                <span className="text-neutral-700">&bull;</span>
+                <span className="text-neutral-300">{systemStatus.complianceStandard}</span>
+              </span>
+            </footer>
+          </div>
+        </CopilotProvider>
+      </OrdersProvider>
+    </FacilityProvider>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
@@ -21,7 +21,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -59,10 +58,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { AnaloguesDialog } from "@/components/dashboard/AnaloguesDialog";
 import { useCopilot } from "@/lib/copilot-context";
+import { useFacility } from "@/lib/facility-context";
 import {
-  inventory,
-  inventoryKpis,
+  inventoryFor,
+  inventoryKpisFor,
   daysOfSupply,
   stockRisk,
   daysUntil,
@@ -159,16 +160,18 @@ function ReceiveBatchDialog() {
   );
 }
 
-function CertificateDialog({ item }: { item: InventoryItem }) {
-  const [open, setOpen] = useState(false);
+function CertificateDialog({
+  item,
+  open,
+  onOpenChange,
+}: {
+  item: InventoryItem | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (!item) return null;
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="h-7 text-xs">
-          <FileText data-icon="inline-start" />
-          View Certificate
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{item.certAuthority} Certificate — {item.drugName}</DialogTitle>
@@ -190,13 +193,19 @@ function CertificateDialog({ item }: { item: InventoryItem }) {
 export default function InventoryPage() {
   const router = useRouter();
   const { setFocus } = useCopilot();
+  const { facilityId, facility } = useFacility();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | StockRisk>("all");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [analogueItem, setAnalogueItem] = useState<InventoryItem | null>(null);
+  const [certItem, setCertItem] = useState<InventoryItem | null>(null);
+
+  const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
+  const kpis = useMemo(() => inventoryKpisFor(facilityId), [facilityId]);
 
   const filtered = useMemo(() => {
-    return inventory.filter((item) => {
+    return items.filter((item) => {
       const q = search.trim().toLowerCase();
       if (q && !(item.drugName.toLowerCase().includes(q) || item.inn.toLowerCase().includes(q) || item.atcCode.toLowerCase().includes(q))) {
         return false;
@@ -209,7 +218,7 @@ export default function InventoryPage() {
       }
       return true;
     });
-  }, [search, status, range]);
+  }, [items, search, status, range]);
 
   function selectRow(item: InventoryItem) {
     const next = selectedId === item.id ? null : item.id;
@@ -227,14 +236,17 @@ export default function InventoryPage() {
     <div className="flex flex-col gap-4 p-4">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">Inventory & Batches</h1>
-        <p className="text-xs text-muted-foreground">Stock on hand, batch traceability, and certificate status across the formulary.</p>
+        <p className="text-xs text-muted-foreground">
+          Stock on hand, batch traceability, and certificate status at{" "}
+          <span className="font-medium text-foreground">{facility.name}</span>.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard icon={Boxes} label="Total SKUs" value={inventoryKpis.totalSkus.toLocaleString()} />
-        <KpiCard icon={AlertTriangle} label="Critical stock (<3d)" value={inventoryKpis.criticalStock} tone="critical" />
-        <KpiCard icon={Clock} label="Expiring soon (<30d)" value={inventoryKpis.expiringSoon} tone="warning" />
-        <KpiCard icon={ShieldAlert} label="Pending certificates" value={inventoryKpis.pendingCerts} tone="warning" />
+        <KpiCard icon={Boxes} label="Total SKUs" value={kpis.totalSkus.toLocaleString()} />
+        <KpiCard icon={AlertTriangle} label="Critical stock (<3d)" value={kpis.criticalStock} tone="critical" />
+        <KpiCard icon={Clock} label="Expiring soon (<30d)" value={kpis.expiringSoon} tone="warning" />
+        <KpiCard icon={ShieldAlert} label="Pending certificates" value={kpis.pendingCerts} tone="warning" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -305,12 +317,12 @@ export default function InventoryPage() {
               {filtered.map((item) => {
                 const risk = stockRisk(item);
                 const expiryDays = daysUntil(item.expiryDate);
-                const expanded = selectedId === item.id;
+                const selected = selectedId === item.id;
                 return (
-                  <Fragment key={item.id}>
                     <TableRow
+                      key={item.id}
                       onClick={() => selectRow(item)}
-                      className={cn("cursor-pointer text-xs", expanded && "bg-muted/60")}
+                      className={cn("cursor-pointer text-xs", selected && "bg-muted/60")}
                     >
                       <TableCell className="py-2 font-medium">
                         {item.drugName}
@@ -344,8 +356,11 @@ export default function InventoryPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuGroup>
-                              <DropdownMenuItem onSelect={() => selectRow(item)}>
+                              <DropdownMenuItem onSelect={() => { selectRow(item); setAnalogueItem(item); }}>
                                 <Repeat2 /> Find analogues
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => setCertItem(item)}>
+                                <FileText /> View certificate
                               </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => router.push(`/audit?sku=${item.id}`)}>
                                 <ScrollText /> Audit Log
@@ -355,35 +370,6 @@ export default function InventoryPage() {
                         </DropdownMenu>
                       </TableCell>
                     </TableRow>
-                    {expanded && (
-                      <TableRow className="bg-muted/30 hover:bg-muted/30">
-                        <TableCell colSpan={9} className="py-3">
-                          <div className="grid gap-4 md:grid-cols-2">
-                            <div>
-                              <p className="mb-2 text-xs font-medium text-muted-foreground">Bio-equivalent analogues (internal sub-stores)</p>
-                              {item.analogues.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">No analogues on record for this SKU.</p>
-                              ) : (
-                                <ul className="flex flex-col gap-1.5">
-                                  {item.analogues.map((a) => (
-                                    <li key={a.id} className="flex items-center justify-between rounded-md border bg-card px-2.5 py-1.5 text-xs">
-                                      <span>
-                                        {a.drugName} <span className="text-muted-foreground">— {a.facility}{a.distanceKm > 0 ? ` (${a.distanceKm}km)` : ""}</span>
-                                      </span>
-                                      <Badge variant="secondary">{a.stock} {a.unit}</Badge>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                            <div className="flex items-start justify-end gap-2">
-                              <CertificateDialog item={item} />
-                            </div>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
                 );
               })}
               {filtered.length === 0 && (
@@ -399,6 +385,17 @@ export default function InventoryPage() {
           </Table>
         </div>
       </div>
+
+      <AnaloguesDialog
+        item={analogueItem}
+        open={analogueItem !== null}
+        onOpenChange={(o) => !o && setAnalogueItem(null)}
+      />
+      <CertificateDialog
+        item={certItem}
+        open={certItem !== null}
+        onOpenChange={(o) => !o && setCertItem(null)}
+      />
     </div>
   );
 }

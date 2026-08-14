@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
-import { shortageAlerts, shortageMatrix, type FacilityStockRow } from "@/lib/mock-data";
+import { useFacility } from "@/lib/facility-context";
+import { facilityById, shortageAlerts, shortageMatrix, type FacilityStockRow } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 function coverageTone(row: FacilityStockRow): StatusTone {
@@ -23,6 +24,7 @@ function coverageTone(row: FacilityStockRow): StatusTone {
 
 export default function ShortagesPage() {
   const { setFocus } = useCopilot();
+  const { facilityId, facility } = useFacility();
   const [alertId, setAlertId] = useState(shortageAlerts[0].id);
   const [search, setSearch] = useState("");
   const [transferFrom, setTransferFrom] = useState<string | undefined>();
@@ -30,9 +32,22 @@ export default function ShortagesPage() {
   const [dispatch, setDispatch] = useState<{ ref: string; time: string } | null>(null);
 
   const alert = shortageAlerts.find((a) => a.id === alertId)!;
-  const rows = shortageMatrix[alertId] ?? [];
-  const surplusFacilities = rows.filter((r) => coverageTone(r) === "surplus");
-  const filteredRows = rows.filter((r) => r.facility.toLowerCase().includes(search.trim().toLowerCase()));
+  // Resolve each row against the facility registry so names, types and
+  // distances have one source of truth, and "this facility" follows the
+  // site currently selected in the sidebar.
+  // distanceKm is measured from Central, so offset against the active site
+  // rather than reporting Central as "0km away" from a clinic.
+  const rows = (shortageMatrix[alertId] ?? []).map((r) => {
+    const f = facilityById(r.facilityId);
+    return {
+      ...r,
+      facility: f,
+      awayKm: Math.abs(f.distanceKm - facility.distanceKm),
+      isCurrent: r.facilityId === facilityId,
+    };
+  });
+  const surplusFacilities = rows.filter((r) => coverageTone(r) === "surplus" && !r.isCurrent);
+  const filteredRows = rows.filter((r) => r.facility.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   function selectAlert(id: string) {
     setAlertId(id);
@@ -97,13 +112,23 @@ export default function ShortagesPage() {
               {filteredRows.map((row) => {
                 const tone = coverageTone(row);
                 return (
-                  <li key={row.id} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs">
+                  <li
+                    key={row.id}
+                    className={cn(
+                      "flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs",
+                      row.isCurrent && "border-primary/40 bg-muted/40",
+                    )}
+                  >
                     <div className="flex min-w-0 items-center gap-2">
                       <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0">
-                        <p className="truncate font-medium">{row.facility}</p>
+                        <p className="truncate font-medium">
+                          {row.facility.name}
+                          {row.isCurrent && <span className="ml-1 font-normal text-muted-foreground">(this facility)</span>}
+                        </p>
                         <p className="flex items-center gap-1 text-muted-foreground">
-                          <MapPin className="size-3" /> {row.type} · {row.distanceKm === 0 ? "this facility" : `${row.distanceKm}km away`}
+                          <MapPin className="size-3" /> {row.facility.type} ·{" "}
+                          {row.isCurrent ? "current site" : `${row.awayKm}km away`}
                         </p>
                       </div>
                     </div>
@@ -143,7 +168,7 @@ export default function ShortagesPage() {
                     <SelectContent>
                       <SelectGroup>
                         {surplusFacilities.map((f) => (
-                          <SelectItem key={f.id} value={f.id}>{f.facility} — {f.units} units</SelectItem>
+                          <SelectItem key={f.id} value={f.id}>{f.facility.name} — {f.units} units</SelectItem>
                         ))}
                       </SelectGroup>
                     </SelectContent>
@@ -152,9 +177,9 @@ export default function ShortagesPage() {
 
                 <div className="flex items-center gap-2">
                   <Building2 className="size-3.5 text-muted-foreground" />
-                  <span>{transferFrom ? surplusFacilities.find((f) => f.id === transferFrom)?.facility : "Source"}</span>
+                  <span>{transferFrom ? surplusFacilities.find((f) => f.id === transferFrom)?.facility.name : "Source"}</span>
                   <ArrowRight className="size-3.5 text-muted-foreground" />
-                  <span>Central Hospital (this facility)</span>
+                  <span>{facility.name} (this facility)</span>
                 </div>
 
                 <div className="flex items-center justify-between">

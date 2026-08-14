@@ -9,7 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
-import { auditLogFor, formatAuditTimestamp, inventory, type AuditActorType, type InventoryItem } from "@/lib/mock-data";
+import { useFacility } from "@/lib/facility-context";
+import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType, type InventoryItem } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 const CERT_TONE: Record<InventoryItem["certStatus"], StatusTone> = {
@@ -27,11 +28,13 @@ const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string 
 
 function AuditPageInner() {
   const { setFocus } = useCopilot();
+  const { facilityId, facility } = useFacility();
   const searchParams = useSearchParams();
+  const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
   const skuParam = searchParams.get("sku");
-  const validSkuParam = skuParam && inventory.some((i) => i.id === skuParam) ? skuParam : null;
+  const validSkuParam = skuParam && items.some((i) => i.id === skuParam) ? skuParam : null;
 
-  const [itemId, setItemId] = useState(validSkuParam ?? inventory[0].id);
+  const [itemId, setItemId] = useState(validSkuParam ?? items[0].id);
 
   // A row's "Audit Log" action deep-links with ?sku=; keep the picker in
   // sync if that changes (e.g. navigating here again for a different SKU).
@@ -39,10 +42,12 @@ function AuditPageInner() {
     if (validSkuParam) setItemId(validSkuParam);
   }, [validSkuParam]);
 
-  const item = useMemo(() => inventory.find((i) => i.id === itemId)!, [itemId]);
+  // Falls back to the first SKU when the selected one isn't stocked at the
+  // facility you just switched to, rather than blowing up on a stale id.
+  const item = items.find((i) => i.id === itemId) ?? items[0];
   const entries = useMemo(
-    () => [...auditLogFor(itemId)].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1)),
-    [itemId],
+    () => [...auditLogFor(item.id)].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1)),
+    [item.id],
   );
 
   useEffect(() => {
@@ -54,15 +59,18 @@ function AuditPageInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Audit Log & Compliance</h1>
-          <p className="text-xs text-muted-foreground">Full history of clinical, AI, and regulatory events for a SKU.</p>
+          <p className="text-xs text-muted-foreground">
+            Clinical, AI, and regulatory events for SKUs stocked at{" "}
+            <span className="font-medium text-foreground">{facility.name}</span>.
+          </p>
         </div>
-        <Select value={itemId} onValueChange={setItemId}>
+        <Select value={item.id} onValueChange={setItemId}>
           <SelectTrigger size="sm" className="h-8 w-64 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
-              {inventory.map((i) => (
+              {items.map((i) => (
                 <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
               ))}
             </SelectGroup>

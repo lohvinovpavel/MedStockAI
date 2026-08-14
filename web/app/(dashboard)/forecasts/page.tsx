@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, XAxis, YAxis } from "recharts";
-import { Bot, CheckCircle2, PencilLine, Truck } from "lucide-react";
+import { Bot, CheckCircle2, PencilLine, RotateCcw, Sparkles, Truck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,9 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
-import { forecastDrugs } from "@/lib/mock-data";
+import { useFacility } from "@/lib/facility-context";
+import { useOrders } from "@/lib/orders-context";
+import { forecastDrugs, isoPlusDays, suppliers } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 const chartConfig: ChartConfig = {
@@ -31,23 +34,68 @@ function surgeTier(pct: number): { label: string; tone: StatusTone } {
 }
 
 export default function ForecastsPage() {
+  const router = useRouter();
   const { setFocus, requestEmergencyPlan } = useCopilot();
+  const { facilityId, facility } = useFacility();
+  const { addOrder } = useOrders();
   const [drugId, setDrugId] = useState(forecastDrugs[0].id);
-  const [dispatched, setDispatched] = useState(false);
   const [editingQty, setEditingQty] = useState(false);
   const [surgePct, setSurgePct] = useState(100);
+  // Per-SKU so declining one drug's suggestion doesn't hide the others.
+  const [declinedIds, setDeclinedIds] = useState<Set<string>>(new Set());
+  const [acceptedIds, setAcceptedIds] = useState<Set<string>>(new Set());
 
   const drug = useMemo(() => forecastDrugs.find((d) => d.id === drugId)!, [drugId]);
   const [quantity, setQuantity] = useState(drug.purchaseOrder.quantity);
 
+  const declined = declinedIds.has(drugId);
+  const accepted = acceptedIds.has(drugId);
+
   function selectDrug(id: string) {
     setDrugId(id);
-    setDispatched(false);
     setEditingQty(false);
     setSurgePct(100);
     const next = forecastDrugs.find((d) => d.id === id)!;
     setQuantity(next.purchaseOrder.quantity);
     setFocus({ kind: "sku", label: next.name, detail: `${next.model} forecast · ${next.confidence}% confidence` });
+  }
+
+  function declineSuggestion() {
+    setDeclinedIds((prev) => new Set(prev).add(drugId));
+    toast("AI suggestion declined.", { description: `No order was created for ${drug.name}.` });
+  }
+
+  function restoreSuggestion() {
+    setDeclinedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(drugId);
+      return next;
+    });
+  }
+
+  // Hands off to the order pipeline: lands in /orders as a draft awaiting
+  // review rather than dispatching straight to the supplier.
+  function acceptSuggestion() {
+    const supplier = suppliers.find((s) => s.name === drug.purchaseOrder.supplier) ?? suppliers[0];
+    const order = addOrder({
+      facilityId,
+      supplierId: supplier.id,
+      drugId: drug.id,
+      drugName: drug.name,
+      quantity,
+      unit: drug.purchaseOrder.unit,
+      unitCost: drug.purchaseOrder.unitCost,
+      shipping: supplier.shippingFlat,
+      status: "draft",
+      source: "ai_suggestion",
+      expectedDelivery: isoPlusDays(supplier.leadTimeDays),
+      note: `Generated from ${drug.confidence}% confidence forecast.`,
+    });
+    setAcceptedIds((prev) => new Set(prev).add(drugId));
+    toast.success(`Draft order ${order.id} created.`, {
+      description: `${quantity} ${drug.purchaseOrder.unit} of ${drug.name} for ${facility.name}.`,
+      action: { label: "Review", onClick: () => router.push("/orders") },
+    });
   }
 
   const surgeMultiplier = surgePct / 100;
@@ -176,10 +224,30 @@ export default function ForecastsPage() {
       </div>
 
       <div className="flex flex-col gap-3">
-        <Card className="gap-3 py-4">
+        {declined ? (
+          <Card className="gap-2 border-dashed py-3">
+            <CardContent className="flex items-center justify-between gap-2 px-4 text-xs">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Sparkles className="size-3.5" />
+                AI suggestion dismissed for {drug.name}.
+              </span>
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={restoreSuggestion}>
+                <RotateCcw className="size-3.5" />
+                Restore
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+        <Card className="gap-3 border-primary/30 py-4">
           <CardHeader className="px-4">
-            <CardTitle className="text-sm">AI Purchase Order</CardTitle>
-            <CardDescription className="text-xs">Generated from the {drug.confidence}% confidence forecast above.</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Sparkles className="size-4 text-primary" />
+              AI Purchase Order
+              <Badge variant="secondary" className="ml-auto text-[10px] font-normal">Suggestion</Badge>
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Generated from the {drug.confidence}% confidence forecast above, for {facility.name}. Review before it becomes an order.
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-4 text-xs">
             <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span className="font-medium">{drug.purchaseOrder.supplier}</span></div>
@@ -207,25 +275,22 @@ export default function ForecastsPage() {
             <Separator />
             <div className="flex justify-between text-sm font-semibold"><span>Estimated total</span><span className="font-mono tabular-nums">${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
           </CardContent>
-          <CardFooter className="flex gap-2 px-4">
-            <Button variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => setEditingQty(true)} disabled={dispatched}>
+          <CardFooter className="flex flex-wrap gap-2 px-4">
+            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={declineSuggestion} disabled={accepted}>
+              <X data-icon="inline-start" />
+              Decline
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => setEditingQty(true)} disabled={accepted}>
               <PencilLine data-icon="inline-start" />
               Adjust Quantity
             </Button>
-            <Button
-              size="sm"
-              className="h-8 flex-1 text-xs"
-              disabled={dispatched}
-              onClick={() => {
-                setDispatched(true);
-                toast.success(`PO for ${quantity} ${drug.purchaseOrder.unit} of ${drug.name} dispatched to ${drug.purchaseOrder.supplier}.`);
-              }}
-            >
-              {dispatched ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
-              {dispatched ? "Dispatched" : "Approve & Dispatch PO"}
+            <Button size="sm" className="h-8 flex-1 text-xs" disabled={accepted} onClick={acceptSuggestion}>
+              {accepted ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
+              {accepted ? "Draft created" : "Create Draft Order"}
             </Button>
           </CardFooter>
         </Card>
+        )}
       </div>
     </div>
   );

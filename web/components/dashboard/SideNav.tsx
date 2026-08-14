@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronDown, Globe, LogOut, Package, Plus, ScrollText, Settings, TrendingUp, User as UserIcon } from "lucide-react";
+import { ChevronDown, Globe, LogOut, Package, Plus, ScrollText, Settings, ShoppingCart, TrendingUp, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -16,20 +15,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { useFacility } from "@/lib/facility-context";
+import { useOrders } from "@/lib/orders-context";
+import { operatedFacilities } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/inventory", label: "Inventory & Batches", icon: Package },
   { href: "/forecasts", label: "Restock & Forecasts", icon: TrendingUp },
+  { href: "/orders", label: "Purchase & Orders", icon: ShoppingCart },
   { href: "/shortages", label: "Shortage Matrix", icon: Globe },
   { href: "/audit", label: "Audit Log", icon: ScrollText },
-];
-
-const FACILITIES = [
-  "Clinic #1 (Central Hospital)",
-  "Clinic #2 (Riverside Outpatient)",
-  "Clinic #3 (West End Community)",
-  "Regional Warehouse North",
 ];
 
 // The whole dashboard shell now lives here: brand + route tabs up top,
@@ -39,7 +35,8 @@ const FACILITIES = [
 export function SideNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const [facility, setFacility] = useState(FACILITIES[0]);
+  const { facilityId, setFacilityId, facility } = useFacility();
+  const { draftCount } = useOrders();
 
   return (
     <nav className="flex w-52 shrink-0 flex-col border-r bg-card p-2">
@@ -53,6 +50,9 @@ export function SideNav() {
       <div className="flex flex-1 flex-col gap-1">
         {TABS.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
+          // Draft orders awaiting review — makes the forecast → orders
+          // handoff visible the moment a suggestion is accepted.
+          const badge = href === "/orders" && draftCount > 0 ? draftCount : null;
           return (
             <Link
               key={href}
@@ -64,6 +64,16 @@ export function SideNav() {
             >
               <Icon className="size-4" />
               {label}
+              {badge && (
+                <span
+                  className={cn(
+                    "ml-auto flex min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] tabular-nums",
+                    active ? "bg-primary-foreground/20 text-primary-foreground" : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                  )}
+                >
+                  {badge}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -74,7 +84,7 @@ export function SideNav() {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="h-8 w-full justify-between gap-1 text-xs font-normal">
-            <span className="truncate">{facility}</span>
+            <span className="truncate">{facility.name}</span>
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
@@ -82,9 +92,19 @@ export function SideNav() {
           <DropdownMenuLabel>Switch facility</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            {FACILITIES.map((f) => (
-              <DropdownMenuItem key={f} onSelect={() => setFacility(f)}>
-                {f}
+            {operatedFacilities.map((f) => (
+              <DropdownMenuItem
+                key={f.id}
+                onSelect={() => setFacilityId(f.id)}
+                className={cn(f.id === facilityId && "bg-accent")}
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate">{f.name}</span>
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    {f.type}
+                    {f.distanceKm > 0 ? ` · ${f.distanceKm}km` : " · primary site"}
+                  </span>
+                </span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuGroup>
