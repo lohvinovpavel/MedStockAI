@@ -1,0 +1,12 @@
+# 265MB of provider binaries. Never commit these.
+.terraform/
+.terraform.tfstate.lock.info
+
+# State lives in GCS (see README). A local state file here means someone
+# ran init without the backend — do not let it into the repo.
+*.tfstate
+*.tfstate.*
+
+# Real values. terraform.tfvars.example is the committed template.
+terraform.tfvars
+*.auto.tfvars

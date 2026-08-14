@@ -1,0 +1,74 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base is production-shaped (deploy/k8s/kustomization.yaml, namespace:
+# medstock already set there) — this overlay only patches what a sandbox
+# needs different. See docs/infra-dev-plan.md §3.
+resources:
+  - ../../k8s
+  - cluster-issuer.yaml
+
+# europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock: infra/README.md's sed step fills this from
+# `terraform output -raw artifact_registry_repo` after apply.
+images:
+  - name: ghcr.io/medstockai/analogue
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/analogue
+  - name: ghcr.io/medstockai/auth
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/auth
+  - name: ghcr.io/medstockai/compliance
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/compliance
+  - name: ghcr.io/medstockai/ingest
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/ingest
+  - name: ghcr.io/medstockai/inventory
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/inventory
+  - name: ghcr.io/medstockai/patient-profiling
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/patient-profiling
+  - name: ghcr.io/medstockai/prediction
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/prediction
+  - name: ghcr.io/medstockai/warehouse
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/warehouse
+  - name: ghcr.io/medstockai/web
+    newName: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock/web
+
+patches:
+  # Sixteen pods on two Spot e2-mediums for a sandbox — plan §3.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # Annotations merge (map) safely without disturbing medstock-api's
+  # existing use-regex/rewrite-target annotations.
+  - path: ingress-annotations.yaml
+
+  # host + tls: JSON6902, not strategic merge — spec.rules has no merge key,
+  # so a strategic-merge patch would replace the whole rules list and wipe
+  # out the /api/* paths (docs/infra-dev-plan.md §0.1, Defect B).
+  # REPLACE-ME: infra/README.md's sed step fills this from
+  # `terraform output -raw ingress_host` after apply.
+  - target:
+      kind: Ingress
+      name: medstock-api
+    patch: |-
+      - op: add
+        path: /spec/rules/0/host
+        value: medstock-dev.34-78-26-132.sslip.io
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts: [medstock-dev.34-78-26-132.sslip.io]
+            secretName: medstock-dev-tls
+  - target:
+      kind: Ingress
+      name: medstock-web
+    patch: |-
+      - op: add
+        path: /spec/rules/0/host
+        value: medstock-dev.34-78-26-132.sslip.io
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts: [medstock-dev.34-78-26-132.sslip.io]
+            secretName: medstock-dev-tls
