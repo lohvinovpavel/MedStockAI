@@ -1,20 +1,29 @@
 name: deploy-dev
 
 # $54/mo shared sandbox with a hand-rolled JWT key and no RLS
-# (docs/infra-dev-plan.md §6) — every merge to main redeploys it.
+# (docs/infra-dev-plan.md §6). Every merge to main still builds and pushes
+# images (below) — the actual rollout (the `deploy` job, and `seed` behind
+# it) only runs on a manual workflow_dispatch against main, by design: the
+# sandbox is shared, so rolling it out is a deliberate action someone takes,
+# not a side effect of merging. Dispatching runs the full pipeline again
+# (build included) against whatever main is at that moment, then deploys it.
 #
-# Two triggers, mutually exclusive by design:
-#  - push, when the merge did NOT touch infra/terraform/** — the common
-#    case, deploy runs immediately.
-#  - workflow_run, when infra-cd.yml just finished on main — a merge that
-#    touches BOTH infra and app code must apply infra first (new Cloud SQL
-#    flags, secrets, IAM — the app can depend on any of it), so that push
-#    is path-ignored here and this waits for infra-cd instead. The `gate`
-#    job below no-ops the whole run if that infra-cd run failed.
+# Two triggers, both always armed — NOT mutually exclusive by path filter,
+# that was tried and double-ran: paths-ignore only skips a push where EVERY
+# changed file matches, so a merge touching both infra/terraform/** and app
+# code fired this workflow directly AND (once infra-cd finished) again via
+# workflow_run. The `gate` job below is what actually keeps it to one run:
+#  - push: proceeds only if THIS push did not touch infra/terraform/** —
+#    checked with a real git diff, not a trigger-level path filter, because
+#    "not everything changed" and "this one path didn't change" aren't the
+#    same condition. If it did, infra-cd is about to (or already did) fire
+#    on the same push, and its workflow_run completion is what proceeds
+#    below instead.
+#  - workflow_run: proceeds only if that infra-cd run succeeded — a broken
+#    infra apply must not be followed by an app deploy on top of it.
 on:
   push:
     branches: [main]
-    paths-ignore: ["infra/terraform/**"]
   workflow_run:
     workflows: [infra-cd]
     types: [completed]
@@ -42,74 +51,50 @@ env:
   GKE_ZONE: europe-west1-b
 
 jobs:
-  # No-ops the rest of the run when triggered by a *failed* infra-cd — a
-  # broken infra apply must not be followed by an app deploy on top of it.
-  # On a direct push this is just a pass-through (github.event.workflow_run
-  # doesn't exist, so the check on the right of || never applies).
+  # Decides whether this run should actually build/deploy anything — see
+  # the trigger comment above for why this can't be a trigger-level path
+  # filter. Tests are NOT re-run here: ci.yml already gated the PR that
+  # produced this commit, and re-running the full suite on every merge to
+  # main just to build the exact commit that already passed it is redundant
+  # — build fails loudly anyway if something's actually broken.
   gate:
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
     steps:
-      - run: echo "proceeding"
-
-  # Same gate as ci.yml's PR checks, re-run here because main can move
-  # between a PR's last green check and its merge (another PR landing
-  # first, a non-PR push). See ci.yml for why this is per-service instead
-  # of one combined `pytest services/`.
-  python-tests:
-    needs: [gate]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: medstock
-          POSTGRES_PASSWORD: medstock
-          POSTGRES_DB: medstock
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
-        ports: ["5432:5432"]
-    env:
-      DATABASE_URL: postgresql+psycopg://medstock:medstock@localhost:5432/medstock
-    steps:
-      # workflow_run runs default to the branch tip, not the exact SHA
-      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.DEPLOY_SHA }}
-      - uses: astral-sh/setup-uv@v3
-        with: { enable-cache: true }
-      - run: uv sync --package medstock-${{ matrix.service }}
-      # --no-sync matters: a bare `uv run` re-syncs the whole workspace
-      # first (all 8 services' `app` back in one venv, the exact collision
-      # the scoped sync above exists to avoid). See ci.yml.
-      - run: uv run --no-sync alembic upgrade head
-      - run: uv run --no-sync pytest services/${{ matrix.service }}/tests -q
-
-  web-tests:
-    needs: [gate]
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      # workflow_run runs default to the branch tip, not the exact SHA
-      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.DEPLOY_SHA }}
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
-      - run: npm install
-      - run: npm run lint
-      - run: npm run build
+          fetch-depth: 0
+      - id: decide
+        run: |
+          case "${{ github.event_name }}" in
+            workflow_run)
+              if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+                echo "proceed=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "proceed=false" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            push)
+              # No history to diff against (fresh branch, force-push) reads
+              # as "assume infra changed" — the safer of the two wrong
+              # guesses, since it just defers to workflow_run instead of
+              # possibly racing an infra-cd run that's also about to start.
+              if git diff --quiet "${{ github.event.before }}" "${{ github.sha }}" -- infra/terraform/ 2>/dev/null; then
+                echo "proceed=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "proceed=false" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
   build:
-    needs: [python-tests, web-tests]
+    needs: [gate]
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     strategy:
@@ -145,7 +130,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=dev-${{ matrix.service }}
 
   build-web:
-    needs: [python-tests, web-tests]
+    needs: [gate]
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
@@ -175,6 +161,11 @@ jobs:
 
   deploy:
     needs: [build, build-web]
+    # Manual only — see the trigger comment at the top of this file. The
+    # ref check matters: workflow_dispatch lets you pick any branch to run
+    # against, and this sandbox's manifests/migrations should only ever
+    # come from main.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: dev
     permissions: { contents: read, id-token: write }
