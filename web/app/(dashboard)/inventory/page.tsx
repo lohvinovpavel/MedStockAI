@@ -1,0 +1,399 @@
+"use client";
+
+import { Fragment, useMemo, useState } from "react";
+import type { DateRange } from "react-day-picker";
+import { toast } from "sonner";
+import {
+  Search,
+  Plus,
+  CalendarIcon,
+  ChevronDown,
+  MoreHorizontal,
+  FileText,
+  Repeat2,
+  Boxes,
+  AlertTriangle,
+  Clock,
+  ShieldAlert,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { useCopilot } from "@/lib/copilot-context";
+import {
+  inventory,
+  inventoryKpis,
+  daysOfSupply,
+  stockRisk,
+  daysUntil,
+  type InventoryItem,
+  type StockRisk,
+} from "@/lib/mock-data";
+import { cn } from "@/lib/utils";
+
+const RISK_LABEL: Record<StockRisk, string> = { critical: "Critical", warning: "Warning", normal: "Normal" };
+const RISK_CLASS: Record<StockRisk, string> = {
+  critical: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400",
+  warning: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400",
+  normal: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400",
+};
+
+function expiryClass(days: number) {
+  if (days <= 14) return "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400";
+  if (days <= 30) return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400";
+}
+
+const CERT_CLASS: Record<InventoryItem["certStatus"], string> = {
+  valid: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-400",
+  pending: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-400",
+  expired: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400",
+};
+
+function KpiCard({ icon: Icon, label, value, tone }: { icon: typeof Boxes; label: string; value: string | number; tone?: "critical" | "warning" }) {
+  return (
+    <Card className="gap-1 py-3">
+      <CardContent className="flex items-center gap-3 px-4">
+        <span
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-md",
+            tone === "critical" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
+            tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
+            !tone && "bg-muted text-muted-foreground",
+          )}
+        >
+          <Icon className="size-4" />
+        </span>
+        <div>
+          <p className="text-lg font-semibold leading-none">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{label}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReceiveBatchDialog() {
+  const [open, setOpen] = useState(false);
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setOpen(false);
+    toast.success("Batch received into inventory.");
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" className="h-8 text-xs">
+          <Plus data-icon="inline-start" />
+          Receive Batch
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Receive Batch</DialogTitle>
+          <DialogDescription>Log a new batch into the current facility&apos;s stock.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit}>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="rb-drug">Drug name</FieldLabel>
+              <Input id="rb-drug" placeholder="e.g. Amoxicillin/Clavulanate 875mg" required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rb-batch">Batch #</FieldLabel>
+              <Input id="rb-batch" placeholder="e.g. AMX-24118-B" required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rb-qty">Quantity</FieldLabel>
+              <Input id="rb-qty" type="number" min={1} placeholder="0" required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="rb-expiry">Expiry date</FieldLabel>
+              <Input id="rb-expiry" type="date" required />
+            </Field>
+          </FieldGroup>
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit">Save batch</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CertificateDialog({ item }: { item: InventoryItem }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" className="h-7 text-xs">
+          <FileText data-icon="inline-start" />
+          View Certificate
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{item.certAuthority} Certificate — {item.drugName}</DialogTitle>
+          <DialogDescription>Certificate #{item.certNumber}</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed p-8 text-center">
+          <FileText className="size-10 text-muted-foreground" />
+          <div>
+            <p className="text-sm font-medium">{item.certAuthority}-{item.certNumber}.pdf</p>
+            <p className="text-xs text-muted-foreground">Mock certificate preview — document viewer not wired in this demo.</p>
+          </div>
+          <Badge variant="outline" className={cn("capitalize", CERT_CLASS[item.certStatus])}>{item.certStatus}</Badge>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export default function InventoryPage() {
+  const { setFocus } = useCopilot();
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<"all" | StockRisk>("all");
+  const [range, setRange] = useState<DateRange | undefined>();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    return inventory.filter((item) => {
+      const q = search.trim().toLowerCase();
+      if (q && !(item.drugName.toLowerCase().includes(q) || item.inn.toLowerCase().includes(q) || item.atcCode.toLowerCase().includes(q))) {
+        return false;
+      }
+      if (status !== "all" && stockRisk(item) !== status) return false;
+      if (range?.from) {
+        const expiry = new Date(item.expiryDate);
+        if (expiry < range.from) return false;
+        if (range.to && expiry > range.to) return false;
+      }
+      return true;
+    });
+  }, [search, status, range]);
+
+  function selectRow(item: InventoryItem) {
+    const next = selectedId === item.id ? null : item.id;
+    setSelectedId(next);
+    if (next) {
+      setFocus({
+        kind: "sku",
+        label: item.drugName,
+        detail: `Batch ${item.batchNumber} · ${item.currentStock} ${item.unit} on hand · expires ${item.expiryDate}`,
+      });
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4 p-4">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">Inventory & Batches</h1>
+        <p className="text-xs text-muted-foreground">Stock on hand, batch traceability, and certificate status across the formulary.</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <KpiCard icon={Boxes} label="Total SKUs" value={inventoryKpis.totalSkus.toLocaleString()} />
+        <KpiCard icon={AlertTriangle} label="Critical stock (<3d)" value={inventoryKpis.criticalStock} tone="critical" />
+        <KpiCard icon={Clock} label="Expiring soon (<30d)" value={inventoryKpis.expiringSoon} tone="warning" />
+        <KpiCard icon={ShieldAlert} label="Pending certificates" value={inventoryKpis.pendingCerts} tone="warning" />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter by SKU, INN, or ATC code…"
+            className="h-8 w-64 pl-8 text-xs"
+          />
+        </div>
+
+        <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+          <SelectTrigger size="sm" className="h-8 w-36 text-xs">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+              <SelectItem value="warning">Warning</SelectItem>
+              <SelectItem value="normal">Normal</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs font-normal">
+              <CalendarIcon className="size-3.5" />
+              {range?.from ? (range.to ? `${range.from.toLocaleDateString()} – ${range.to.toLocaleDateString()}` : range.from.toLocaleDateString()) : "Expiry date range"}
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar mode="range" selected={range} onSelect={setRange} numberOfMonths={2} />
+            {range?.from && (
+              <div className="border-t p-2">
+                <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={() => setRange(undefined)}>Clear</Button>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        <div className="ml-auto">
+          <ReceiveBatchDialog />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border bg-card">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-card">
+              <TableRow>
+                <TableHead>Drug Name & Form</TableHead>
+                <TableHead>INN</TableHead>
+                <TableHead>Batch #</TableHead>
+                <TableHead>Stock</TableHead>
+                <TableHead>Daily Burn</TableHead>
+                <TableHead>Stockout Risk</TableHead>
+                <TableHead>Expiry</TableHead>
+                <TableHead>Certificate</TableHead>
+                <TableHead className="w-8" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((item) => {
+                const risk = stockRisk(item);
+                const expiryDays = daysUntil(item.expiryDate);
+                const expanded = selectedId === item.id;
+                return (
+                  <Fragment key={item.id}>
+                    <TableRow
+                      onClick={() => selectRow(item)}
+                      className={cn("cursor-pointer text-xs", expanded && "bg-muted/60")}
+                    >
+                      <TableCell className="py-2 font-medium">
+                        {item.drugName}
+                        <span className="block font-normal text-muted-foreground">{item.form}</span>
+                      </TableCell>
+                      <TableCell className="py-2 text-muted-foreground">{item.inn}</TableCell>
+                      <TableCell className="py-2 font-mono text-[11px]">{item.batchNumber}</TableCell>
+                      <TableCell className="py-2">{item.currentStock} <span className="text-muted-foreground">{item.unit}</span></TableCell>
+                      <TableCell className="py-2 text-muted-foreground">{item.dailyBurnRate}/day</TableCell>
+                      <TableCell className="py-2">
+                        <Badge variant="outline" className={cn("text-[11px]", RISK_CLASS[risk])}>
+                          {RISK_LABEL[risk]} · {Number.isFinite(daysOfSupply(item)) ? `${daysOfSupply(item)}d` : "∞"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <Badge variant="outline" className={cn("text-[11px]", expiryClass(expiryDays))}>
+                          {item.expiryDate} ({expiryDays}d)
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <Badge variant="outline" className={cn("text-[11px] capitalize", CERT_CLASS[item.certStatus])}>
+                          {item.certAuthority} · {item.certStatus}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="size-6">
+                              <MoreHorizontal className="size-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem onSelect={() => selectRow(item)}>
+                                <Repeat2 /> Find analogues
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                    {expanded && (
+                      <TableRow className="bg-muted/30 hover:bg-muted/30">
+                        <TableCell colSpan={9} className="py-3">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div>
+                              <p className="mb-2 text-xs font-medium text-muted-foreground">Bio-equivalent analogues (internal sub-stores)</p>
+                              {item.analogues.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No analogues on record for this SKU.</p>
+                              ) : (
+                                <ul className="flex flex-col gap-1.5">
+                                  {item.analogues.map((a) => (
+                                    <li key={a.id} className="flex items-center justify-between rounded-md border bg-card px-2.5 py-1.5 text-xs">
+                                      <span>
+                                        {a.drugName} <span className="text-muted-foreground">— {a.facility}{a.distanceKm > 0 ? ` (${a.distanceKm}km)` : ""}</span>
+                                      </span>
+                                      <Badge variant="secondary">{a.stock} {a.unit}</Badge>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                            <div className="flex items-start justify-end gap-2">
+                              <CertificateDialog item={item} />
+                            </div>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                );
+              })}
+              {filtered.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-8 text-center text-xs text-muted-foreground">
+                    No SKUs match the current filters.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    </div>
+  );
+}
