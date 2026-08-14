@@ -9,14 +9,15 @@ starts failing on its own schedule.
 from datetime import date
 
 import pytest
-
 from medstock_shared.certification import (
     YELLOW_EXPIRY_WINDOW_DAYS,
     Recall,
     Severity,
     Status,
     evaluate,
+    ndc11,
     parse_fda_date,
+    product_ndc_candidates,
     ruleset,
     status_for,
 )
@@ -30,6 +31,48 @@ def codes(findings) -> set[str]:
 
 def colour(**kwargs) -> Status:
     return status_for(evaluate(today=TODAY, **kwargs))
+
+
+# --- dates ------------------------------------------------------------------
+
+
+# --- NDC formats -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0093-9222-05", "00093922205"),  # 4-4-2, the common published form
+        ("00093-922-05", "00093092205"),  # 5-3-2 — pads the *product* segment
+        ("0904-2015-59", "00904201559"),  # verified live against openFDA
+        ("0093-9222", "000939222"),  # product NDC, no package segment
+        ("00093922205", "00093922205"),  # already canonical
+    ],
+)
+def test_ndc11_pads_to_5_4_2(raw, expected):
+    assert ndc11(raw) == expected
+
+
+def test_different_hyphenations_are_different_drugs():
+    """`0093-9222-05` and `00093-922-05` look alike and are not the same NDC.
+    Padding the wrong segment silently points a badge at another product."""
+    assert ndc11("0093-9222-05") != ndc11("00093-922-05")
+
+
+def test_candidates_cover_every_hyphenation_the_padding_erased():
+    """11 digits is 5-4-2, but the published original may have been 4-4-2,
+    5-3-2 or 5-4-1 — nothing in the digits says which."""
+    assert product_ndc_candidates("00093922205") == ["0093-9222", "00093-9222"]
+    assert product_ndc_candidates("00113041178") == ["0113-0411", "00113-411", "00113-0411"]
+
+
+def test_candidates_round_trip_through_ndc11():
+    for candidate in product_ndc_candidates("00904201559"):
+        assert ndc11(f"{candidate}-59") == "00904201559"
+
+
+def test_non_canonical_input_is_returned_untouched():
+    assert product_ndc_candidates("not-an-ndc") == ["not-an-ndc"]
 
 
 # --- dates ------------------------------------------------------------------

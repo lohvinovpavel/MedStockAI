@@ -7,14 +7,13 @@ required: the colour is not secret, but the endpoint is not public either.
 """
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.orm import Session
-
 from medstock_shared.auth import Principal, require
 from medstock_shared.certification import RULESET_VERSION, Status, ruleset
 from medstock_shared.db import engine
 from medstock_shared.models import CertificationFinding, DrugCertification
+from sqlalchemy import case, func, select, text
+from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.orm import Session
 
 app = FastAPI(title="compliance")
 
@@ -23,6 +22,15 @@ app = FastAPI(title="compliance")
 MAX_BATCH = 100
 
 _NOT_MIGRATED = "certification tables are not migrated"
+
+# Severity is stored as text, and ordering by it directly is alphabetical —
+# "info" then "red" then "yellow", which puts a Class I recall below a note
+# saying we had no dates. Rank it explicitly: worst reason first.
+_SEVERITY_RANK = case(
+    (CertificationFinding.severity == "red", 0),
+    (CertificationFinding.severity == "yellow", 1),
+    else_=2,
+)
 
 
 def _rows_or_503(session: Session, stmt):
@@ -101,11 +109,14 @@ def _finding_counts(session: Session, ndcs: list[str]) -> dict[str, int]:
     '2 reasons' without fetching the evidence for every row."""
     if not ndcs:
         return {}
-    rows = session.execute(
+    # Through the same guard as everything else: one of the two tables existing
+    # without the other is still "not migrated", not a 500.
+    rows = _rows_or_503(
+        session,
         select(CertificationFinding.ndc, func.count())
         .where(CertificationFinding.ndc.in_(ndcs))
-        .group_by(CertificationFinding.ndc)
-    ).all()
+        .group_by(CertificationFinding.ndc),
+    )
     return {str(n): int(c) for n, c in rows}
 
 
@@ -139,7 +150,7 @@ def get_certificate(
         findings = session.execute(
             select(CertificationFinding)
             .where(CertificationFinding.ndc == ndc)
-            .order_by(CertificationFinding.severity, CertificationFinding.code)
+            .order_by(_SEVERITY_RANK, CertificationFinding.code)
         ).scalars().all()
 
     return {

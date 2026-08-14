@@ -2,35 +2,48 @@
 -> drug_certification / certification_finding (COMP-1).
 
 Two feeds, one pass. The NDC Directory gives the dates that decide whether a
-product is still legally marketed; Enforcement gives open recalls. Both are
+product is still legally marketed; Enforcement gives open recalls.  Both are
 keyless openFDA JSON endpoints.
 
-**Budget.** openFDA allows 1 000 requests/day *per IP* (docs/services.md §7) and
-that budget is shared with every other feed and with COMP-2's on-demand
-exploration. This job pages in bulk — 1 000 records per request, capped by
-`MAX_PAGES` — rather than querying per drug.
+Field names here were verified against live responses on 2026-08-14 — they are
+not placeholders. What the probes established, because each one shaped the code:
 
-ponytail: the response field names below follow openFDA's documented shape but
-have not been verified against a live response. The natural keys (`ndc`, and
-`code`+`source_ref` for findings) are what must stay stable; individual field
-names may move. Do not point a real schedule at this until they are checked.
+* **`skip` is capped at 25 000.** Past that openFDA answers `400`, and past the
+  end of a result set it answers `404`. So the directory (136 942 products,
+  115 306 of them finished) *cannot* be fully synced by paging. Bulk coverage
+  needs openFDA's download endpoint; this job deliberately does the bounded
+  thing instead — see `run()`.
+* **Only 1 033 of 2 630 ongoing recalls carry `openfda.package_ndc`.** The other
+  61% name their product in `product_description` free text only, and cannot be
+  joined to an NDC by any deterministic rule. This job filters to the joinable
+  ones rather than pretending; extracting identity from that free text is COMP-2's
+  `extract` task, and this is the concrete reason it exists.
+* Recall payloads carry `classification`, `status`, `recall_number` and
+  `reason_for_recall` at the top level, with NDCs nested under `openfda`.
+
+**Budget.** openFDA allows 1 000 requests/day per IP (docs/services.md §7),
+shared with every other feed. This job reads `meta.results.total` from the first
+page and stops there, so a normal run costs a handful of requests and never
+spends any on a 404.
 """
 
 from datetime import date
 
-from sqlalchemy import delete
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
-
+import httpx
 from medstock_shared import engine
 from medstock_shared.certification import (
     RULESET_VERSION,
     Recall,
     evaluate,
+    ndc11,
     parse_fda_date,
+    product_ndc_candidates,
     status_for,
 )
-from medstock_shared.models import CertificationFinding, DrugCertification
+from medstock_shared.models import CertificationFinding, DrugCertification, StockSnapshot
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from ._source import fetch_json
 
@@ -38,19 +51,39 @@ NDC_URL = "https://api.fda.gov/drug/ndc.json"
 ENFORCEMENT_URL = "https://api.fda.gov/drug/enforcement.json"
 
 PAGE_SIZE = 1000
-MAX_PAGES = 20  # 20k products; raise only with the daily budget in mind
-RECALL_PAGES = 5
+SKIP_MAX = 25_000  # openFDA answers 400 above this
+DIRECTORY_PAGES = 20  # bounded sweep when no NDC list is given
+
+# Only recalls that can actually be joined to a product. Without this the job
+# pages through ~1 600 records it can do nothing with.
+ONGOING_JOINABLE = 'status:"Ongoing" AND _exists_:openfda.package_ndc'
 
 
 def _pages(url: str, params: dict, max_pages: int) -> list[dict]:
-    """openFDA pages with limit/skip and 404s an empty result set rather than
-    returning `results: []`. A short page means the end."""
+    """Page until the result set is exhausted, `max_pages`, or openFDA's skip
+    ceiling — whichever comes first.
+
+    `meta.results.total` on the first response tells us how far to go, so the
+    common path never provokes the end-of-results 404. A 404 is still tolerated
+    (the total can move between pages); anything else propagates, because a
+    swallowed timeout would truncate the feed and then write a complete-looking
+    result for a fraction of the catalogue.
+    """
     out: list[dict] = []
+    total: int | None = None
+
     for page in range(max_pages):
-        try:
-            data = fetch_json(url, params={**params, "limit": PAGE_SIZE, "skip": page * PAGE_SIZE})
-        except Exception:  # noqa: BLE001 — an exhausted page set is not a failure
+        skip = page * PAGE_SIZE
+        if skip > SKIP_MAX or (total is not None and skip >= total):
             break
+        try:
+            data = fetch_json(url, params={**params, "limit": PAGE_SIZE, "skip": skip})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                break  # past the last page
+            raise
+        if total is None:
+            total = data.get("meta", {}).get("results", {}).get("total")
         results = data.get("results", [])
         out.extend(results)
         if len(results) < PAGE_SIZE:
@@ -59,8 +92,8 @@ def _pages(url: str, params: dict, max_pages: int) -> list[dict]:
 
 
 def _ndcs_of(record: dict) -> list[str]:
-    """A recall names its products in several places depending on the feed
-    version. Collect all of them and let the caller de-duplicate."""
+    """Every NDC a recall names. Verified: these live under `openfda`, and are
+    absent entirely on 61% of ongoing recalls."""
     openfda = record.get("openfda") or {}
     found = list(openfda.get("package_ndc", [])) + list(openfda.get("product_ndc", []))
     if record.get("product_ndc"):
@@ -68,10 +101,51 @@ def _ndcs_of(record: dict) -> list[str]:
     return [str(n) for n in found if n]
 
 
+def _product_ndcs(product: dict) -> list[str]:
+    """Every NDC a directory record answers to: the product NDC plus each
+    package NDC under it.
+
+    Both are needed for the recall join — enforcement annotates products by
+    package NDC, so matching on `product_ndc` alone drops the join entirely.
+    """
+    found = [product.get("product_ndc") or product.get("ndc")]
+    for pack in product.get("packaging") or []:
+        if isinstance(pack, dict) and pack.get("package_ndc"):
+            found.append(pack["package_ndc"])
+    return [str(n) for n in found if n]
+
+
+def _package_ndcs(product: dict) -> list[str]:
+    """Just the package NDCs — what a certification row is keyed by.
+
+    Distinct from `_product_ndcs`, which also includes the product NDC for the
+    recall join. A product NDC has no package segment, so normalising it gives a
+    9-digit value that can never match an inventory row; keying on it would
+    create a row nothing ever reads.
+    """
+    return [
+        str(pack["package_ndc"])
+        for pack in product.get("packaging") or []
+        if isinstance(pack, dict) and pack.get("package_ndc")
+    ]
+
+
+def _recalls_for(product: dict, index: dict[str, list[Recall]]) -> list[Recall]:
+    """Open recalls against any of this product's NDCs, de-duplicated — one
+    recall listing several package sizes is still one recall."""
+    seen: dict[str, Recall] = {}
+    for ndc in _product_ndcs(product):
+        for recall in index.get(ndc, []):
+            # Recalls without a number cannot be keyed; fall back to identity so
+            # two distinct ones are not collapsed into one.
+            seen[recall.recall_number or f"id:{id(recall)}"] = recall
+    return list(seen.values())
+
+
 def recalls_by_ndc() -> dict[str, list[Recall]]:
-    """Open drug recalls, indexed by every NDC they name."""
+    """Open, joinable drug recalls indexed by every NDC they name."""
     index: dict[str, list[Recall]] = {}
-    for row in _pages(ENFORCEMENT_URL, {"search": 'status:"Ongoing"'}, RECALL_PAGES):
+    for row in _pages(ENFORCEMENT_URL, {"search": ONGOING_JOINABLE}, max_pages=5):
         recall = Recall(
             classification=row.get("classification"),
             status=row.get("status"),
@@ -84,16 +158,54 @@ def recalls_by_ndc() -> dict[str, list[Recall]]:
     return index
 
 
-def _product_to_values(
-    product: dict, recalls: list[Recall], today: date | None = None
-) -> tuple[dict, list[dict]] | None:
-    """One source record -> one certification row plus its findings.
+def _quote(ndc: str) -> str:
+    return '"' + ndc.replace('"', "") + '"'
 
-    Returns `None` for a record with no usable NDC — there is nothing to key on.
+
+def products_for_ndcs(ndcs: list[str], batch: int = 12) -> list[dict]:
+    """Directory records for a set of 11-digit NDCs.
+
+    Each one expands to its plausible hyphenations (`product_ndc_candidates`)
+    because openFDA is not searchable by the 11-digit form. Batches stay small:
+    every NDC contributes two or three OR-terms to the query string.
+
+    This is the targeted path — certifying the drugs actually on a shelf costs a
+    handful of requests, where sweeping the directory cannot reach past 25 000
+    records however many it spends.
     """
-    ndc = product.get("product_ndc") or product.get("ndc")
-    if not ndc:
-        return None
+    out: list[dict] = []
+    for i in range(0, len(ndcs), batch):
+        terms = [_quote(c) for n in ndcs[i : i + batch] for c in product_ndc_candidates(n)]
+        search = "product_ndc:(" + " OR ".join(terms) + ")"
+        try:
+            data = fetch_json(NDC_URL, params={"search": search, "limit": PAGE_SIZE})
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                continue  # nothing in this chunk is in the directory — legitimately Unknown
+            raise
+        out.extend(data.get("results", []))
+    return out
+
+
+def _product_to_rows(
+    product: dict, recalls: list[Recall], today: date | None = None
+) -> list[tuple[dict, list[dict]]]:
+    """One source record -> one certification row **per package NDC**.
+
+    A directory record describes a product; inventory holds package NDCs. Since
+    the badge has to be findable by the NDC on the shelf, each package gets its
+    own row carrying the product's status. Packages of one product share a
+    status by construction — approval and recalls apply to the product.
+
+    Returns `[]` for a record with no usable NDC: there is nothing to key on.
+    """
+    # Packages first; fall back to the product NDC only when the record lists no
+    # packaging at all, so such a product is still recorded rather than dropped.
+    packages = _package_ndcs(product)
+    source = packages or [n for n in [product.get("product_ndc") or product.get("ndc")] if n]
+    keys = sorted({ndc11(str(n)) for n in source})
+    if not keys:
+        return []
 
     marketing_end = parse_fda_date(product.get("marketing_end_date"))
     listing_expiry = parse_fda_date(product.get("listing_expiration_date"))
@@ -107,46 +219,45 @@ def _product_to_values(
         today=today,
     )
 
-    certification = {
-        "ndc": str(ndc),
-        "status": str(status_for(findings)),
-        "marketing_end_date": marketing_end,
-        "listing_expiration_date": listing_expiry,
-        "marketing_category": category,
-        "application_number": product.get("application_number"),
-        "labeler": product.get("labeler_name"),
-        "provenance": "scheduled",
-        "ruleset_version": RULESET_VERSION,
-        "raw": product,
-    }
-    finding_rows = [
-        {
-            "ndc": str(ndc),
-            "code": f.code,
-            "severity": str(f.severity),
-            "message": f.message,
-            "source": f.source,
-            "source_url": f.source_url,
-            "source_ref": f.source_ref,
-            "raw": f.raw,
+    status = str(status_for(findings))
+    rows: list[tuple[dict, list[dict]]] = []
+    for key in keys:
+        certification = {
+            "ndc": key,
+            "status": status,
+            "marketing_end_date": marketing_end,
+            "listing_expiration_date": listing_expiry,
+            "marketing_category": category,
+            "application_number": product.get("application_number"),
+            "labeler": product.get("labeler_name"),
+            "provenance": "scheduled",
+            "ruleset_version": RULESET_VERSION,
+            "raw": product,
         }
-        for f in findings
-    ]
-    return certification, finding_rows
+        finding_rows = [
+            {
+                "ndc": key,
+                "code": f.code,
+                "severity": str(f.severity),
+                "message": f.message,
+                "source": f.source,
+                "source_url": f.source_url,
+                "source_ref": f.source_ref,
+                "raw": f.raw,
+            }
+            for f in findings
+        ]
+        rows.append((certification, finding_rows))
+    return rows
 
 
-def run() -> int:
-    recalls = recalls_by_ndc()
-    products = _pages(NDC_URL, {}, MAX_PAGES)
+def shelf_ndcs() -> list[str]:
+    """Product NDCs anyone actually stocks. Reference data with a working set."""
+    with Session(engine) as s:
+        return sorted({str(n) for n in s.scalars(select(StockSnapshot.ndc).distinct()).all()})
 
-    mapped = [
-        row
-        for row in (_product_to_values(p, recalls.get(str(p.get("product_ndc") or ""), [])) for p in products)
-        if row is not None
-    ]
-    if not mapped:
-        return 0
 
+def write(mapped: list[tuple[dict, list[dict]]]) -> int:
     with Session(engine) as s:
         for certification, findings in mapped:
             s.execute(
@@ -168,5 +279,31 @@ def run() -> int:
     return len(mapped)
 
 
+def run(targeted: bool = True) -> int:
+    """Targeted by default: certify what is on a shelf.
+
+    The alternative — sweeping the whole directory — cannot complete anyway
+    (§ module docstring: `skip` stops at 25 000 against 136 942 products), so a
+    full sweep is a partial sweep with a bigger bill. Pass `targeted=False` to
+    take the bounded sweep regardless; a real full sync needs openFDA's bulk
+    download endpoint, which is the documented next step.
+    """
+    recalls = recalls_by_ndc()
+
+    if targeted:
+        wanted = shelf_ndcs()
+        if not wanted:
+            return 0
+        products = products_for_ndcs(wanted)
+    else:
+        products = _pages(NDC_URL, {"search": "finished:true"}, DIRECTORY_PAGES)
+
+    mapped = [row for p in products for row in _product_to_rows(p, _recalls_for(p, recalls))]
+    return write(mapped) if mapped else 0
+
+
 if __name__ == "__main__":
-    print(f"certification: upserted {run()} rows")
+    import sys
+
+    full = "--full" in sys.argv
+    print(f"certification: upserted {run(targeted=not full)} rows")

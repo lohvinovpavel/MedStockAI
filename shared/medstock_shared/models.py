@@ -2,7 +2,7 @@
 service owns must be imported here before a migration is generated."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
@@ -242,8 +242,8 @@ class DrugCertification(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ndc: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)  # green|yellow|red|unknown
-    marketing_end_date: Mapped[datetime | None] = mapped_column(Date)
-    listing_expiration_date: Mapped[datetime | None] = mapped_column(Date)
+    marketing_end_date: Mapped[date | None] = mapped_column(Date)
+    listing_expiration_date: Mapped[date | None] = mapped_column(Date)
     marketing_category: Mapped[str | None] = mapped_column(Text)
     application_number: Mapped[str | None] = mapped_column(Text)
     labeler: Mapped[str | None] = mapped_column(Text)

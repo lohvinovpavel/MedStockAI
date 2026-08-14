@@ -13,10 +13,10 @@ doc. That is a structural rule, not a preference: an unconfirmed claim warrants
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Sequence
 
 # Bump when any threshold or rule below changes. Stored on every row so a colour
 # computed months ago can still say which rules produced it.
@@ -80,6 +80,46 @@ _RECALL_RULES = {
 }
 
 
+def ndc11(value: str) -> str:
+    """Canonical 11-digit NDC, `LLLLLPPPPKK`, zero-padded 5-4-2.
+
+    RxNorm — and therefore `stock_snapshot` — stores this form. openFDA
+    publishes the hyphenated one (`0093-9222-05`). Everything in this system is
+    keyed on the 11-digit form so a badge can be looked up by the NDC inventory
+    already holds, which means openFDA values are normalised on the way in.
+
+    Padding forward is unambiguous. Going back is not — see
+    `product_ndc_candidates`.
+    """
+    parts = str(value).strip().split("-")
+    if len(parts) == 3:
+        return f"{parts[0].zfill(5)}{parts[1].zfill(4)}{parts[2].zfill(2)}"
+    if len(parts) == 2:
+        return f"{parts[0].zfill(5)}{parts[1].zfill(4)}"
+    return str(value).strip()
+
+
+def product_ndc_candidates(value: str) -> list[str]:
+    """The hyphenated `product_ndc` forms an 11-digit NDC could have come from.
+
+    An 11-digit NDC is 5-4-2, but the published 10-digit original may have been
+    4-4-2, 5-3-2 or 5-4-1 — the padding erases which. There is no way to tell
+    them apart after the fact, so a lookup has to try all the plausible ones;
+    verified against live openFDA, exactly one ever matches.
+    """
+    digits = str(value).strip()
+    if len(digits) != 11 or not digits.isdigit():
+        return [digits]
+    labeler, product = digits[:5], digits[5:9]
+    out = []
+    if labeler.startswith("0"):
+        out.append(f"{labeler[1:]}-{product}")  # published as 4-4-2
+    if product.startswith("0"):
+        out.append(f"{labeler}-{product[1:]}")  # published as 5-3-2
+    out.append(f"{labeler}-{product}")  # published as 5-4-1
+    return list(dict.fromkeys(out))
+
+
 def parse_fda_date(value: str | None) -> date | None:
     """openFDA ships dates as `YYYYMMDD` strings. Anything else is treated as
     absent rather than raising — one malformed row must not fail a whole feed."""
@@ -88,7 +128,10 @@ def parse_fda_date(value: str | None) -> date | None:
     text = str(value).strip()
     for fmt in ("%Y%m%d", "%Y-%m-%d"):
         try:
-            return datetime.strptime(text, fmt).date()
+            # DTZ007 is suppressed deliberately: a marketing expiry is a calendar
+            # date, not an instant. Attaching a timezone would invent precision
+            # the source does not have.
+            return datetime.strptime(text, fmt).date()  # noqa: DTZ007
         except ValueError:
             continue
     return None
@@ -104,7 +147,7 @@ def evaluate(
 ) -> list[Finding]:
     """Every reason this NDC is not plain green. Order is irrelevant —
     `status_for()` takes the maximum severity, not the first hit."""
-    today = today or date.today()
+    today = today or datetime.now(tz=UTC).date()
     horizon = YELLOW_EXPIRY_WINDOW_DAYS
     findings: list[Finding] = []
 
