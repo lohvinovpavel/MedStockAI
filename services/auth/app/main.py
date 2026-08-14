@@ -1,5 +1,8 @@
+import os
 import uuid
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from medstock_shared import COOKIE_NAME, Principal, current_principal, engine, settings
@@ -37,6 +40,18 @@ def readyz() -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return {"status": "ready"}
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    """GIT_SHA is baked in at image build time (Dockerfile) — unset outside
+    a built container, e.g. running locally from source. semver comes from
+    the installed medstock-auth package (pyproject.toml), not the image."""
+    try:
+        semver = pkg_version("medstock-auth")
+    except PackageNotFoundError:
+        semver = "unknown"
+    return {"service": "auth", "version": os.environ.get("GIT_SHA", "unknown"), "semver": semver}
 
 
 @app.post("/login", response_model=LoginResponse)
