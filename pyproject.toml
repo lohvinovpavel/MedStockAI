@@ -20,6 +20,13 @@ extend-immutable-calls = [
 ]
 
 [tool.pytest.ini_options]
+# Every service installs as a top-level `app` package (see each service's
+# [tool.hatch.build.targets.wheel]) — with all of them synced at once
+# (`uv sync --all-packages`, the default), whichever loads first wins
+# `sys.modules["app"]` for the rest of the run and every other service's
+# `from app.x import y` silently imports its code instead. Run one service
+# at a time: `uv sync --package medstock-<name> && uv run --no-sync pytest
+# services/<name>/tests` (see .github/workflows/ci.yml).
 testpaths = ["services"]
 # Eight services each ship `tests/test_health.py`. Under the default prepend
 # import mode pytest derives a module name from the basename alone, so the

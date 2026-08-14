@@ -4,11 +4,10 @@ ponytail: same placeholder caveat as shortages.py — verify the Socrata
 dataset id and field names before scheduling for real.
 """
 
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
-
 from medstock_shared import engine
 from medstock_shared.models import DrugPrice
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from ._source import fetch_json
 

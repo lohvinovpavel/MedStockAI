@@ -6,8 +6,8 @@ Add your task here; you do not touch `ai.py` to do it.
 Owner column is not decoration — it is who gets paged when a prompt regresses.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 
 @dataclass(frozen=True)

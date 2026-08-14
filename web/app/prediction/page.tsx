@@ -6,7 +6,7 @@ export default function PredictionPage() {
     <main>
       <h1>prediction</h1>
       <ServiceHealth service="prediction" />
-      <p>Build your page here. Call your endpoints with apiFetch("prediction", ...).</p>
+      <p>Build your page here. Call your endpoints with {'apiFetch("prediction", ...)'}.</p>
     </main>
   );
 }

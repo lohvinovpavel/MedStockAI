@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
-
 from app.main import app
+from fastapi.testclient import TestClient
 from medstock_shared.auth import Principal, current_principal
 
 PHARMACIST = Principal("user-1", "hospital-1", "pharmacist")

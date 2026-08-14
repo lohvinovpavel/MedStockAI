@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
-
 from app.main import app
+from fastapi.testclient import TestClient
 from medstock_shared.ai_tasks import _citation_must_be_verbatim
 from medstock_shared.auth import Principal, current_principal
 from medstock_shared.config import settings

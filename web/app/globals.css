@@ -52,6 +52,22 @@ nav a:hover {
   text-decoration: underline;
 }
 
+nav button {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.nav-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav-user .muted {
+  font-size: 0.85rem;
+}
+
 main {
   max-width: 720px;
   margin: 0 auto;
@@ -84,7 +100,9 @@ label {
   margin-bottom: 0.35rem;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="email"],
+input[type="password"] {
   width: 100%;
   padding: 0.5rem 0.6rem;
   border: 1px solid var(--border);

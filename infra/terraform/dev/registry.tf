@@ -15,5 +15,26 @@ resource "google_artifact_registry_repository" "medstock" {
     }
   }
 
+  # Tags are commit SHAs (§7 of the README) — every push is a new tag, so the
+  # untagged policy above never touches them. AR's actual "keep last N" shape
+  # is a DELETE policy matching all tagged versions, with a KEEP policy as
+  # the exemption — KEEP alone deletes nothing, it just protects the 3 most
+  # recently uploaded versions of each image from the DELETE policy below.
+  cleanup_policies {
+    id     = "keep-last-3-tagged"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 3
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-old-tagged"
+    action = "DELETE"
+    condition {
+      tag_state = "TAGGED"
+    }
+  }
+
   depends_on = [google_project_service.apis]
 }

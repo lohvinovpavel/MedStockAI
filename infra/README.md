@@ -225,34 +225,74 @@ connect to `localhost:5432`, database `medstock`, user `medstock`.
 another hospital's rows. Do not treat this environment as proof of tenant
 isolation.
 
-## 11. CI deploy (`.github/workflows/deploy-dev.yml`)
+## 11. CI identity (`ci.tf`)
 
-`workflow_dispatch` only — builds all nine images, pushes to Artifact
-Registry, migrates, then `kubectl apply -k deploy/overlays/dev`.
+No downloadable service account key: `ci.tf` provisions one Workload
+Identity Federation pool, so GitHub's own OIDC token gets exchanged for a
+short-lived credential scoped to this one repo (`var.github_repo`).
+Nothing to rotate, nothing to leak.
 
-No downloadable service account key: `ci.tf` provisions Workload Identity
-Federation, so GitHub's own OIDC token gets exchanged for a short-lived
-credential scoped to this one repo (`var.github_repo`) and one service
-account (`github-actions@...`, `roles/artifactregistry.writer` +
-`roles/container.developer` — same roles `dev_members` gets in `iam.tf`,
-for a machine identity instead of a person). Nothing to rotate, nothing to
-leak.
+**Two service accounts off that one pool, not one shared SA** — a
+compromised or misbehaving deploy run and a compromised or misbehaving
+terraform run are very different blast radii, so they don't share a
+credential:
 
-Set `github_repo` in `terraform.tfvars` (`owner/repo`) before applying, then
-after apply, set two **repo Variables** (Settings → Secrets and variables →
-Actions → Variables — not Secrets, neither value is sensitive):
+| SA | Used by | Grants |
+|---|---|---|
+| `github-actions-deploy` | `deploy-dev.yml` | `roles/artifactregistry.writer` + `roles/container.developer` (same as `dev_members` in `iam.tf`, for a machine identity instead of a person) |
+| `github-actions-infra` | `infra-ci.yml`, `infra-cd.yml` | `roles/iam.serviceAccountTokenCreator` on `terraform-iac` only — no project roles of its own, everything flows through that impersonation (see §12) |
+
+Set `github_repo` in `terraform.tfvars` (`owner/repo`) before applying,
+then after apply, set **three repo Variables** (Settings → Secrets and
+variables → Actions → Variables — not Secrets, none of these are sensitive):
 
 ```powershell
 terraform output -raw ci_workload_identity_provider
+terraform output -raw ci_deploy_service_account_email
+terraform output -raw ci_infra_service_account_email
 ```
 
-```powershell
-terraform output -raw ci_service_account_email
-```
+→ `GCP_WORKLOAD_IDENTITY_PROVIDER` (shared by both workflows),
+`GCP_DEPLOY_SERVICE_ACCOUNT` (`deploy-dev.yml` only), and
+`GCP_INFRA_SERVICE_ACCOUNT` (`infra-ci.yml`/`infra-cd.yml` only).
 
-→ `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_CI_SERVICE_ACCOUNT` respectively.
+## 12. App CD (`deploy-dev.yml`) and infra CI/CD (`infra-ci.yml`, `infra-cd.yml`)
 
-## 12. When something is broken
+`deploy-dev.yml` builds all nine images, pushes to Artifact Registry,
+migrates, then `kubectl apply -k deploy/overlays/dev` — on every push to
+main that touches app code, or manually via `workflow_dispatch`.
+
+`infra-ci.yml` runs `terraform plan` on any PR touching
+`infra/terraform/**` — the plan output is the review. `infra-cd.yml` runs
+`terraform apply -auto-approve` on the same paths once that PR merges to
+main. When a single merge touches both infra and app code, `deploy-dev.yml`
+waits for `infra-cd.yml` to finish (and skips if it failed) instead of
+racing it — see the trigger comment at the top of `deploy-dev.yml`.
+
+**One-time manual step, before the first run of `infra-ci`/`infra-cd`:**
+`ci.tf`'s `github_actions_infra_impersonate_terraform_iac` grant lets that
+CI identity impersonate `terraform-iac` the same way a human's local
+`terraform apply` does (`providers.tf`). Nothing can apply that grant
+except a human's own local apply — run `terraform apply` locally once
+after pulling it in.
+
+**`terraform.tfvars` is gitignored, so CI can't read it.** The variables
+with no default in `variables.tf` are supplied as `TF_VAR_*` env vars in
+both infra workflow files instead — `project_id` and `letsencrypt_email`
+read the same `GCP_PROJECT_ID`/`LETSENCRYPT_EMAIL` repo Variables `github_repo`
+comes from `github.repository` directly; `gemini_api_key` comes from repo
+**Secret** `GEMINI_API_KEY` (Settings → Secrets and variables → Actions →
+Secrets — **create this before the first run**, it has no fallback).
+
+`dev_members` is deliberately left unset in both infra workflow files so it
+falls back to its `[]` default, which matches the currently-applied state
+(nobody's in it right now — see `terraform.tfvars`). **If that ever
+changes**, add the same list as a `TF_VAR_dev_members` env var to both
+files — an apply that silently reverts to `[]` would revoke every
+teammate's `container.developer`/`cloudsql.client`/`secretmanager.secretAccessor`
+access (`iam.tf`) the next time `infra-cd.yml` runs.
+
+## 13. When something is broken
 
 | Symptom | Cause |
 |---|---|

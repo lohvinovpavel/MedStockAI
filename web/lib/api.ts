@@ -18,6 +18,14 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
   });
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      // The 8h token can expire mid-session on any page, and every backend
+      // call already funnels through here — one listener in the session
+      // provider logs the user out from anywhere without threading a
+      // callback through every page. Guarded on window: this module can
+      // also be imported during SSR.
+      window.dispatchEvent(new Event("medstock:unauthorized"));
+    }
     let message = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();

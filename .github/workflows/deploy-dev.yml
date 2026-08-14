@@ -1,9 +1,24 @@
 name: deploy-dev
 
-# Manual only — this is the $54/mo shared sandbox with a hand-rolled JWT key
-# and no RLS (docs/infra-dev-plan.md §6). Nobody should redeploy it on every
-# push to a branch. Bump to `push: branches: [main]` once that's wanted.
+# $54/mo shared sandbox with a hand-rolled JWT key and no RLS
+# (docs/infra-dev-plan.md §6) — every merge to main redeploys it.
+#
+# Two triggers, mutually exclusive by design:
+#  - push, when the merge did NOT touch infra/terraform/** — the common
+#    case, deploy runs immediately.
+#  - workflow_run, when infra-cd.yml just finished on main — a merge that
+#    touches BOTH infra and app code must apply infra first (new Cloud SQL
+#    flags, secrets, IAM — the app can depend on any of it), so that push
+#    is path-ignored here and this waits for infra-cd instead. The `gate`
+#    job below no-ops the whole run if that infra-cd run failed.
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["infra/terraform/**"]
+  workflow_run:
+    workflows: [infra-cd]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       seed_dev_users:
@@ -17,26 +32,101 @@ concurrency:
 
 env:
   # Matches deploy/overlays/dev/kustomization.yaml — infra/terraform/dev/registry.tf.
-  REGISTRY: europe-west1-docker.pkg.dev/project-f1b68703-0a5c-4fde-88a/medstock
-  GCP_PROJECT_ID: project-f1b68703-0a5c-4fde-88a
+  REGISTRY: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/medstock
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   GKE_CLUSTER: medstock-dev
+  # On workflow_run, plain github.sha is the branch tip at event time, not
+  # necessarily the commit that triggered infra-cd — use everywhere below
+  # instead of github.sha directly (push events fall through unchanged).
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
   GKE_ZONE: europe-west1-b
 
 jobs:
+  # No-ops the rest of the run when triggered by a *failed* infra-cd — a
+  # broken infra apply must not be followed by an app deploy on top of it.
+  # On a direct push this is just a pass-through (github.event.workflow_run
+  # doesn't exist, so the check on the right of || never applies).
+  gate:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - run: echo "proceeding"
+
+  # Same gate as ci.yml's PR checks, re-run here because main can move
+  # between a PR's last green check and its merge (another PR landing
+  # first, a non-PR push). See ci.yml for why this is per-service instead
+  # of one combined `pytest services/`.
+  python-tests:
+    needs: [gate]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: medstock
+          POSTGRES_PASSWORD: medstock
+          POSTGRES_DB: medstock
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+        ports: ["5432:5432"]
+    env:
+      DATABASE_URL: postgresql+psycopg://medstock:medstock@localhost:5432/medstock
+    steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: astral-sh/setup-uv@v3
+        with: { enable-cache: true }
+      - run: uv sync --package medstock-${{ matrix.service }}
+      # --no-sync matters: a bare `uv run` re-syncs the whole workspace
+      # first (all 8 services' `app` back in one venv, the exact collision
+      # the scoped sync above exists to avoid). See ci.yml.
+      - run: uv run --no-sync alembic upgrade head
+      - run: uv run --no-sync pytest services/${{ matrix.service }}/tests -q
+
+  web-tests:
+    needs: [gate]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package.json }
+      - run: npm install
+      - run: npm run lint
+      - run: npm run build
+
   build:
+    needs: [python-tests, web-tests]
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     strategy:
       matrix:
         service: [auth, inventory, analogue, compliance, patient-profiling, prediction, warehouse, ingest]
     steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
       - uses: docker/setup-buildx-action@v3
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
           token_format: access_token
       - uses: docker/login-action@v3
         with:
@@ -48,23 +138,28 @@ jobs:
           context: .
           build-args: |
             SERVICE=${{ matrix.service }}
-            GIT_SHA=${{ github.sha }}
+            GIT_SHA=${{ env.DEPLOY_SHA }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ env.DEPLOY_SHA }}
           cache-from: type=gha,scope=dev-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=dev-${{ matrix.service }}
 
   build-web:
+    needs: [python-tests, web-tests]
     runs-on: ubuntu-latest
     permissions: { contents: read, id-token: write }
     steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
       - uses: docker/setup-buildx-action@v3
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
           token_format: access_token
       - uses: docker/login-action@v3
         with:
@@ -74,9 +169,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ./web
-          build-args: GIT_SHA=${{ github.sha }}
+          build-args: GIT_SHA=${{ env.DEPLOY_SHA }}
           push: true
-          tags: ${{ env.REGISTRY }}/web:${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/web:${{ env.DEPLOY_SHA }}
 
   deploy:
     needs: [build, build-web]
@@ -84,11 +179,15 @@ jobs:
     environment: dev
     permissions: { contents: read, id-token: write }
     steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ env.GKE_CLUSTER }}
@@ -101,7 +200,7 @@ jobs:
       - name: Migrate
         run: |
           kubectl -n medstock delete job migrate --ignore-not-found
-          sed "s|ghcr.io/medstockai/inventory:latest|${{ env.REGISTRY }}/inventory:${{ github.sha }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
+          sed "s|ghcr.io/medstockai/inventory:latest|${{ env.REGISTRY }}/inventory:${{ env.DEPLOY_SHA }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
           kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
 
       # The static IP survives a normal apply but not a full destroy/recreate
@@ -117,7 +216,7 @@ jobs:
           cd deploy/overlays/dev
           sed -i "s/medstock-dev\.REPLACE-ME\.sslip\.io/${{ env.INGRESS_HOST }}/g" kustomization.yaml
           for s in auth inventory analogue compliance patient-profiling prediction warehouse web ingest; do
-            kustomize edit set image "ghcr.io/medstockai/$s=${{ env.REGISTRY }}/$s:${{ github.sha }}"
+            kustomize edit set image "ghcr.io/medstockai/$s=${{ env.REGISTRY }}/$s:${{ env.DEPLOY_SHA }}"
           done
           kubectl apply -k .
           for s in auth inventory analogue compliance patient-profiling prediction warehouse web; do
@@ -131,11 +230,15 @@ jobs:
     environment: dev
     permissions: { contents: read, id-token: write }
     steps:
+      # workflow_run runs default to the branch tip, not the exact SHA
+      # that triggered infra-cd — DEPLOY_SHA pins it (see env: above).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ env.GKE_CLUSTER }}
@@ -148,7 +251,7 @@ jobs:
       - name: Seed demo users
         run: |
           kubectl -n medstock delete job seed --ignore-not-found
-          sed "s|REPLACE-ME-IMAGE|${{ env.REGISTRY }}/auth:${{ github.sha }}|" deploy/k8s/seed-job.yaml | kubectl -n medstock apply -f -
+          sed "s|REPLACE-ME-IMAGE|${{ env.REGISTRY }}/auth:${{ env.DEPLOY_SHA }}|" deploy/k8s/seed-job.yaml | kubectl -n medstock apply -f -
           kubectl -n medstock wait --for=condition=complete job/seed --timeout=60s
           kubectl -n medstock logs job/seed
           kubectl -n medstock delete job seed

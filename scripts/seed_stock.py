@@ -18,17 +18,16 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
-from sqlalchemy import func  # noqa: E402
-from sqlalchemy.dialects.postgresql import insert  # noqa: E402
-from sqlalchemy.orm import Session  # noqa: E402
-
-from medstock_shared.db import SessionLocal  # noqa: E402
-from medstock_shared.models import FormularyItem, StockSnapshot  # noqa: E402
-from medstock_shared.rxnorm import (  # noqa: E402
+from medstock_shared.db import SessionLocal
+from medstock_shared.models import FormularyItem, StockSnapshot
+from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
     ndcs_for_rxcui,
 )
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 # Same claim as web/.env.local / /tmp/medstock-dev/token.txt
 DEFAULT_HOSPITAL_ID = "00000000-0000-0000-0000-000000000001"

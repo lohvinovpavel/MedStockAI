@@ -51,7 +51,13 @@ def account() -> str:
 
 
 def test_login_round_trip(account: str) -> None:
-    client = TestClient(app)
+    # https base_url, not the http default: the login cookie is Secure
+    # (main.py — intentional, see infra/README.md §13), and httpx correctly
+    # won't replay a Secure cookie of its own accord over plain http on the
+    # /me call below. Every other test here reads the cookie out manually
+    # instead of relying on automatic replay, so this is the only one that
+    # needs it.
+    client = TestClient(app, base_url="https://testserver")
     login = client.post("/login", json={"email": account, "password": PASSWORD})
     assert login.status_code == 200
     assert login.json()["role"] == "pharmacist"
