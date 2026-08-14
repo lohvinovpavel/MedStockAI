@@ -2,12 +2,13 @@
 service owns must be imported here before a migration is generated."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -217,4 +218,71 @@ class StockSnapshot(Base):
 
     __table_args__ = (
         UniqueConstraint("hospital_id", "ndc", "location_id", name="uq_stock_hospital_ndc_loc"),
+    )
+
+
+# --- Certification (docs/compliance-usecases.md COMP-1). Reference class per
+# services.md §1.1: FDA certification is identical for every hospital, so it is
+# polled once for all of them — no hospital_id, no RLS. Written by
+# services/ingest/app/certification.py, read by `compliance`.
+
+
+class DrugCertification(Base):
+    """The traffic light for one NDC.
+
+    `status` is **derived**, never authored: `compliance.app.rules.status_for()`
+    computes it from the findings below. It is stored so `GET /status` is one
+    indexed read instead of a re-evaluation per request. `ruleset_version`
+    records which rules produced it, so a stored colour can always explain
+    itself even after the thresholds change.
+    """
+
+    __tablename__ = "drug_certification"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)  # green|yellow|red|unknown
+    marketing_end_date: Mapped[date | None] = mapped_column(Date)
+    listing_expiration_date: Mapped[date | None] = mapped_column(Date)
+    marketing_category: Mapped[str | None] = mapped_column(Text)
+    application_number: Mapped[str | None] = mapped_column(Text)
+    labeler: Mapped[str | None] = mapped_column(Text)
+    # scheduled = a CronJob wrote it; on_demand = COMP-2 explored it. A Director
+    # export that cannot say where a colour came from is not evidence.
+    provenance: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
+    ruleset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    # Only on_demand rows carry a TTL — nothing refreshes them on a schedule.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+
+
+class CertificationFinding(Base):
+    """One reason behind a colour, with the source that produced it.
+
+    The colour is re-derivable from these rows: change a threshold in
+    `rules.py` and the findings are replayed, not re-fetched from FDA.
+    """
+
+    __tablename__ = "certification_finding"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    code: Mapped[str] = mapped_column(Text, nullable=False)  # LISTING_EXPIRED, RECALL_CLASS_I, …
+    severity: Mapped[str] = mapped_column(Text, nullable=False)  # red|yellow|info
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)  # "openFDA NDC Directory"
+    source_url: Mapped[str | None] = mapped_column(Text)
+    # Distinguishes two recalls of the same class on the same drug, and is what
+    # makes re-running the CronJob an upsert rather than a duplicate.
+    source_ref: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+
+    __table_args__ = (
+        UniqueConstraint("ndc", "code", "source_ref", name="uq_cert_finding_natural"),
     )

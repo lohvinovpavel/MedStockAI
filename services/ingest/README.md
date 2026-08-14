@@ -9,6 +9,12 @@ per feed, each run as its own `CronJob` off the `medstock-ingest` image
 | `app/shortages.py` | hourly | `shortage_event` |
 | `app/pricing.py` | daily | `drug_price` |
 | `app/rxnorm.py` | weekly | `rxnorm_edge` |
+| `app/certification.py` | daily | `drug_certification`, `certification_finding` |
+
+`certification.py` is the only one that writes a **derived** column: `status`
+is computed by `medstock_shared.certification.status_for()`, never taken from
+the feed. Findings for an NDC are replaced on each run rather than merged, so a
+recall that has been terminated stops appearing.
 
 Run one by hand: `python -m app.shortages` (needs `DATABASE_URL`).
 

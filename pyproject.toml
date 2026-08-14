@@ -10,12 +10,13 @@ target-version = "py312"
 # default bug B008 exists to catch. Every service hits this on its first real
 # route, so it is configured once here.
 extend-immutable-calls = [
-  "fastapi.Depends",
-  "fastapi.Query",
-  "fastapi.Header",
-  # Depends(require("perm")) is the same idiom one level deeper — require()
-  # returns the actual dependency callable, it isn't building mutable state.
-  "medstock_shared.auth.require",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Body",
+    # `require("perm")` builds the dependency callable; it is the same idiom as
+    # Depends and is evaluated once at import, not per request.
+    "medstock_shared.auth.require",
 ]
 
 [tool.pytest.ini_options]
@@ -27,3 +28,9 @@ extend-immutable-calls = [
 # at a time: `uv sync --package medstock-<name> && uv run --no-sync pytest
 # services/<name>/tests` (see .github/workflows/ci.yml).
 testpaths = ["services"]
+# Eight services each ship `tests/test_health.py`. Under the default prepend
+# import mode pytest derives a module name from the basename alone, so the
+# second one collides with the first and collection fails for all of them.
+# importlib mode keys modules by full path instead, which is what makes a
+# workspace of same-shaped services collectable in one run.
+addopts = "--import-mode=importlib"
