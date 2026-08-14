@@ -117,6 +117,19 @@ RULES: dict[str, Rule] = {
     "DATES_UNKNOWN": Rule(
         Category.DATA, Severity.INFO, False, "Source record carried no lifecycle dates"
     ),
+    # COMP-2: what on-demand exploration can add for a drug openFDA does not list.
+    "NDC_OBSOLETE": Rule(
+        Category.LIFECYCLE, Severity.RED, True, "RxNorm lists this NDC as obsolete"
+    ),
+    "NDC_ACTIVE_UNLISTED": Rule(
+        Category.DATA,
+        Severity.INFO,
+        False,
+        "Not in the FDA NDC Directory, but RxNorm lists the NDC active",
+    ),
+    "NDC_UNRESOLVED": Rule(
+        Category.DATA, Severity.INFO, False, "No formal source recognised this NDC"
+    ),
 }
 
 
@@ -182,9 +195,11 @@ class Shortage:
 NDC_DIRECTORY = "openFDA NDC Directory"
 ENFORCEMENT = "openFDA Enforcement"
 SHORTAGES = "openFDA Drug Shortages"
+RXNORM = "RxNorm NDC Status (NLM)"
 _NDC_URL = "https://api.fda.gov/drug/ndc.json"
 _ENFORCEMENT_URL = "https://api.fda.gov/drug/enforcement.json"
 _SHORTAGE_URL = "https://api.fda.gov/drug/shortages.json"
+_RXNAV_URL = "https://rxnav.nlm.nih.gov/REST/ndcstatus.json"
 
 _RECALL_RULES = {
     "class i": "RECALL_CLASS_I",
@@ -262,6 +277,8 @@ def evaluate(
     finished: bool | None = None,
     recalls: Sequence[Recall] = (),
     shortages: Sequence[Shortage] = (),
+    ndc_status: object | None = None,
+    in_directory: bool = True,
     today: date | None = None,
 ) -> list[Finding]:
     """Every reason this NDC is not plain green. Order is irrelevant —
@@ -361,8 +378,34 @@ def evaluate(
             shortage.raw,
         )
 
+    # --- RxNorm, the second formal source (COMP-2) --------------------------
+    # Duck-typed rather than imported: `ndc_status.py` reaches the network, and
+    # this module must stay importable without it.
+    if ndc_status is not None:
+        label = str(getattr(ndc_status, "status", "")).strip().upper()
+        span = " ".join(
+            x for x in (getattr(ndc_status, "start_date", ""), getattr(ndc_status, "end_date", ""))
+            if x
+        )
+        if label == "OBSOLETE":
+            add(
+                "NDC_OBSOLETE",
+                f"RxNorm lists this NDC obsolete ({span or 'no dates given'})",
+                RXNORM,
+                _RXNAV_URL,
+            )
+        elif label == "ACTIVE" and not in_directory:
+            add(
+                "NDC_ACTIVE_UNLISTED",
+                f"Not in the FDA NDC Directory; RxNorm lists it active ({span or 'no dates given'})",
+                RXNORM,
+                _RXNAV_URL,
+            )
+    elif not in_directory:
+        add("NDC_UNRESOLVED", "No formal source recognised this NDC", RXNORM, _RXNAV_URL)
+
     # --- data quality ------------------------------------------------------
-    if marketing_end_date is None and listing_expiration_date is None:
+    if in_directory and marketing_end_date is None and listing_expiration_date is None:
         # Green must never quietly mean "we had no data".
         add("DATES_UNKNOWN", "No marketing or listing date in the source record",
             NDC_DIRECTORY, _NDC_URL)

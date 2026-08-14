@@ -10,7 +10,7 @@ import os
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from medstock_shared.auth import Principal, require
 from medstock_shared.certification import (
     RULESET_VERSION,
@@ -25,11 +25,17 @@ from sqlalchemy import case, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
+from app.explore import TTL_DAYS, explore, is_stale
+
 app = FastAPI(title="compliance")
 
 # One page of a stock list, not a bulk export. The Director CSV export is a
 # separate endpoint and is not implemented in this pass.
 MAX_BATCH = 100
+
+# Exploration is two upstream calls per NDC against a shared daily budget, so it
+# is capped far lower than a lookup.
+MAX_EXPLORE = 10
 
 _NOT_MIGRATED = "certification tables are not migrated"
 
@@ -163,6 +169,36 @@ def _codes_by_ndc(session: Session, ndcs: list[str]) -> dict[str, list[str]]:
     return out
 
 
+@app.post("/explore")
+def post_explore(
+    payload: dict = Body(default={}),
+    _: Principal = Depends(require("inventory:read")),
+) -> dict:
+    """COMP-2, explicitly, for a handful of NDCs at once.
+
+    Kept off `GET /status` on purpose: that endpoint serves a whole page of
+    stock from one indexed read, and turning it into N upstream calls would
+    make a stock list as slow as the slowest third party — and spend the
+    openFDA daily budget on drugs nobody asked about.
+    """
+    wanted = list(dict.fromkeys(str(n) for n in (payload.get("ndc") or []) if n))
+    if not wanted:
+        raise HTTPException(status_code=422, detail="ndc must not be empty")
+    if len(wanted) > MAX_EXPLORE:
+        raise HTTPException(status_code=400, detail=f"at most {MAX_EXPLORE} ndc values per call")
+
+    results, errors = [], {}
+    with Session(engine) as session:
+        for value in wanted:
+            try:
+                results.append(explore(session, value))
+            except Exception as exc:  # noqa: BLE001 — one bad upstream must not
+                session.rollback()  # lose the answers we did get
+                errors[value] = str(exc)[:200]
+    return {"ruleset_version": RULESET_VERSION, "ttl_days": TTL_DAYS,
+            "results": results, "errors": errors}
+
+
 @app.get("/certificates/{ndc}")
 def get_certificate(
     ndc: str,
@@ -179,9 +215,29 @@ def get_certificate(
             session.rollback()
             raise HTTPException(status_code=503, detail=_NOT_MIGRATED) from exc
 
+        # COMP-2: a miss here is the moment someone is actually looking at this
+        # drug, so it is the right moment to go and find out. A stale on-demand
+        # row is re-explored for the same reason.
+        if record is None or is_stale(record):
+            try:
+                explore(session, ndc)
+            except Exception as exc:  # noqa: BLE001 — upstreams are not ours
+                session.rollback()
+                if record is None:
+                    # Uniform shape so the UI still renders a grey badge.
+                    return {
+                        "ndc": ndc,
+                        "status": str(Status.UNKNOWN),
+                        "ruleset_version": RULESET_VERSION,
+                        "explored": False,
+                        "explore_error": str(exc)[:200],
+                        "findings": [],
+                    }
+            record = session.execute(
+                select(DrugCertification).where(DrugCertification.ndc == ndc)
+            ).scalar_one_or_none()
+
         if record is None:
-            # Not a 404: unknown is a real state in the traffic light, and the
-            # caller needs a uniform shape to render a grey badge.
             return {
                 "ndc": ndc,
                 "status": str(Status.UNKNOWN),

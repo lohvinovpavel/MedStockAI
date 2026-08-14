@@ -7,6 +7,7 @@ starts failing on its own schedule.
 """
 
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import pytest
 from medstock_shared.certification import (
@@ -290,6 +291,16 @@ def test_every_published_rule_is_reachable():
     )
     reachable |= codes(evaluate(today=TODAY))  # DATES_UNKNOWN
     reachable |= codes(evaluate(marketing_end_date=date(2020, 1, 1), today=TODAY))
+    # COMP-2's three, which only an on-demand exploration can produce.
+    reachable |= codes(evaluate(in_directory=False, today=TODAY))  # NDC_UNRESOLVED
+    for rxnorm_status in ("OBSOLETE", "ACTIVE"):
+        reachable |= codes(
+            evaluate(
+                ndc_status=SimpleNamespace(status=rxnorm_status, start_date="", end_date=""),
+                in_directory=False,
+                today=TODAY,
+            )
+        )
     assert set(ruleset()["rules"]) == reachable
 
 
