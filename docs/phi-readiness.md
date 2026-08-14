@@ -52,7 +52,7 @@ flowchart LR
 
 ## 2. Seam 1 — the AI provider
 
-`shared/medstock_shared/ai.py:25` hardcodes the endpoint that has no BAA. The same SDK reaches
+`shared/medstock_shared/ai.py:28` hardcodes the endpoint that has no BAA. The same SDK reaches
 Vertex AI, which does. Make it a choice:
 
 ```python

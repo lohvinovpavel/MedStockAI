@@ -118,7 +118,7 @@ Put a patient into `ask_ai()` and that sentence becomes false, and hospital B ca
 A's patient data out of a shared cache. It would not be a bug in the cache — the cache is
 working exactly as specified. It would be a design error upstream.
 
-Problem 2 is concrete and checkable: `shared/medstock_shared/ai.py:25`. Google's HIPAA-covered
+Problem 2 is concrete and checkable: `shared/medstock_shared/ai.py:28`. Google's HIPAA-covered
 product list includes **Vertex AI**, not the Gemini Developer API. Same model, different
 contract. If PHI ever had to reach a model, that line has to change first.
 
