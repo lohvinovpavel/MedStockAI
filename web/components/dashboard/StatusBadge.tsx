@@ -5,7 +5,10 @@ import { cn } from "@/lib/utils";
 // critical/warning/normal/stockout/surplus signal needs to read at a glance.
 export type StatusTone = "critical" | "warning" | "normal" | "stockout" | "surplus";
 
-const TONE_STYLE: Record<StatusTone, string> = {
+// Exported so other tone-coded UI (banners, KPI tiles) can share the same
+// critical/warning/normal color mapping instead of each page re-deriving it
+// with its own dark-mode convention. See Callout for the banner use.
+export const TONE_STYLE: Record<StatusTone, string> = {
   critical: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-400",
   stockout: "border-red-300 bg-red-100 text-red-800 dark:border-red-500/35 dark:bg-red-500/15 dark:text-red-300",
   warning: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-400",

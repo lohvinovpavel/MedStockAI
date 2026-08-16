@@ -1,7 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Bot, Download, ScrollText, Server, ShieldCheck, Stethoscope } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,12 +25,19 @@ const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string 
   regulator: { icon: ShieldCheck, className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400" },
 };
 
-function AuditPageInner() {
+export default function AuditPage() {
   const { setFocus } = useCopilot();
   const { facilityId, facility } = useFacility();
-  const searchParams = useSearchParams();
   const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
-  const skuParam = searchParams.get("sku");
+
+  // Read ?sku= without useSearchParams(): that hook forces a Suspense
+  // boundary that never resumes on a direct load/refresh of this
+  // already-"use client" route (mainLen stayed 0 indefinitely). A plain
+  // location.search read in an effect avoids the SSR bailout entirely.
+  const [skuParam, setSkuParam] = useState<string | null>(null);
+  useEffect(() => {
+    setSkuParam(new URLSearchParams(window.location.search).get("sku"));
+  }, []);
   const validSkuParam = skuParam && items.some((i) => i.id === skuParam) ? skuParam : null;
 
   const [itemId, setItemId] = useState(validSkuParam ?? items[0].id);
@@ -51,7 +57,7 @@ function AuditPageInner() {
   );
 
   useEffect(() => {
-    setFocus({ kind: "sku", label: item.drugName, detail: `Audit trail · ${entries.length} logged events` });
+    setFocus({ kind: "sku", label: item.drugName, detail: `Audit trail · ${entries.length} logged events`, itemId: item.id });
   }, [item, entries.length, setFocus]);
 
   return (
@@ -142,13 +148,5 @@ function AuditPageInner() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-export default function AuditPage() {
-  return (
-    <Suspense fallback={null}>
-      <AuditPageInner />
-    </Suspense>
   );
 }

@@ -101,10 +101,14 @@ function daysOfSupply(item: Pick<InventoryItem, "currentStock" | "dailyBurnRate"
   return item.dailyBurnRate > 0 ? Math.floor(item.currentStock / item.dailyBurnRate) : Infinity;
 }
 
-export function stockRisk(item: Pick<InventoryItem, "currentStock" | "dailyBurnRate">): StockRisk {
-  const days = daysOfSupply(item);
-  if (days <= 3) return "critical";
-  if (days <= 10) return "warning";
+// Graded against the item's own reorder point (burn rate × its supplier's
+// lead time, plus a safety buffer) rather than a flat day count — a SKU
+// with an 11-day lead time is at risk earlier than one with a 3-day lead
+// time, even at identical days-of-supply. See reorderPoint() below.
+export function stockRisk(item: Pick<InventoryItem, "id" | "currentStock" | "dailyBurnRate">): StockRisk {
+  const rp = reorderPoint(item);
+  if (item.currentStock <= rp * 0.5) return "critical";
+  if (item.currentStock <= rp) return "warning";
   return "normal";
 }
 
@@ -445,23 +449,40 @@ export interface ForecastPoint {
   forecastHigh: number | null;
 }
 
-export interface ForecastDrug {
-  id: string;
-  name: string;
+// Procurement facts a par-level calculation can't derive on its own —
+// quantity and coverage are computed (see reorderPoint/parLevel below),
+// not authored here.
+export interface ForecastPurchaseOrder {
+  supplier: string;
   unit: string;
+  unitCost: number;
+  leadTimeDays: number;
+}
+
+// A trained model's own baseline — not facility-scoped. forecastFor() below
+// joins this to a facility's InventoryItem and scales it, the same way
+// inventoryFor() scales the canonical `inventory` array.
+export interface ForecastModel {
+  itemId: string; // matches InventoryItem.id — same SKU, not a parallel one
   model: string;
   seasonalityFactor: string;
   confidence: number;
-  currentStock: number;
   series: ForecastPoint[];
-  purchaseOrder: {
-    supplier: string;
-    quantity: number;
-    unit: string;
-    coverageDays: number;
-    unitCost: number;
-    leadTimeDays: number;
-  };
+  purchaseOrder: ForecastPurchaseOrder;
+}
+
+// What the forecasts page actually renders: a facility-scoped item joined
+// to its model. `item.currentStock` / `item.dailyBurnRate` already reflect
+// the active facility (via inventoryFor); `series` and `purchaseOrder.quantity`
+// are scaled the same way here so a clinic doesn't get a warehouse-sized
+// suggestion.
+export interface ScaledForecast {
+  item: InventoryItem;
+  model: string;
+  seasonalityFactor: string;
+  confidence: number;
+  series: ForecastPoint[];
+  purchaseOrder: ForecastPurchaseOrder;
 }
 
 // Deterministic pseudo-history: a base burn rate plus a slow sine-wave
@@ -492,62 +513,93 @@ function buildSeries(base: number, seasonAmplitude: number, seasonPeriodDays: nu
   return series;
 }
 
-export const forecastDrugs: ForecastDrug[] = [
+// Keyed by the same ids as `inventory` (inv-001 Amoxicillin/Clavulanate,
+// inv-002 Propofol, inv-006 Azithromycin) — these used to be a parallel
+// `fc-*` id space with their own drug names and stock figures that quietly
+// disagreed with Inventory for the same SKU. Only 3 of the 10 catalogue
+// SKUs have a trained model; forecastFor() returns null for the rest and
+// the page shows an explicit empty state rather than pretending otherwise.
+export const forecastModels: ForecastModel[] = [
   {
-    id: "fc-amoxicillin",
-    name: "Amoxicillin 500mg",
-    unit: "boxes/day",
+    itemId: "inv-001",
     model: "Prophet v1.2",
     seasonalityFactor: "+35% Winter Surge",
     confidence: 94.2,
-    currentStock: 970,
     series: buildSeries(58, 6, 14, 22),
-    purchaseOrder: {
-      supplier: "PharmaSource Global Ltd.",
-      quantity: 150,
-      unit: "boxes",
-      coverageDays: 30,
-      unitCost: 12.4,
-      leadTimeDays: 5,
-    },
+    purchaseOrder: { supplier: "PharmaSource Global Ltd.", unit: "boxes", unitCost: 12.4, leadTimeDays: 5 },
   },
   {
-    id: "fc-propofol",
-    name: "Propofol 1%",
-    unit: "ampoules/day",
+    itemId: "inv-002",
     model: "Prophet v1.2",
     seasonalityFactor: "+12% Elective Surgery Backlog",
     confidence: 89.7,
-    currentStock: 280,
     series: buildSeries(17, 2, 10, 6),
-    purchaseOrder: {
-      supplier: "Meditech Distribution Co.",
-      quantity: 480,
-      unit: "ampoules",
-      coverageDays: 30,
-      unitCost: 3.85,
-      leadTimeDays: 7,
-    },
+    purchaseOrder: { supplier: "Meditech Distribution Co.", unit: "ampoules", unitCost: 3.85, leadTimeDays: 7 },
   },
   {
-    id: "fc-azithromycin",
-    name: "Azithromycin 250mg",
-    unit: "boxes/day",
+    itemId: "inv-006",
     model: "XGBoost v0.9",
     seasonalityFactor: "+28% Respiratory Season",
     confidence: 91.5,
-    currentStock: 420,
     series: buildSeries(23, 5, 12, 14),
-    purchaseOrder: {
-      supplier: "PharmaSource Global Ltd.",
-      quantity: 720,
-      unit: "boxes",
-      coverageDays: 30,
-      unitCost: 6.1,
-      leadTimeDays: 4,
-    },
+    purchaseOrder: { supplier: "PharmaSource Global Ltd.", unit: "boxes", unitCost: 6.1, leadTimeDays: 4 },
   },
 ];
+
+export function forecastableItemIds(): string[] {
+  return forecastModels.map((m) => m.itemId);
+}
+
+// --- Reorder point & par level ------------------------------------------
+// The number every "how much should I order/hold" question in the app used
+// to answer with a stored literal. A reorder point is the stock level that
+// should trigger replenishment — enough to cover the lead time plus a
+// safety margin. A par level is what replenishment restores it to.
+const SAFETY_BUFFER_DAYS = 3;
+const PAR_TARGET_DAYS = 30;
+// Flat fallback for the 7 catalogue SKUs with no assigned default supplier
+// — median of the 4 suppliers' lead times (3, 5, 7, 11). The 3 forecastable
+// SKUs use their model's own curated supplier/lead time instead.
+const DEFAULT_LEAD_TIME_DAYS = 6;
+
+export function leadTimeDaysFor(itemId: string): number {
+  return forecastModels.find((m) => m.itemId === itemId)?.purchaseOrder.leadTimeDays ?? DEFAULT_LEAD_TIME_DAYS;
+}
+
+export function reorderPoint(item: Pick<InventoryItem, "id" | "dailyBurnRate">): number {
+  return Math.ceil(item.dailyBurnRate * (leadTimeDaysFor(item.id) + SAFETY_BUFFER_DAYS));
+}
+
+// dailyRate is a parameter rather than always reading InventoryItem.dailyBurnRate
+// so the Forecasts page can target the model's own predicted rate instead
+// of the item's historical burn rate — "par level per the AI forecast" is a
+// different, and for that card more honest, number than "par level per
+// last month's average."
+export function parLevel(dailyRate: number, targetCoverageDays: number = PAR_TARGET_DAYS): number {
+  return Math.ceil(dailyRate * targetCoverageDays);
+}
+
+// Joins a trained model to the facility's actual stock and scales the
+// series by the same burnFactor inventoryFor() uses for dailyBurnRate, so a
+// clinic sees clinic-sized numbers, not a warehouse's. Returns null when
+// the SKU has no trained model, or isn't stocked at this facility at all.
+export function forecastFor(facilityId: string, itemId: string): ScaledForecast | null {
+  const item = inventoryFor(facilityId).find((i) => i.id === itemId);
+  const meta = forecastModels.find((m) => m.itemId === itemId);
+  if (!item || !meta) return null;
+
+  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["fac-central"];
+  const scale = (n: number | null) => (n == null ? null : Math.round(n * profile.burnFactor));
+  const series = meta.series.map((p) => ({
+    date: p.date,
+    actual: scale(p.actual),
+    forecast: scale(p.forecast),
+    forecastLow: p.forecastLow == null ? null : Math.max(0, scale(p.forecastLow)!),
+    forecastHigh: scale(p.forecastHigh),
+  }));
+
+  return { item, model: meta.model, seasonalityFactor: meta.seasonalityFactor, confidence: meta.confidence, series, purchaseOrder: meta.purchaseOrder };
+}
 
 // ---------------------------------------------------------------------
 // Shortage & Regional Matrix
@@ -557,15 +609,16 @@ export interface ShortageAlert {
   id: string;
   drugName: string;
   inn: string;
+  itemId: string; // resolves the alert to the same SKU inventoryFor() knows about
   source: "FDA" | "EMA";
   severity: "critical" | "warning";
   note: string;
 }
 
 export const shortageAlerts: ShortageAlert[] = [
-  { id: "sa-01", drugName: "Norepinephrine 4mg/4mL", inn: "Norepinephrine bitartrate", source: "FDA", severity: "critical", note: "Manufacturing delay, national backorder through Q4." },
-  { id: "sa-02", drugName: "Ceftriaxone 1g", inn: "Ceftriaxone sodium", source: "EMA", severity: "warning", note: "Reduced allocation, 2 of 3 suppliers affected." },
-  { id: "sa-03", drugName: "Heparin Sodium 5000IU/mL", inn: "Heparin sodium", source: "FDA", severity: "warning", note: "Raw material shortage reported by manufacturer." },
+  { id: "sa-01", drugName: "Norepinephrine 4mg/4mL", inn: "Norepinephrine bitartrate", itemId: "inv-005", source: "FDA", severity: "critical", note: "Manufacturing delay, national backorder through Q4." },
+  { id: "sa-02", drugName: "Ceftriaxone 1g", inn: "Ceftriaxone sodium", itemId: "inv-003", source: "EMA", severity: "warning", note: "Reduced allocation, 2 of 3 suppliers affected." },
+  { id: "sa-03", drugName: "Heparin Sodium 5000IU/mL", inn: "Heparin sodium", itemId: "inv-010", source: "FDA", severity: "warning", note: "Raw material shortage reported by manufacturer." },
 ];
 
 export interface FacilityStockRow {
@@ -573,33 +626,57 @@ export interface FacilityStockRow {
   facilityId: string;
   units: number;
   daysOfSupply: number;
+  // false for partner sites (St. Luke, Mercy) — we don't operate them, so
+  // this is a hand-maintained estimate rather than something inventoryFor()
+  // actually computed. true for every operated facility.
+  measured: boolean;
 }
 
-// Matrix is keyed by drug id so switching the focus drug swaps the whole
-// facility list — same shape as forecastDrugs on purpose. Facility name,
-// type and distance come from the `facilities` registry, so the "this
-// facility" row follows whichever site is currently selected.
-export const shortageMatrix: Record<string, FacilityStockRow[]> = {
-  "sa-01": [
-    { id: "f-01", facilityId: "fac-central", units: 6, daysOfSupply: 1 },
-    { id: "f-02", facilityId: "fac-stluke", units: 0, daysOfSupply: 0 },
-    { id: "f-03", facilityId: "fac-warehouse-n", units: 48, daysOfSupply: 68 },
-    { id: "f-04", facilityId: "fac-riverside", units: 2, daysOfSupply: 2 },
-    { id: "f-05", facilityId: "fac-mercy", units: 0, daysOfSupply: 0 },
-    { id: "f-06", facilityId: "fac-westend", units: 30, daysOfSupply: 45 },
-  ],
-  "sa-02": [
-    { id: "f-01", facilityId: "fac-central", units: 9, daysOfSupply: 1 },
-    { id: "f-02", facilityId: "fac-stluke", units: 210, daysOfSupply: 70 },
-    { id: "f-03", facilityId: "fac-warehouse-n", units: 340, daysOfSupply: 95 },
-    { id: "f-04", facilityId: "fac-riverside", units: 0, daysOfSupply: 0 },
-  ],
-  "sa-03": [
-    { id: "f-01", facilityId: "fac-central", units: 5, daysOfSupply: 1 },
-    { id: "f-02", facilityId: "fac-stluke", units: 12, daysOfSupply: 8 },
-    { id: "f-05", facilityId: "fac-mercy", units: 64, daysOfSupply: 61 },
-  ],
+// Partner-facility figures only — sites we don't operate and can't derive
+// from inventoryFor(). Missing entries mean we have no visibility into that
+// site for that alert, not that they hold zero stock.
+const PARTNER_SHORTAGE_STOCK: Record<string, Record<string, { units: number; daysOfSupply: number }>> = {
+  "sa-01": {
+    "fac-stluke": { units: 0, daysOfSupply: 0 },
+    "fac-mercy": { units: 0, daysOfSupply: 0 },
+  },
+  "sa-02": {
+    "fac-stluke": { units: 210, daysOfSupply: 70 },
+  },
+  "sa-03": {
+    "fac-stluke": { units: 12, daysOfSupply: 8 },
+    "fac-mercy": { units: 64, daysOfSupply: 61 },
+  },
 };
+
+// Derived from inventoryFor() for every operated facility, so this can
+// never disagree with what Inventory shows for the same SKU — the matrix
+// used to be a hand-maintained table that drifted from FACILITY_PROFILE's
+// `absent` list (e.g. it showed Norepinephrine in stock at facilities whose
+// profile excludes it). Partner facilities (not operated) fall back to a
+// hand-authored estimate, or are omitted if we have none for that alert.
+export function shortageRowsFor(alertId: string): FacilityStockRow[] {
+  const alert = shortageAlerts.find((a) => a.id === alertId);
+  if (!alert) return [];
+
+  const rows: FacilityStockRow[] = [];
+  for (const f of facilities) {
+    if (f.operated) {
+      const item = inventoryFor(f.id).find((i) => i.id === alert.itemId);
+      rows.push({
+        id: `f-${f.id}`,
+        facilityId: f.id,
+        units: item?.currentStock ?? 0,
+        daysOfSupply: item ? daysOfSupply(item) : 0,
+        measured: true,
+      });
+    } else {
+      const est = PARTNER_SHORTAGE_STOCK[alertId]?.[f.id];
+      if (est) rows.push({ id: `f-${f.id}`, facilityId: f.id, ...est, measured: false });
+    }
+  }
+  return rows;
+}
 
 // ---------------------------------------------------------------------
 // Purchase & Orders
@@ -608,6 +685,7 @@ export const shortageMatrix: Record<string, FacilityStockRow[]> = {
 export interface Supplier {
   id: string;
   name: string;
+  shortName: string;
   leadTimeDays: number;
   reliabilityPct: number;
   shippingFlat: number;
@@ -620,6 +698,7 @@ export const suppliers: Supplier[] = [
   {
     id: "sup-pharmasource",
     name: "PharmaSource Global Ltd.",
+    shortName: "PharmaSource",
     leadTimeDays: 5,
     reliabilityPct: 98.2,
     shippingFlat: 120,
@@ -628,6 +707,7 @@ export const suppliers: Supplier[] = [
   {
     id: "sup-meditech",
     name: "Meditech Distribution Co.",
+    shortName: "Meditech",
     leadTimeDays: 7,
     reliabilityPct: 95.6,
     shippingFlat: 80,
@@ -636,6 +716,7 @@ export const suppliers: Supplier[] = [
   {
     id: "sup-europharm",
     name: "EuroPharm Wholesale AG",
+    shortName: "EuroPharm",
     leadTimeDays: 3,
     reliabilityPct: 99.1,
     shippingFlat: 210,
@@ -644,6 +725,7 @@ export const suppliers: Supplier[] = [
   {
     id: "sup-nordic",
     name: "Nordic Medical Supply",
+    shortName: "Nordic",
     leadTimeDays: 11,
     reliabilityPct: 92.4,
     shippingFlat: 45,

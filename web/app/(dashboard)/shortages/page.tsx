@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowRight, Building2, MapPin, ShieldCheck, Truck } from "lucide-react";
+import { AlertTriangle, ArrowRight, Building2, MapPin, ShieldAlert, ShieldCheck, Truck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,16 +10,31 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { Callout } from "@/components/dashboard/Callout";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
-import { facilityById, shortageAlerts, shortageMatrix, type FacilityStockRow } from "@/lib/mock-data";
+import { facilityById, shortageAlerts, shortageRowsFor, type FacilityStockRow } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+
+// Below this, a facility is treated as needing the drug itself and can't be
+// asked to give any up — matches the "Critical" band used everywhere else
+// (inventory, forecasts). Above the target, it has room to spare.
+const CRITICAL_FLOOR_DAYS = 5;
+const TARGET_COVERAGE_DAYS = 14;
 
 function coverageTone(row: FacilityStockRow): StatusTone {
   if (row.units === 0) return "stockout";
-  if (row.daysOfSupply <= 5) return "critical";
+  if (row.daysOfSupply <= CRITICAL_FLOOR_DAYS) return "critical";
   if (row.daysOfSupply >= 60) return "surplus";
   return "normal";
+}
+
+// FacilityStockRow only carries units and days-of-supply (no burn rate of
+// its own), so back one out for the transfer math below. Rows with
+// daysOfSupply === 0 (stockout) fall back to treating the whole balance as
+// one day's burn rather than dividing by zero.
+function impliedDailyBurn(row: FacilityStockRow): number {
+  return row.daysOfSupply > 0 ? row.units / row.daysOfSupply : Math.max(row.units, 1);
 }
 
 export default function ShortagesPage() {
@@ -28,16 +43,18 @@ export default function ShortagesPage() {
   const [alertId, setAlertId] = useState(shortageAlerts[0].id);
   const [search, setSearch] = useState("");
   const [transferFrom, setTransferFrom] = useState<string | undefined>();
-  const [transferQty, setTransferQty] = useState(30);
+  const [transferQty, setTransferQty] = useState(1);
   const [dispatch, setDispatch] = useState<{ ref: string; time: string } | null>(null);
 
   const alert = shortageAlerts.find((a) => a.id === alertId)!;
-  // Resolve each row against the facility registry so names, types and
-  // distances have one source of truth, and "this facility" follows the
-  // site currently selected in the sidebar.
+  // Derived from inventoryFor() for every operated facility — this can no
+  // longer disagree with what Inventory shows for the same SKU. Resolve
+  // each row against the facility registry so names, types and distances
+  // have one source of truth, and "this facility" follows the site
+  // currently selected in the sidebar.
   // distanceKm is measured from Central, so offset against the active site
   // rather than reporting Central as "0km away" from a clinic.
-  const rows = (shortageMatrix[alertId] ?? []).map((r) => {
+  const rows = shortageRowsFor(alertId).map((r) => {
     const f = facilityById(r.facilityId);
     return {
       ...r,
@@ -46,8 +63,44 @@ export default function ShortagesPage() {
       isCurrent: r.facilityId === facilityId,
     };
   });
-  const surplusFacilities = rows.filter((r) => coverageTone(r) === "surplus" && !r.isCurrent);
-  const filteredRows = rows.filter((r) => r.facility.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const currentRow = rows.find((r) => r.isCurrent);
+
+  // Ranked, not filtered to a fixed ">60 days" gate — a facility with 45
+  // days of supply is still a legitimate source, it just has less room
+  // than one with 68. Anything at or below its own critical floor is
+  // excluded outright: it needs the drug itself.
+  const candidateSources = rows
+    .filter((r) => !r.isCurrent && coverageTone(r) !== "critical" && coverageTone(r) !== "stockout")
+    .sort((a, b) => b.daysOfSupply - a.daysOfSupply || a.awayKm - b.awayKm);
+
+  const sortRank: Record<StatusTone, number> = { surplus: 0, normal: 1, warning: 2, critical: 3, stockout: 4 };
+  const networkRows = [...rows].sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    return sortRank[coverageTone(a)] - sortRank[coverageTone(b)];
+  });
+  const filteredRows = networkRows.filter((r) => r.facility.name.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const source = rows.find((r) => r.facilityId === transferFrom);
+  const sourceSpare = source ? Math.max(0, source.units - Math.ceil(impliedDailyBurn(source) * CRITICAL_FLOOR_DAYS)) : 0;
+  const wouldHarmSource = source != null && transferQty > sourceSpare;
+  const receivingDaysAfter =
+    currentRow && transferQty > 0 ? Math.round((currentRow.units + transferQty) / impliedDailyBurn(currentRow)) : null;
+  const sourceDaysAfter = source && transferQty > 0 ? Math.round((source.units - transferQty) / impliedDailyBurn(source)) : null;
+
+  // Suggest the quantity that closes the gap to a 14-day target at this
+  // facility, capped at what the chosen source can spare without dropping
+  // below its own critical floor — rather than a flat, unexplained 30.
+  useEffect(() => {
+    if (!transferFrom || !currentRow) return;
+    const src = rows.find((r) => r.facilityId === transferFrom);
+    if (!src) return;
+    const gap = Math.max(0, Math.ceil(impliedDailyBurn(currentRow) * TARGET_COVERAGE_DAYS) - currentRow.units);
+    const spare = Math.max(0, src.units - Math.ceil(impliedDailyBurn(src) * CRITICAL_FLOOR_DAYS));
+    setTransferQty(Math.max(1, Math.min(gap || spare, spare) || 1));
+    // Only re-derive when the source or the active alert/facility changes —
+    // not on every keystroke of a manual override.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferFrom, alertId, facilityId]);
 
   function selectAlert(id: string) {
     setAlertId(id);
@@ -72,8 +125,8 @@ export default function ShortagesPage() {
         <p className="text-xs text-muted-foreground">National shortage alerts and cross-facility stock redistribution.</p>
       </div>
 
-      <div className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950">
-        <div className="flex items-center gap-2 text-xs font-medium text-amber-800 dark:text-amber-300">
+      <Callout tone="warning" className="flex flex-col gap-2 rounded-lg p-3">
+        <div className="flex items-center gap-2 font-medium">
           <AlertTriangle className="size-4" />
           {shortageAlerts.length} active shortage alerts from FDA / EMA drug shortage databases
         </div>
@@ -93,13 +146,15 @@ export default function ShortagesPage() {
             </button>
           ))}
         </div>
-      </div>
+      </Callout>
 
       <div className="grid gap-4 lg:grid-cols-[60%_40%]">
         <Card className="gap-3 py-4">
           <CardHeader className="px-4">
             <CardTitle className="text-sm">Facility network — {alert.drugName}</CardTitle>
-            <CardDescription className="text-xs">Live stock across regional hospitals, clinics, and pharmacies.</CardDescription>
+            <CardDescription className="text-xs">
+              Live stock across regional hospitals, clinics, and pharmacies · sorted by ability to help.
+            </CardDescription>
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -125,10 +180,16 @@ export default function ShortagesPage() {
                         <p className="truncate font-medium">
                           {row.facility.name}
                           {row.isCurrent && <span className="ml-1 font-normal text-muted-foreground">(this facility)</span>}
+                          {!row.measured && (
+                            <span className="ml-1.5 rounded border px-1 py-0.5 align-middle text-[9px] font-normal uppercase text-muted-foreground">
+                              Est.
+                            </span>
+                          )}
                         </p>
                         <p className="flex items-center gap-1 text-muted-foreground">
                           <MapPin className="size-3" /> {row.facility.type} ·{" "}
                           {row.isCurrent ? "current site" : `${row.awayKm}km away`}
+                          {!row.measured && " · not directly monitored"}
                         </p>
                       </div>
                     </div>
@@ -152,23 +213,26 @@ export default function ShortagesPage() {
         <Card className="gap-3 py-4">
           <CardHeader className="px-4">
             <CardTitle className="text-sm">Inter-facility transfer request</CardTitle>
-            <CardDescription className="text-xs">Redistribute stock from a surplus facility to this location.</CardDescription>
+            <CardDescription className="text-xs">Redistribute stock from a facility with spare supply to this location.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-4 text-xs">
-            {surplusFacilities.length === 0 ? (
-              <p className="text-muted-foreground">No surplus facilities available for {alert.drugName} right now.</p>
+            {candidateSources.length === 0 ? (
+              <p className="text-muted-foreground">No facility has spare {alert.drugName} to transfer right now.</p>
             ) : (
               <>
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-muted-foreground">Source facility (surplus &gt;60 days)</span>
+                  <span className="text-muted-foreground">Source facility</span>
                   <Select value={transferFrom} onValueChange={setTransferFrom}>
                     <SelectTrigger size="sm" className="h-8 w-full text-xs">
                       <SelectValue placeholder="Select a facility" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        {surplusFacilities.map((f) => (
-                          <SelectItem key={f.id} value={f.id}>{f.facility.name} — {f.units} units</SelectItem>
+                        {candidateSources.map((f) => (
+                          <SelectItem key={f.id} value={f.facilityId}>
+                            {f.facility.name} — {f.units} units
+                            {coverageTone(f) === "surplus" ? " (surplus)" : " (limited spare)"}
+                          </SelectItem>
                         ))}
                       </SelectGroup>
                     </SelectContent>
@@ -177,7 +241,7 @@ export default function ShortagesPage() {
 
                 <div className="flex items-center gap-2">
                   <Building2 className="size-3.5 text-muted-foreground" />
-                  <span>{transferFrom ? surplusFacilities.find((f) => f.id === transferFrom)?.facility.name : "Source"}</span>
+                  <span>{source ? source.facility.name : "Source"}</span>
                   <ArrowRight className="size-3.5 text-muted-foreground" />
                   <span>{facility.name} (this facility)</span>
                 </div>
@@ -193,14 +257,34 @@ export default function ShortagesPage() {
                   />
                 </div>
 
+                {source && receivingDaysAfter != null && sourceDaysAfter != null && (
+                  <p className="text-muted-foreground">
+                    Brings {facility.name} to <span className="font-mono tabular-nums text-foreground">{receivingDaysAfter}d</span>,
+                    leaves {source.facility.name} at{" "}
+                    <span className={cn("font-mono tabular-nums", wouldHarmSource ? "font-semibold text-red-600 dark:text-red-400" : "text-foreground")}>
+                      {sourceDaysAfter}d
+                    </span>.
+                  </p>
+                )}
+
+                {wouldHarmSource && (
+                  <Callout tone="critical" className="flex items-start gap-2">
+                    <ShieldAlert className="size-3.5 shrink-0" />
+                    <span>
+                      This would leave {source?.facility.name} below its own {CRITICAL_FLOOR_DAYS}-day critical floor. Reduce the
+                      quantity or pick another source before dispatching.
+                    </span>
+                  </Callout>
+                )}
+
                 <Button size="sm" className="h-8 text-xs" disabled={!transferFrom} onClick={requestTransfer}>
                   <Truck data-icon="inline-start" />
                   Request {transferQty} units transfer
                 </Button>
 
                 {dispatch && (
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2.5 text-xs dark:border-emerald-900 dark:bg-emerald-950">
-                    <div className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
+                  <Callout tone="normal">
+                    <div className="flex items-center gap-1.5 font-medium">
                       <ShieldCheck className="size-3.5" />
                       Transfer {dispatch.ref} dispatched
                     </div>
@@ -208,7 +292,7 @@ export default function ShortagesPage() {
                     <p className="text-muted-foreground">
                       Logged by Dr. Casey Park at {dispatch.time} · automated logistics notified · audit trail recorded per ISO-27001.
                     </p>
-                  </div>
+                  </Callout>
                 )}
               </>
             )}

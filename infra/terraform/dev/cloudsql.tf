@@ -25,6 +25,7 @@ resource "google_sql_database_instance" "dev" {
     availability_type = "ZONAL"
     disk_type         = "PD_HDD"
     disk_size         = 10
+    # activation_policy = "NEVER"
 
     # retained_backups is the knob for "keep 7 daily backups".
     # transaction_log_retention_days is NOT — it only governs point-in-time

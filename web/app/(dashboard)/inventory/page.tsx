@@ -14,6 +14,7 @@ import {
   FileText,
   Repeat2,
   ScrollText,
+  TrendingUp,
   Boxes,
   AlertTriangle,
   Clock,
@@ -21,7 +22,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Select,
@@ -59,12 +59,15 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { AnaloguesDialog } from "@/components/dashboard/AnaloguesDialog";
+import { StatTile } from "@/components/dashboard/StatTile";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
+import { useInventory } from "@/lib/inventory-context";
 import {
-  inventoryFor,
   inventoryKpisFor,
+  isoPlusDays,
   daysOfSupply,
+  reorderPoint,
   stockRisk,
   daysUntil,
   type InventoryItem,
@@ -86,40 +89,59 @@ const CERT_TONE: Record<InventoryItem["certStatus"], StatusTone> = {
   expired: "critical",
 };
 
-function KpiCard({ icon: Icon, label, value, tone }: { icon: typeof Boxes; label: string; value: string | number; tone?: "critical" | "warning" }) {
-  return (
-    <Card className="gap-1 py-3">
-      <CardContent className="flex items-center gap-3 px-4">
-        <span
-          className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-md",
-            tone === "critical" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
-            tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400",
-            !tone && "bg-muted text-muted-foreground",
-          )}
-        >
-          <Icon className="size-4" />
-        </span>
-        <div>
-          <p className="font-mono text-lg font-semibold leading-none tabular-nums">{value}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{label}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+const OTHER_SKU = "__other__";
 
-function ReceiveBatchDialog() {
+// Actually writes into inventory now — previously validated a full form
+// and then discarded it, with a success toast in front of a no-op. A
+// picker over the facility's own catalogue is the default (free text can't
+// resolve to a real InventoryItem); "Other / new SKU" is the escape hatch
+// for a genuinely new product.
+function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: InventoryItem[] }) {
+  const { receiveBatch } = useInventory();
   const [open, setOpen] = useState(false);
+  const [itemId, setItemId] = useState<string>(items[0]?.id ?? OTHER_SKU);
+  const [drugName, setDrugName] = useState("");
+  const [batchNumber, setBatchNumber] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+
+  function reset() {
+    setItemId(items[0]?.id ?? OTHER_SKU);
+    setDrugName("");
+    setBatchNumber("");
+    setQuantity("");
+    setExpiryDate("");
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    const qty = Number(quantity);
+    const isNew = itemId === OTHER_SKU;
+    if (!qty || qty < 1 || !batchNumber.trim() || !expiryDate || (isNew && !drugName.trim())) return;
+
+    const selected = items.find((i) => i.id === itemId);
+    const created = receiveBatch(facilityId, {
+      itemId: isNew ? undefined : itemId,
+      drugName: isNew ? drugName.trim() : selected!.drugName,
+      batchNumber: batchNumber.trim(),
+      quantity: qty,
+      expiryDate,
+    });
     setOpen(false);
-    toast.success("Batch received into inventory.");
+    reset();
+    toast.success("Batch received into inventory.", {
+      description: `${qty} ${isNew ? "units" : selected!.unit} of ${created.drugName} — batch ${batchNumber.trim()}.`,
+    });
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) reset();
+      }}
+    >
       <DialogTrigger asChild>
         <Button size="sm" className="h-8 text-xs">
           <Plus data-icon="inline-start" />
@@ -134,20 +156,65 @@ function ReceiveBatchDialog() {
         <form onSubmit={submit}>
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="rb-drug">Drug name</FieldLabel>
-              <Input id="rb-drug" placeholder="e.g. Amoxicillin/Clavulanate 875mg" required />
+              <FieldLabel htmlFor="rb-item">Drug</FieldLabel>
+              <Select value={itemId} onValueChange={setItemId}>
+                <SelectTrigger id="rb-item" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {items.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
+                    ))}
+                    <SelectItem value={OTHER_SKU}>Other / new SKU…</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </Field>
+            {itemId === OTHER_SKU && (
+              <Field>
+                <FieldLabel htmlFor="rb-drug">Drug name</FieldLabel>
+                <Input
+                  id="rb-drug"
+                  value={drugName}
+                  onChange={(e) => setDrugName(e.target.value)}
+                  placeholder="e.g. Amoxicillin/Clavulanate 875mg"
+                  required
+                />
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="rb-batch">Batch #</FieldLabel>
-              <Input id="rb-batch" placeholder="e.g. AMX-24118-B" required />
+              <Input
+                id="rb-batch"
+                value={batchNumber}
+                onChange={(e) => setBatchNumber(e.target.value)}
+                placeholder="e.g. AMX-24118-B"
+                required
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="rb-qty">Quantity</FieldLabel>
-              <Input id="rb-qty" type="number" min={1} placeholder="0" required />
+              <Input
+                id="rb-qty"
+                type="number"
+                min={1}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                placeholder="0"
+                required
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="rb-expiry">Expiry date</FieldLabel>
-              <Input id="rb-expiry" type="date" required />
+              <Input
+                id="rb-expiry"
+                type="date"
+                min={isoPlusDays(0)}
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                required
+              />
             </Field>
           </FieldGroup>
           <DialogFooter className="mt-4">
@@ -194,6 +261,7 @@ export default function InventoryPage() {
   const router = useRouter();
   const { setFocus } = useCopilot();
   const { facilityId, facility } = useFacility();
+  const { itemsFor } = useInventory();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | StockRisk>("all");
   const [range, setRange] = useState<DateRange | undefined>();
@@ -201,8 +269,21 @@ export default function InventoryPage() {
   const [analogueItem, setAnalogueItem] = useState<InventoryItem | null>(null);
   const [certItem, setCertItem] = useState<InventoryItem | null>(null);
 
-  const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
-  const kpis = useMemo(() => inventoryKpisFor(facilityId), [facilityId]);
+  const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
+  // criticalStock/expiringSoon/pendingCerts recomputed from `items` (the
+  // received-batch overlay included) rather than read verbatim from
+  // inventoryKpisFor, so topping up a critical SKU can move it out of that
+  // count. totalSkus stays the network-wide catalogue figure — it was never
+  // meant to be "rows in this table" (see UX-12).
+  const kpis = useMemo(() => {
+    const catalogue = inventoryKpisFor(facilityId);
+    return {
+      totalSkus: catalogue.totalSkus,
+      criticalStock: items.filter((i) => stockRisk(i) === "critical").length,
+      expiringSoon: items.filter((i) => daysUntil(i.expiryDate) <= 30).length,
+      pendingCerts: items.filter((i) => i.certStatus !== "valid").length,
+    };
+  }, [items, facilityId]);
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
@@ -228,6 +309,7 @@ export default function InventoryPage() {
         kind: "sku",
         label: item.drugName,
         detail: `Batch ${item.batchNumber} · ${item.currentStock} ${item.unit} on hand · expires ${item.expiryDate}`,
+        itemId: item.id,
       });
     }
   }
@@ -243,10 +325,10 @@ export default function InventoryPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard icon={Boxes} label="Total SKUs" value={kpis.totalSkus.toLocaleString()} />
-        <KpiCard icon={AlertTriangle} label="Critical stock (<3d)" value={kpis.criticalStock} tone="critical" />
-        <KpiCard icon={Clock} label="Expiring soon (<30d)" value={kpis.expiringSoon} tone="warning" />
-        <KpiCard icon={ShieldAlert} label="Pending certificates" value={kpis.pendingCerts} tone="warning" />
+        <StatTile icon={Boxes} label="Catalogue SKUs" value={kpis.totalSkus.toLocaleString()} />
+        <StatTile icon={AlertTriangle} label="Critical stock (<3d)" value={kpis.criticalStock} tone="critical" />
+        <StatTile icon={Clock} label="Expiring soon (<30d)" value={kpis.expiringSoon} tone="warning" />
+        <StatTile icon={ShieldAlert} label="Pending certificates" value={kpis.pendingCerts} tone="warning" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -293,17 +375,27 @@ export default function InventoryPage() {
         </Popover>
 
         <div className="ml-auto">
-          <ReceiveBatchDialog />
+          <ReceiveBatchDialog facilityId={facilityId} items={items} />
         </div>
       </div>
 
+      <p className="text-[11px] text-muted-foreground">
+        Showing {filtered.length} of {items.length} SKUs stocked at {facility.name}
+        {filtered.length !== items.length ? " · filters applied" : ""}.
+      </p>
+
       <div className="overflow-hidden rounded-lg border bg-card">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="sticky top-0 z-10 bg-card">
+        {/* Table's own wrapper is `overflow-x-auto`, which forces its
+            overflow-y to compute as "auto" too (CSS Overflow §3: if one
+            axis is non-visible, "visible" on the other computes to "auto")
+            — that stray, unbounded vertical scrollbox, not main's real
+            scroll, was what the sticky header was binding to, so it never
+            actually stuck. Bounding its height via containerClassName makes
+            it a real scroll container the header can stick within. */}
+          <Table containerClassName="max-h-[32rem] overflow-auto">
+            <TableHeader className="sticky top-0 z-10 border-b bg-card">
               <TableRow>
                 <TableHead>Drug Name & Form</TableHead>
-                <TableHead>INN</TableHead>
                 <TableHead>Batch #</TableHead>
                 <TableHead>Stock</TableHead>
                 <TableHead>Daily Burn</TableHead>
@@ -322,15 +414,36 @@ export default function InventoryPage() {
                     <TableRow
                       key={item.id}
                       onClick={() => selectRow(item)}
+                      aria-selected={selected}
                       className={cn("cursor-pointer text-xs", selected && "bg-muted/60")}
                     >
                       <TableCell className="py-2 font-medium">
-                        {item.drugName}
-                        <span className="block font-normal text-muted-foreground">{item.form}</span>
+                        {/* A real button, not just a clickable <tr> — the
+                            row's onClick is a mouse convenience, this is
+                            what makes row selection (and the copilot
+                            context it sets) reachable by keyboard. */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectRow(item);
+                          }}
+                          className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {item.drugName}
+                          <span className="block font-normal text-muted-foreground">
+                            {item.form} · {item.inn}
+                          </span>
+                          <span className="block font-mono text-[10px] text-muted-foreground">{item.atcCode}</span>
+                        </button>
                       </TableCell>
-                      <TableCell className="py-2 text-muted-foreground">{item.inn}</TableCell>
                       <TableCell className="py-2 font-mono text-[11px] tabular-nums">{item.batchNumber}</TableCell>
-                      <TableCell className="py-2 font-mono tabular-nums">{item.currentStock} <span className="font-sans text-muted-foreground">{item.unit}</span></TableCell>
+                      <TableCell className="py-2 font-mono tabular-nums">
+                        {item.currentStock} <span className="font-sans text-muted-foreground">{item.unit}</span>
+                        <span className="block font-sans text-[10px] font-normal text-muted-foreground">
+                          Reorder at {reorderPoint(item)}
+                        </span>
+                      </TableCell>
                       <TableCell className="py-2 font-mono tabular-nums text-muted-foreground">{item.dailyBurnRate}/day</TableCell>
                       <TableCell className="py-2">
                         <StatusBadge tone={risk}>
@@ -352,6 +465,7 @@ export default function InventoryPage() {
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="size-6">
                               <MoreHorizontal className="size-3.5" />
+                              <span className="sr-only">Actions for {item.drugName}</span>
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
@@ -361,6 +475,9 @@ export default function InventoryPage() {
                               </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => setCertItem(item)}>
                                 <FileText /> View certificate
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => router.push(`/forecasts?sku=${item.id}`)}>
+                                <TrendingUp /> View forecast
                               </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => router.push(`/audit?sku=${item.id}`)}>
                                 <ScrollText /> Audit Log
@@ -374,7 +491,7 @@ export default function InventoryPage() {
               })}
               {filtered.length === 0 && (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={9} className="py-10 text-center">
+                  <TableCell colSpan={8} className="py-10 text-center">
                     <SearchX className="mx-auto size-6 text-muted-foreground/50" />
                     <p className="mt-2 text-xs font-medium">No SKUs match the current filters</p>
                     <p className="text-[11px] text-muted-foreground">Try clearing the status filter or expiry date range.</p>
@@ -383,7 +500,6 @@ export default function InventoryPage() {
               )}
             </TableBody>
           </Table>
-        </div>
       </div>
 
       <AnaloguesDialog

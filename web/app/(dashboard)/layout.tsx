@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { CopilotProvider } from "@/lib/copilot-context";
 import { FacilityProvider } from "@/lib/facility-context";
+import { InventoryProvider } from "@/lib/inventory-context";
 import { OrdersProvider } from "@/lib/orders-context";
-import { SideNav } from "@/components/dashboard/SideNav";
+import { MobileTopBar, SideNav } from "@/components/dashboard/SideNav";
 import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
 import { systemStatus } from "@/lib/mock-data";
 
@@ -37,16 +38,22 @@ function LiveTelemetry() {
 }
 
 // Persistent dashboard shell: left nav + main content + AI Copilot drawer +
-// status/audit footer. No header — search lives on the Inventory page and
-// the Copilot drawer has its own open/collapse control. Mock-data driven —
-// see lib/mock-data.ts — no session gate here, that stays scoped to
+// status/audit footer. No header at `lg` and above — search lives on the
+// Inventory page and the Copilot drawer has its own open/collapse control.
+// Below `lg`, SideNav and CopilotDrawer collapse to nothing inline (there's
+// no room for two fixed side columns on a phone/tablet), so MobileTopBar
+// supplies the only way to reach either — a hamburger Sheet for nav, a
+// button that opens the copilot as a Sheet. Mock-data driven — see
+// lib/mock-data.ts — no session gate here, that stays scoped to
 // app/(legacy).
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <FacilityProvider>
+      <InventoryProvider>
       <OrdersProvider>
         <CopilotProvider>
           <div className="flex h-screen flex-col overflow-hidden bg-muted/30 text-sm">
+            <MobileTopBar />
             <div className="flex min-h-0 flex-1">
               <SideNav />
               <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
@@ -69,6 +76,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </CopilotProvider>
       </OrdersProvider>
+      </InventoryProvider>
     </FacilityProvider>
   );
 }

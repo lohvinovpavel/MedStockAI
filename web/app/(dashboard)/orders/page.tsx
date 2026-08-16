@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   CheckCircle2,
@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { StatTile } from "@/components/dashboard/StatTile";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import {
@@ -34,7 +35,6 @@ import {
   type OrderStatus,
   type PurchaseOrder,
 } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
 
 const STATUS_TONE: Record<OrderStatus, StatusTone> = {
   draft: "warning",
@@ -56,43 +56,39 @@ function money(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
-function KpiCard({ icon: Icon, label, value, tone }: { icon: typeof Inbox; label: string; value: string | number; tone?: "warning" | "info" }) {
-  return (
-    <Card className="gap-1 py-3">
-      <CardContent className="flex items-center gap-3 px-4">
-        <span
-          className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-md",
-            tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
-            tone === "info" && "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400",
-            !tone && "bg-muted text-muted-foreground",
-          )}
-        >
-          <Icon className="size-4" />
-        </span>
-        <div>
-          <p className="font-mono text-lg font-semibold leading-none tabular-nums">{value}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{label}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function OrdersPage() {
-  const { facilityId } = useFacility();
+  const { facilityId, facility } = useFacility();
   const { orders, addOrder, updateOrderStatus } = useOrders();
 
-  // Order form — defaults to the facility you're currently operating as.
+  // Order form — follows the facility you're currently operating as.
   const [formFacility, setFormFacility] = useState(facilityId);
   const [supplierId, setSupplierId] = useState(suppliers[0].id);
   const [drugId, setDrugId] = useState<string | undefined>();
   const [quantity, setQuantity] = useState(100);
   const [statusFilter, setStatusFilter] = useState<"all" | OrderStatus>("all");
 
+  // Switching facility in the sidebar used to leave this form pointed at
+  // the previous site with no indication the two disagreed. Following it
+  // by default still allows an explicit override below — ordering on
+  // behalf of another site is a real workflow — but the override no longer
+  // survives a facility switch, same as the drug selection doesn't.
+  useEffect(() => {
+    setFormFacility(facilityId);
+    setDrugId(undefined);
+  }, [facilityId]);
+
   const formItems = useMemo(() => inventoryFor(formFacility), [formFacility]);
   const supplier = supplierById(supplierId);
   const selectedDrug = formItems.find((i) => i.id === drugId);
+
+  // A SKU picked before a facility switch — sidebar-triggered or via the
+  // form's own facility select — can outlive its facility's catalogue.
+  // Clearing it here (rather than only where the switch happens) covers
+  // both entry points from one place.
+  useEffect(() => {
+    if (drugId && !formItems.some((i) => i.id === drugId)) setDrugId(undefined);
+  }, [formItems, drugId]);
+
   const unitCost = selectedDrug ? supplier.catalog[selectedDrug.id] ?? 0 : 0;
   const estimated = unitCost * quantity + supplier.shippingFlat;
 
@@ -148,10 +144,16 @@ export default function OrdersPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard icon={Inbox} label="Drafts awaiting review" value={drafts.length} tone={drafts.length > 0 ? "warning" : undefined} />
-        <KpiCard icon={Truck} label="In transit" value={orders.filter((o) => o.status === "in_transit").length} tone="info" />
-        <KpiCard icon={PackageCheck} label="Delivered this month" value={thisMonth} />
-        <KpiCard icon={Wallet} label="Committed spend" value={money(committed)} />
+        <StatTile
+          icon={Inbox}
+          label="Drafts awaiting review"
+          value={drafts.length}
+          hint="AI suggestions, all facilities"
+          tone={drafts.length > 0 ? "warning" : undefined}
+        />
+        <StatTile icon={Truck} label="In transit" value={orders.filter((o) => o.status === "in_transit").length} hint="All facilities" tone="info" />
+        <StatTile icon={PackageCheck} label="Delivered this month" value={thisMonth} hint="By order date, not delivery date" />
+        <StatTile icon={Wallet} label="Committed spend" value={money(committed)} hint="Placed + in transit, all facilities" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[60%_40%]">
@@ -164,13 +166,7 @@ export default function OrdersPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground">Receiving pharmacy</span>
-                <Select
-                  value={formFacility}
-                  onValueChange={(v) => {
-                    setFormFacility(v);
-                    setDrugId(undefined);
-                  }}
-                >
+                <Select value={formFacility} onValueChange={setFormFacility}>
                   <SelectTrigger size="sm" className="h-8 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
@@ -182,6 +178,11 @@ export default function OrdersPage() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+                {formFacility !== facilityId && (
+                  <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                    On behalf of — your active site is {facility.name}.
+                  </span>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -234,31 +235,35 @@ export default function OrdersPage() {
 
             <div className="flex flex-col gap-1.5 rounded-md bg-muted/40 p-3">
               <p className="mb-0.5 text-xs font-medium">Estimated cost</p>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">
-                  Unit cost {selectedDrug ? `(${supplier.name.split(" ")[0]})` : ""}
-                </span>
-                <span className="font-mono tabular-nums">{selectedDrug ? `$${unitCost.toFixed(2)}` : "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Line total</span>
-                <span className="font-mono tabular-nums">{selectedDrug ? money(unitCost * quantity) : "—"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Shipping</span>
-                <span className="font-mono tabular-nums">{money(supplier.shippingFlat)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Expected delivery</span>
-                <span className="font-mono tabular-nums">
-                  {isoPlusDays(supplier.leadTimeDays)} ({supplier.leadTimeDays}d)
-                </span>
-              </div>
-              <Separator className="my-1" />
-              <div className="flex justify-between text-sm font-semibold">
-                <span>Estimated total</span>
-                <span className="font-mono tabular-nums">{selectedDrug ? money(estimated) : "—"}</span>
-              </div>
+              {!selectedDrug ? (
+                <p className="py-2 text-center text-muted-foreground">Select a SKU to see unit cost, shipping, and expected delivery.</p>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Unit cost ({supplier.shortName})</span>
+                    <span className="font-mono tabular-nums">${unitCost.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Line total</span>
+                    <span className="font-mono tabular-nums">{money(unitCost * quantity)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Shipping</span>
+                    <span className="font-mono tabular-nums">{money(supplier.shippingFlat)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expected delivery (if ordered today)</span>
+                    <span className="font-mono tabular-nums">
+                      {isoPlusDays(supplier.leadTimeDays)} ({supplier.leadTimeDays}d)
+                    </span>
+                  </div>
+                  <Separator className="my-1" />
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span>Estimated total</span>
+                    <span className="font-mono tabular-nums">{money(estimated)}</span>
+                  </div>
+                </>
+              )}
             </div>
           </CardContent>
           <CardFooter className="px-4">
