@@ -8,8 +8,18 @@ because it is the one number in the forecast nobody has measured
 (docs/prognosis-and-procurement.md §2.2).
 
 Revision ID: 20260817_assume
-Revises: 20260814_prog
+Revises: 20260817_warehouse
 Create Date: 2026-08-17
+
+Re-pointed from 20260814_prog onto 20260817_warehouse after rebasing on main.
+Warehouse (PR #29) was written against prog as its parent too, which left
+alembic with two heads and `upgrade head` refusing to pick one — the same break
+20260814_prognosis.py already carries a note about. This branch is the unmerged
+one, so it moves; warehouse is on main and may already be stamped in deployed
+databases. The tables are independent, so only the linearity matters.
+
+The revision id stays `20260817_assume` — alembic orders by the down_revision
+chain, not by the name, and the id is already stamped in dev databases.
 """
 
 from collections.abc import Sequence
@@ -18,7 +28,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260817_assume"
-down_revision: str | None = "20260814_prog"
+down_revision: str | None = "20260817_warehouse"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
