@@ -427,6 +427,70 @@ class Patient(Base):
     )
 
 
+class ImportAlert(Base):
+    """A foreign establishment on an FDA Import Alert Red List.
+
+    Reference class. docs/compliance-usecases.md §4.1 — the import-certification
+    source, and the one no JSON API exposes. Scraped weekly from
+    accessdata.fda.gov by `services/ingest/app/import_alerts.py`.
+
+    "Red List" is FDA's term and means detention without physical examination:
+    goods from this establishment are held at the border unless the firm shows
+    the violation is corrected. It is a standing regulatory posture, not an
+    event, so the finding it produces is persistent rather than transient.
+    """
+
+    __tablename__ = "import_alert"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # "66-40" (GMP failure) or "66-41" (unapproved drugs).
+    alert_number: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    firm_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Normalised for matching — see medstock_shared.certification.firm_key.
+    # Stored rather than computed on read so the match is indexable and so the
+    # normalisation that produced it is inspectable.
+    firm_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    country: Mapped[str | None] = mapped_column(Text)
+    address: Mapped[str | None] = mapped_column(Text)
+    listed_at: Mapped[date | None] = mapped_column(Date)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("alert_number", "firm_name", name="uq_import_alert_natural"),
+    )
+
+
+class NewsSignal(Base):
+    """An informal report about a drug. **Can only ever raise yellow.**
+
+    docs/compliance-usecases.md §4.3, and the rule there is structural rather
+    than a preference: a news article is an unverified claim about a third
+    party, so acting on it as fact would let the system tell a pharmacist a drug
+    is uncertified because a blog said so. Only a government source sets red.
+    Yellow means "check this", which is exactly what an unconfirmed report
+    warrants.
+
+    Reference class — an article is about a drug, not a hospital.
+    """
+
+    __tablename__ = "news_signal"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ndc: Mapped[str | None] = mapped_column(Text, index=True)
+    # What the article was found by, kept so a reader can judge the match.
+    query_term: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    headline: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    domain: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class AdrSignal(Base):
     """Tier 1: how far above baseline a reaction is *reported* for a drug.
 

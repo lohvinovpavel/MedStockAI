@@ -151,3 +151,68 @@ spec:
             resources:
               requests: { cpu: 50m, memory: 64Mi }
               limits: { memory: 512Mi }
+---
+# Import certification: FDA Import Alert Red Lists -> import_alert.
+# Weekly, because the FDA republishes these lists on a similar cadence and the
+# pages are ~2 MB each. HTML scraping, deliberately (compliance-usecases.md
+# `OPEN` item 3) — no JSON API exposes import alerts, and without them import
+# certification cannot be covered at all. The parser reports zero firms rather
+# than wrong ones if the layout moves, so a silent empty run is the signal to
+# check it.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-import-alerts
+spec:
+  schedule: "0 4 * * 1"   # Mondays 04:00, before the 05:00 certification pass
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: import-alerts
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.import_alerts"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              # ~2 MB of HTML held as a string plus the regex scan over it.
+              limits: { memory: 512Mi }
+---
+# Informal signal: press mentions for stocked drugs -> news_signal.
+# Daily, because news is the fast source — it is the one that moves before the
+# datasets do. Whatever it finds can only ever raise yellow
+# (compliance-usecases.md §4.3): an article is an unverified claim about a third
+# party, and only a government source sets red.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-news
+spec:
+  schedule: "30 6 * * *"  # daily, after certification so the shelf is current
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: news
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.news", "--shelf"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }
