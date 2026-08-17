@@ -15,7 +15,7 @@ That line is not a demo convenience — it is exactly the table split already in
 | Class | Tables | In the demo |
 |---|---|---|
 | **Reference** | `drug`, `shortage_event`, `drug_price`, `rxnorm_edge`, rule tables | **Real.** FDA, RxNorm and NADAC are public — there is no reason to fake them, and faking them would hide feed bugs until a hospital found them |
-| **Tenant** | `formulary_item`, `stock_snapshot`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
+| **Tenant** | `formulary_item`, `stock_snapshot`, `facility`, `storage_location`, `consumption_daily`, `location_condition`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
 
 Because synthetic patients are built on *real* RxCUIs and NDCs, every join, every interaction
 lookup and every certification check behaves in the demo exactly as it will in production. The
@@ -112,20 +112,53 @@ is broken, the demo breaks too — which is the point.
 ## 6. The seed job
 
 ```
-services/ingest/app/seed_demo.py     # refuses unless ENVIRONMENT=demo
+services/ingest/app/gen_demo.py      # writes the committed artifacts (no DB, no network)
+services/ingest/app/seed_demo.py     # loads them; refuses unless ENVIRONMENT=demo
 ```
+
+Generation and seeding are two steps on purpose. `gen_demo` is deterministic
+(`DEMO_SEED=42`, fixed anchor date) and its output is **committed** as
+`data/demo/*.csv.gz`, so CI, teammates and the k8s seed Job load identical bytes without
+rerunning the generator; a test regenerates and diffs, so code and artifacts cannot drift.
+The drug list itself (`data/demo/drugs.csv`, 100 real RxCUIs/NDCs resolved once via RxNav by
+`scripts/build_demo_drugs.py`) is the one place the network is touched — at authoring time,
+never at seed time.
 
 Order matters, because tenant data references real reference data:
 
 1. Run the real reference feeds first — `rxnorm`, `pricing`, `shortages`
 2. Create the demo hospital and its users, one per role
 3. Build a formulary from real NDCs actually present in `drug`
-4. Generate stock levels and 90 days of usage history — `prediction` needs history to forecast
+4. Load stock levels and **3 years of daily usage history** (`consumption_daily`) —
+   `prediction` needs multi-winter history for annual seasonality to be learnable — plus
+   90 days of hourly storage-condition telemetry (`location_condition`)
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly
 
 Step 6 is what keeps the demo honest as the real feeds move underneath it.
+
+---
+
+## 6a. What is planted in the generated series — the contract with `prediction`
+
+The consumption panel (100 drugs × 4 operated facilities × 1,096 days) is not noise; each
+signal below is deliberately planted, statistically pinned by
+`services/ingest/tests/test_gen_demo.py`, and is what issue #7's forecaster is expected to
+find:
+
+| Signal | How it's planted |
+|---|---|
+| Weekly profile | Sat ×0.55, Sun ×0.50 |
+| Annual seasonality | `winter` cohort peaks mid-January (antibiotics, antivirals, flu vaccine); `summer` peaks mid-June (antihistamines, UTI) |
+| Trend | `trending_up` +28 %/yr (GLP-1s, DOACs); `trending_down` −18 %/yr (warfarin, simvastatin) |
+| Demand spikes | one outbreak window per winter per `winter` drug |
+| **Stockout censoring** | 3 `stockout_prone` drugs run an (s,S) reorder sim with a supplier-failure window; recorded qty < true demand and `consumption_daily.stockout` marks the censored days — a zero there is *not* zero demand |
+| Stock consistency | `stock_snapshot.quantity` equals the balance implied by the history's tail, so the inventory page never contradicts the chart |
+
+Condition telemetry has three planted excursions plus one misplaced drug (a refrigerated
+item shelved in a room), all surfaced by `GET /api/warehouse/excursions` — see
+`services/ingest/app/gen_demo.py`'s module docstring for the exact windows.
 
 ---
 

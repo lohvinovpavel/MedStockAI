@@ -250,7 +250,7 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 | `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /export/compliance.csv` |
 | `patient-profiling` | Andrii | `/api/patients` | Analyze patient profile for substitution safety — contraindications, allergies, interactions. | `GET /profiles/{id}` · `POST /profiles/{id}/assess` |
 | `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
-| `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure, physical locations, ward-level storage. Also hosts the connector admin endpoints. | `GET /locations` · `POST /connectors/{id}/propose-spec` · `POST /mapping-specs/{id}/approve` |
+| `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure (B1 facility registry), storage locations, stock placement, recorded consumption history, and storage-condition monitoring — hourly temperature/humidity telemetry checked against per-drug storage requirements, violations computed on read. Also hosts the connector admin endpoints (planned). | `GET /facilities` · `GET /locations` · `GET /stock` · `GET /consumption` · `GET /locations/{id}/conditions` · `GET /excursions` · `POST /connectors/{id}/propose-spec` (planned) |
 
 Two of these — `analogue` and `prediction` — are AI consumers and call `ask_ai()` directly
 (§4). The other five are ordinary CRUD-plus-query services with no path to Gemini at all.

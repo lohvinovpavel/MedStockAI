@@ -11,7 +11,9 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
+    Numeric,
     Text,
     UniqueConstraint,
     func,
@@ -62,6 +64,14 @@ class Drug(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ndc: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     name: Mapped[str | None] = mapped_column(Text)
+    # Storage requirements are class-level (refrigerated 2–8°C, controlled room
+    # temp 15–25°C, freezer −25…−15°C), not parsed from SPL label text — the
+    # warehouse excursion check compares location telemetry against these. A
+    # future ingest job may overwrite them with label-derived values per NDC.
+    storage_class: Mapped[str | None] = mapped_column(Text)  # refrigerated|crt|freezer
+    storage_min_c: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    storage_max_c: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    humidity_max_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -210,6 +220,10 @@ class StockSnapshot(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    # B1: facility_id carries site identity; location_id survives as the
+    # intra-facility shelf code (matches storage_location.code). Nullable
+    # because pre-B1 rows exist; the demo seeder backfills it.
+    facility_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("facility.id"))
     location_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
@@ -217,7 +231,14 @@ class StockSnapshot(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("hospital_id", "ndc", "location_id", name="uq_stock_hospital_ndc_loc"),
+        UniqueConstraint(
+            "hospital_id",
+            "ndc",
+            "facility_id",
+            "location_id",
+            name="uq_stock_hospital_ndc_fac_loc",
+            postgresql_nulls_not_distinct=True,
+        ),
     )
 
 
@@ -355,4 +376,123 @@ class Patient(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# --- Warehouse (docs/backend/specs/B1-facility-registry.md, issue #8): tenant
+# facility/location registry plus the two generated time series the demo runs
+# on — daily drug consumption (what prediction forecasts from, E1) and hourly
+# storage-condition telemetry (what the excursion check reads). Written by
+# services/ingest seed_demo; served by services/warehouse.
+
+
+class Facility(Base):
+    """One physical site of a hospital (campus, clinic, off-site warehouse).
+
+    `code` is the stable slug the web client sends (`central`, `riverside`, …);
+    `id` is internal. `operated = false` marks partner sites shown in the
+    shortage matrix but never valid as an order/transfer target. Distance is
+    computed from lat/lon per request, never stored (B1 rule 3).
+    """
+
+    __tablename__ = "facility"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    lat: Mapped[float | None] = mapped_column(Numeric(9, 6))
+    lon: Mapped[float | None] = mapped_column(Numeric(9, 6))
+    operated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('Hospital','Clinic','Pharmacy','Warehouse')", name="ck_facility_type"
+        ),
+        UniqueConstraint("hospital_id", "code", name="uq_facility_hospital_code"),
+    )
+
+
+class StorageLocation(Base):
+    """Storage location inside a facility (ward fridge, shelf, cold room).
+
+    Flat list keyed by facility (B1: "the tree can wait"). `kind` drives
+    condition simulation and which storage classes belong here; `code` is what
+    `stock_snapshot.location_id` carries as the intra-facility shelf id.
+    """
+
+    __tablename__ = "storage_location"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    facility_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("facility.id", ondelete="CASCADE"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('room','fridge','freezer','cold_room')", name="ck_storage_location_kind"
+        ),
+        UniqueConstraint("facility_id", "code", name="uq_storage_location_facility_code"),
+    )
+
+
+class ConsumptionDaily(Base):
+    """Daily drug consumption per facility — the history prediction (E1)
+    forecasts from and the warehouse consumption chart plots.
+
+    Pre-aggregated on purpose: when B4's consume-event ledger arrives it
+    becomes the source and this table the derived rollup, unchanged. Both ids
+    carried — consumption is physically NDC-grain, forecasts are requested by
+    RxCUI (E1 `GET /forecast/{rxcui}`). `stockout = true` marks recorded zeros
+    that are censoring (shelf was empty), not absence of demand.
+    """
+
+    __tablename__ = "consumption_daily"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    qty_consumed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stockout: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "hospital_id", "facility_id", "ndc", "date", name="uq_consumption_daily_natural"
+        ),
+        Index("ix_consumption_daily_series", "facility_id", "ndc", "date"),
+    )
+
+
+class LocationCondition(Base):
+    """Hourly temperature/humidity reading for one storage location. Tenancy
+    rides on the location → facility → hospital chain; no direct hospital_id.
+    """
+
+    __tablename__ = "location_condition"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    location_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("storage_location.id", ondelete="CASCADE"), nullable=False
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    temperature_c: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    humidity_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("location_id", "ts", name="uq_location_condition_natural"),
     )

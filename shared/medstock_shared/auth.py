@@ -48,15 +48,22 @@ def current_principal(request: Request) -> Principal:
 
 
 PERMS: dict[str, set[str]] = {
-    "pharmacist": {"queue:read", "recommendation:approve", "inventory:read", "drug:search"},
+    "pharmacist": {
+        "queue:read",
+        "recommendation:approve",
+        "inventory:read",
+        "drug:search",
+        "facility:read",
+    },
     "physician": {
         "alert:read",
         "inventory:read",
         "drug:search",
         "patient:read",
         "patient:write",
+        "facility:read",
     },
-    "director": {"dashboard:read", "audit:read", "inventory:read", "drug:search"},
+    "director": {"dashboard:read", "audit:read", "inventory:read", "drug:search", "facility:read"},
     "admin": {
         "mapping:approve",
         "formulary:write",
@@ -65,6 +72,7 @@ PERMS: dict[str, set[str]] = {
         "drug:search",
         "patient:read",
         "patient:write",
+        "facility:read",
     },
 }
 
