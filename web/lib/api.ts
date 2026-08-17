@@ -17,6 +17,21 @@ function shouldEndSession(service: ServiceName, path: string) {
   return path !== "/login" && path !== "/healthz" && path !== "/readyz" && path !== "/version";
 }
 
+/**
+ * Carries the HTTP status alongside the message.
+ *
+ * Callers that must tell failures apart cannot do it from the message: 403
+ * "forbidden" and 503 "unreachable" are different things to say to a user, and
+ * a page that collapses them shows an empty list for both. Existing callers
+ * that only read `.message` are unaffected — this is still an Error.
+ */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function apiFetch(service: ServiceName, path: string, init?: RequestInit) {
   const res = await fetch(`${SERVICES[service]}${path}`, {
     ...init,
@@ -40,7 +55,7 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
     } catch {
       /* keep status text */
     }
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
   return res.status === 204 ? null : res.json();
 }

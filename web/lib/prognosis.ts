@@ -1,0 +1,119 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { ApiError, apiFetch } from "@/lib/api";
+
+/**
+ * PP-5 approval gate — the client half.
+ *
+ * A risk profile is a model's reading of an FDA label. It is extracted offline,
+ * lands `awaiting_approval`, and colours nothing anywhere in the product until a
+ * pharmacist rules on it (docs/prognosis-and-procurement.md §1.3, gate 3).
+ * This is the queue behind that ruling.
+ */
+
+export type ProfileStatus = "awaiting_approval" | "approved" | "rejected";
+
+/** One condition from the label, expressed over the de-identified feature vector. */
+export type RiskFactor = { feature: string; op: string; value: string | string[] };
+
+export type RiskProfile = {
+  id: number;
+  rxcui: string;
+  reaction: string;
+  seriousness: string;
+  risk_factors: RiskFactor[];
+  /** Verbatim from the named label section. The reviewable basis — see below. */
+  citation: string;
+  section: string;
+  spl_id: string | null;
+  status: ProfileStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string;
+  extracted_at: string | null;
+};
+
+export type QueueCounts = Record<ProfileStatus, number>;
+
+export type Queue = {
+  status: string;
+  limit: number;
+  items: RiskProfile[];
+  counts: QueueCounts;
+  /** null, never 0, until somebody has ruled on something. See §5.4. */
+  accept_rate: number | null;
+};
+
+/**
+ * Why the queue is not on screen, when it is not on screen.
+ *
+ * These must stay distinct all the way to the render. An empty list is a claim
+ * — "there is nothing here to review" — and showing it because the service was
+ * unreachable or the role was wrong tells a pharmacist their backlog is clear
+ * when it is not. Same reasoning as COMP-1's `unavailable`
+ * (components/CertificationBadge.tsx): a thing we could not check must never
+ * borrow the appearance of one that came back clean.
+ */
+export type QueueState = "loading" | "ok" | "unauthenticated" | "forbidden" | "unavailable";
+
+export const EMPTY_COUNTS: QueueCounts = { awaiting_approval: 0, approved: 0, rejected: 0 };
+
+function stateFor(error: unknown): QueueState {
+  const status = error instanceof ApiError ? error.status : 0;
+  if (status === 401) return "unauthenticated";
+  if (status === 403) return "forbidden";
+  return "unavailable";
+}
+
+export function useRiskProfileQueue(status: string) {
+  const [queue, setQueue] = useState<Queue | null>(null);
+  const [state, setState] = useState<QueueState>("loading");
+  // Separate from `state` so a re-read never throws the rows away and puts a
+  // skeleton in their place. The old numbers stay up, dimmed, and are replaced
+  // when the new ones land — no layout jump between a ruling and its effect.
+  const [refreshing, setRefreshing] = useState(false);
+  // Bumped by a ruling, to re-read the queue and the counts it moved.
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRefreshing(true);
+    apiFetch("patients", `/risk-profiles?status=${encodeURIComponent(status)}`)
+      .then((body) => {
+        if (cancelled) return;
+        setQueue(body as Queue);
+        setState("ok");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        // Hold the previous rows rather than blanking the table: a failed
+        // refresh after a ruling should not look like the queue emptying.
+        setState(stateFor(error));
+      })
+      .finally(() => {
+        if (!cancelled) setRefreshing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, tick]);
+
+  return { queue, state, refreshing, refresh };
+}
+
+export async function reviewProfile(id: number, action: "approve" | "reject", note: string) {
+  return apiFetch("patients", `/risk-profiles/${id}/review`, {
+    method: "POST",
+    body: JSON.stringify({ action, note }),
+  });
+}
+
+/**
+ * Only a pharmacist may rule (medstock_shared/auth.py). Mirrored here to keep
+ * the buttons honest — a director can read this page, and offering them a
+ * control that will always 403 is worse than not offering it. The server is
+ * still the authority; this only decides what to render.
+ */
+export const canApprove = (role: string | undefined) => role === "pharmacist";
