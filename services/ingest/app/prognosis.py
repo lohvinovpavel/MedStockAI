@@ -34,7 +34,7 @@ import httpx
 from medstock_shared import AIError, ask_ai
 from medstock_shared.db import SessionLocal
 from medstock_shared.models import DrugRiskProfile, FormularyItem
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from ._source import fetch_json
@@ -144,6 +144,25 @@ def extract(rxcui: str) -> list[dict]:
     ]
 
 
+# What re-extraction resets, over and above the extracted values themselves.
+#
+# The review columns go with `status`. Resetting the status but leaving the
+# reviewer behind would put a pharmacist's name on a profile they have never
+# seen — the row would read `awaiting_approval`, reviewed by someone, which is
+# not a state the gate has.
+#
+# `extracted_at` is refreshed here rather than by an `onupdate` on the column,
+# because an onupdate fires on *any* update, including a pharmacist's ruling —
+# which would restamp the extraction date every time someone approved a profile
+# and quietly break the versioning gate 4 depends on.
+_RESET_ON_REEXTRACTION = {
+    "reviewed_by": None,
+    "reviewed_at": None,
+    "review_note": "",
+    "extracted_at": func.now(),
+}
+
+
 def write(rows: list[dict]) -> int:
     """Upsert on (rxcui, reaction). Re-extracting the same drug refreshes the
     factors and the quote, and **resets approval** — a profile a pharmacist
@@ -153,12 +172,13 @@ def write(rows: list[dict]) -> int:
         return 0
     with SessionLocal() as session:
         for row in rows:
+            updates = {k: v for k, v in row.items() if k not in ("rxcui", "reaction")}
             session.execute(
                 insert(DrugRiskProfile)
                 .values(**row)
                 .on_conflict_do_update(
                     index_elements=["rxcui", "reaction"],
-                    set_={k: v for k, v in row.items() if k not in ("rxcui", "reaction")},
+                    set_={**updates, **_RESET_ON_REEXTRACTION},
                 )
             )
         session.commit()

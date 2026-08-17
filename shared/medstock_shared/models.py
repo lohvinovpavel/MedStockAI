@@ -310,13 +310,29 @@ class DrugRiskProfile(Base):
     section: Mapped[str | None] = mapped_column(Text)
     spl_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="awaiting_approval")
-    approved_by: Mapped[str | None] = mapped_column(Text)
+    # Who last ruled on it, either way. A rejection has a reviewer too, and only
+    # `status` says which way they ruled.
+    reviewed_by: Mapped[str | None] = mapped_column(Text)
+    # Not derivable from extracted_at, which moves on re-extraction.
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Why. Chiefly why *not* — a rejected extraction that records its reason can
+    # be re-reviewed against that reason instead of from scratch.
+    review_note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # No `onupdate`. This is the extraction date gate 4 versions a prediction by
+    # (docs/prognosis-and-procurement.md §1.3) — approving a profile is not
+    # re-extracting it, and an ORM update carrying onupdate would silently
+    # restamp the row every time a pharmacist ruled on it. Re-extraction sets it
+    # explicitly instead; see services/ingest/app/prognosis.py.
     extracted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
         UniqueConstraint("rxcui", "reaction", name="uq_drug_risk_profile_natural"),
+        CheckConstraint(
+            "status IN ('awaiting_approval', 'approved', 'rejected')",
+            name="ck_drug_risk_profile_status",
+        ),
     )
 
 

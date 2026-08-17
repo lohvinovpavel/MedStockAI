@@ -90,6 +90,17 @@ Four gates, in order. A profile failing any of them never reaches a pharmacist.
    `analogue`, and it is checkable without judgement.
 3. **Human approval.** Profiles land `awaiting_approval`. A pharmacist accepts or
    rejects each one. Nothing colours a screen before that.
+
+   `GET /risk-profiles` is the queue and `POST /risk-profiles/{id}/review` is the
+   ruling, behind `profile:approve` — a permission held by the pharmacist role
+   and by no other, admin included. Re-ruling is allowed, so an approval can be
+   withdrawn when a label changes without anyone editing the database by hand.
+
+   The gate was specified here before it was built: for its first two weeks the
+   extraction job wrote `awaiting_approval` and **nothing in the system could
+   write any other value**, so every profile ever extracted was unreachable and
+   the two features reading the table saw it as empty. It failed silently in
+   both directions — no error, and no profile.
 4. **Versioned.** Each profile records the label `spl_id` and extraction date, so
    a prediction made today can still be explained after the label changes.
 
@@ -211,11 +222,18 @@ come from the same approved table, so they can never disagree.
 
 | Table | Class | Key columns |
 |---|---|---|
-| `drug_risk_profile` | reference | `rxcui` · `reaction` · `seriousness` · `risk_factors` jsonb · `citation` · `section` · `spl_id` · `status` · `approved_by` · `extracted_at` |
+| `drug_risk_profile` | reference | `rxcui` · `reaction` · `seriousness` · `risk_factors` jsonb · `citation` · `section` · `spl_id` · `status` · `reviewed_by` · `reviewed_at` · `review_note` · `extracted_at` |
 | `prognosis_assumption` | reference | `name` · `value` · `note` — `switch_rate` lives here, not in code |
 
 No new tenant tables and no patient storage: PP-3 is drug-level, PP-4 aggregates
 vectors that arrive in the request and are discarded with it.
+
+`reviewed_by` rather than `approved_by` because a rejection has a reviewer too,
+and a rejecter's name in a column called `approved_by` reads as an approval a
+year later. `reviewed_at` is separate from `extracted_at` because they answer
+different questions — and `extracted_at` deliberately carries no `onupdate`,
+since an ORM update would otherwise restamp the extraction date every time a
+pharmacist ruled on the row, quietly breaking the versioning gate 4 depends on.
 
 ---
 
@@ -228,12 +246,19 @@ vectors that arrive in the request and are discarded with it.
    is anywhere near it. **Recommended.**
 2. **A pharmacist must review the profiles.** Gate 3 is not optional and it is
    not engineering work. Without a clinician signing off the extracted risk
-   factors, this is a model's opinion in a table.
+   factors, this is a model's opinion in a table. The queue and the ruling
+   endpoint exist now (§1.3), which means the review *can* happen — it has not.
+   Building the gate is not passing through it, and until a clinician has ruled
+   on them, `approved_profiles()` legitimately returns nothing.
 3. **`switch_rate` has no empirical basis.** State it as an assumption on the
    screen, or the forecast will be read as a measurement.
 4. **Extraction quality is unmeasured.** Before trusting it: extract 20 drugs,
    have them reviewed, and report the accept rate. If it is below ~80%, the
-   prompt needs work before the feature does.
+   prompt needs work before the feature does. `GET /risk-profiles` now returns
+   `accept_rate` alongside the queue, so the number falls out of the review
+   rather than needing a separate exercise. It is `null`, not `0.0`, until
+   somebody has ruled on something — a rate over no decisions is unknown, and
+   printing it as zero would fail the ~80% test on an untouched queue.
 5. **Label volume.** 261,732 labels, 1.8 GB bulk. Extract only for the formulary
    — a few hundred drugs — not the corpus.
 

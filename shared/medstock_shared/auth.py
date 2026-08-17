@@ -47,6 +47,13 @@ def current_principal(request: Request) -> Principal:
     return Principal(claims["sub"], claims["hospital_id"], claims["role"])
 
 
+# `profile:approve` is granted to the pharmacist and to nobody else, admin
+# included. It rules on a model's reading of a drug label — extracted risk
+# factors that decide what colours a screen — and that is a clinical judgement
+# (docs/prognosis-and-procurement.md §1.3, gate 3). An admin can grant itself
+# every operational permission in this table and still must not be able to sign
+# off clinical content; a gate a non-clinician can pass is not the gate the
+# design claims. `profile:review` is the read side and is safe to share.
 PERMS: dict[str, set[str]] = {
     "pharmacist": {
         "queue:read",
@@ -54,6 +61,8 @@ PERMS: dict[str, set[str]] = {
         "inventory:read",
         "drug:search",
         "facility:read",
+        "profile:review",
+        "profile:approve",
     },
     "physician": {
         "alert:read",
@@ -63,7 +72,16 @@ PERMS: dict[str, set[str]] = {
         "patient:write",
         "facility:read",
     },
-    "director": {"dashboard:read", "audit:read", "inventory:read", "drug:search", "facility:read"},
+    "director": {
+        "dashboard:read",
+        "audit:read",
+        "inventory:read",
+        "drug:search",
+        "facility:read",
+        # So the accept rate in docs/prognosis-and-procurement.md §5.4 is
+        # readable by the person who has to decide whether to trust extraction.
+        "profile:review",
+    },
     "admin": {
         "mapping:approve",
         "formulary:write",
@@ -73,6 +91,7 @@ PERMS: dict[str, set[str]] = {
         "patient:read",
         "patient:write",
         "facility:read",
+        "profile:review",
     },
 }
 

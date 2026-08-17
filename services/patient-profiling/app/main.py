@@ -9,7 +9,7 @@ unchanged for the rules engine).
 
 import os
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
@@ -31,7 +31,7 @@ from medstock_shared.patient import (
 )
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -201,6 +201,162 @@ def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
         )
         for r in rows
     ]
+
+
+REVIEW_ACTIONS = {"approve": "approved", "reject": "rejected"}
+PROFILE_STATUSES = ("awaiting_approval", "approved", "rejected")
+MAX_QUEUE = 200
+
+
+class ReviewBody(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    note: str = Field(default="", max_length=2000)
+
+
+def review_update(action: str, actor: str, note: str, now: datetime) -> dict:
+    """The columns a ruling writes. Pure, so the rule that a rejection records
+    its reviewer just as an approval does is testable without a database."""
+    return {
+        "status": REVIEW_ACTIONS[action],
+        "reviewed_by": actor,
+        "reviewed_at": now,
+        "review_note": note.strip(),
+    }
+
+
+def _profile_dict(row: DrugRiskProfile) -> dict:
+    return {
+        "id": row.id,
+        "rxcui": str(row.rxcui),
+        "reaction": row.reaction,
+        "seriousness": row.seriousness,
+        # The reviewable basis. A queue that showed a verdict without the
+        # factors and the quote would be asking for a signature on nothing.
+        "risk_factors": list(row.risk_factors or []),
+        "citation": row.citation or "",
+        "section": row.section or "",
+        "spl_id": row.spl_id,
+        "status": row.status,
+        "reviewed_by": row.reviewed_by,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
+        "review_note": row.review_note or "",
+        "extracted_at": row.extracted_at.isoformat() if row.extracted_at else None,
+    }
+
+
+def accept_rate(counts: dict[str, int]) -> float | None:
+    """Approved as a share of everything ruled on — docs §5.4's number, the one
+    that says whether extraction is good enough to trust.
+
+    Profiles still awaiting review are excluded on purpose. Counting them as
+    failures would make the rate start at zero and climb as reviewing happens,
+    which measures the reviewer's progress rather than the model's accuracy.
+    `None` while nothing has been ruled on, because a rate over no decisions is
+    not 0.0 — it is unknown, and the two must not print the same.
+    """
+    ruled = counts.get("approved", 0) + counts.get("rejected", 0)
+    return round(counts.get("approved", 0) / ruled, 3) if ruled else None
+
+
+def load_queue(status: str, rxcui: str | None, limit: int) -> tuple[list[dict], dict[str, int]]:
+    """The queue and the tally behind it. Separated from the endpoint so the
+    response shape can be tested without a Postgres to point at."""
+    with Session(engine) as session:
+        query = select(DrugRiskProfile)
+        if status != "all":
+            query = query.where(DrugRiskProfile.status == status)
+        if rxcui:
+            query = query.where(DrugRiskProfile.rxcui == str(rxcui))
+        # Oldest first: a queue that shows the newest extraction first leaves
+        # the backlog sitting at the bottom for ever.
+        rows = session.scalars(query.order_by(DrugRiskProfile.extracted_at).limit(limit)).all()
+        # Over the whole table, not the page — this is what the accept rate is
+        # computed from, and a rate over one page of 50 is not the accept rate.
+        tally = session.execute(
+            select(DrugRiskProfile.status, func.count()).group_by(DrugRiskProfile.status)
+        ).all()
+    counts = {s: 0 for s in PROFILE_STATUSES} | {str(s): int(n) for s, n in tally}
+    return [_profile_dict(r) for r in rows], counts
+
+
+def apply_review(profile_id: int, updates: dict) -> tuple[str, dict] | None:
+    """Write a ruling. Returns (status before, the row after), or None if there
+    is no such profile."""
+    with Session(engine) as session:
+        row = session.get(DrugRiskProfile, profile_id)
+        if row is None:
+            return None
+        previous = row.status
+        for column, value in updates.items():
+            setattr(row, column, value)
+        session.commit()
+        session.refresh(row)
+        return previous, _profile_dict(row)
+
+
+@patients.get("/risk-profiles")
+def list_risk_profiles(
+    status: str = "awaiting_approval",
+    rxcui: str | None = None,
+    limit: int = 50,
+    _: Principal = Depends(require("profile:review")),
+) -> dict:
+    """The review queue: what a model has proposed and nobody has ruled on yet.
+
+    `status=all` shows every profile, which is what makes an approval auditable
+    after the fact rather than only actionable before it.
+
+    Unlike `approved_profiles`, a missing table is a **503 here, not an empty
+    list**. On the request path an absent migration should degrade to "no
+    prognosis" and let the deterministic stages answer. On this path an empty
+    list reads as "nothing to review" — a reviewer would close the page and the
+    backlog would be invisible — so the failure has to be loud.
+    """
+    if status != "all" and status not in PROFILE_STATUSES:
+        raise HTTPException(
+            status_code=422, detail=f"status must be 'all' or one of {PROFILE_STATUSES}"
+        )
+    limit = max(1, min(int(limit), MAX_QUEUE))
+
+    try:
+        items, counts = load_queue(status, rxcui, limit)
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="risk profile table unavailable") from exc
+
+    return {
+        "status": status,
+        "limit": limit,
+        "items": items,
+        "counts": counts,
+        "accept_rate": accept_rate(counts),
+    }
+
+
+@patients.post("/risk-profiles/{profile_id}/review")
+def review_risk_profile(
+    profile_id: int,
+    body: ReviewBody,
+    principal: Principal = Depends(require("profile:approve")),
+) -> dict:
+    """Gate 3 of docs/prognosis-and-procurement.md §1.3, and the only way a
+    profile ever reaches a screen.
+
+    Re-ruling on a profile that was already decided is allowed, and deliberately
+    so: a label changes, or an approval turns out to have been wrong, and
+    withdrawing it must not require a database edit. The status it had before
+    comes back in the response, so an approval being overturned is visible
+    rather than inferred.
+    """
+    updates = review_update(body.action, principal.user_id, body.note, datetime.now(UTC))
+    try:
+        ruled = apply_review(profile_id, updates)
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="risk profile table unavailable") from exc
+    if ruled is None:
+        raise HTTPException(status_code=404, detail="risk profile not found")
+
+    previous, profile = ruled
+    return {"previous_status": previous, "profile": profile}
 
 
 @app.post("/assess")

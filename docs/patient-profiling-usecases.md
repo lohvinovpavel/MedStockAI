@@ -309,4 +309,9 @@ produced it. Without it, PP-3 silently becomes a lie the moment the model is ret
    claimed on stage.
 6. **Deployment region**, before the first migration. §5.
 7. **New permissions** — `profile:assess`, `profile:explain`. Neither exists in
-   `shared/medstock_shared/auth.py`, and no role currently grants anything patient-related.
+   `shared/medstock_shared/auth.py`. Partly addressed: `profile:review` and `profile:approve` are
+   in the table now for the PP-3 approval gate
+   ([prognosis-and-procurement.md](prognosis-and-procurement.md) §1.3), the second held by the
+   pharmacist role and no other. `/assess` and `/demand` still run on `inventory:read`, which is
+   too coarse — anyone who can see stock can run an assessment. Splitting those is a change to
+   endpoints teammates are already calling, so it is left for its own commit.
