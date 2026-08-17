@@ -16,12 +16,19 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import AssessmentLog, DrugRiskProfile, Patient, PrognosisAssumption
+from medstock_shared.models import (
+    AssessmentLog,
+    DrugRiskProfile,
+    Patient,
+    PgxGuideline,
+    PrognosisAssumption,
+)
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
     WEIGHTS,
     PatientVector,
+    PgxRecommendation,
     RiskProfile,
     assess,
     avoided_ingredient_warnings,
@@ -50,6 +57,8 @@ class PatientCreate(BaseModel):
     blood_group: str | None = None
     allergy_codes: list[str] = Field(default_factory=list)
     condition_codes: list[str] = Field(default_factory=list)
+    # "GENE:phenotype", as the lab reports it. Tier 3 input.
+    pgx_phenotypes: list[str] = Field(default_factory=list)
 
 
 class PatientUpdate(BaseModel):
@@ -58,6 +67,7 @@ class PatientUpdate(BaseModel):
     blood_group: str | None = None
     allergy_codes: list[str] | None = None
     condition_codes: list[str] | None = None
+    pgx_phenotypes: list[str] | None = None
 
 
 class CartItem(BaseModel):
@@ -79,6 +89,26 @@ def _norm_codes(codes: list[str] | None) -> list[str]:
             continue
         seen.add(code)
         out.append(code)
+    return out
+
+
+def _norm_phenotypes(values: list[str] | None) -> list[str]:
+    """Dedupe and trim, but **do not lowercase**, unlike `_norm_codes`.
+
+    CPIC's vocabulary is mixed case ("Poor Metabolizer", "*57:01 positive") and
+    these strings are shown to a clinician verbatim; flattening them would make
+    a guideline value look like something we made up. Matching is casefolded on
+    both sides, so storage case never affects whether a rule fires.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw).strip()
+        key = value.casefold()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
     return out
 
 
@@ -105,6 +135,7 @@ def _patient_dict(row: Patient) -> dict:
         "blood_group": row.blood_group,
         "allergy_codes": list(row.allergy_codes or []),
         "condition_codes": list(row.condition_codes or []),
+        "pgx_phenotypes": list(row.pgx_phenotypes or []),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -400,6 +431,38 @@ def record_assessment(
     return request_id
 
 
+def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
+    """CPIC guidelines for these drugs (Tier 3).
+
+    Degrades to "no guidelines" if the table is missing, like
+    `approved_profiles` and for the same reason: an unseeded feed should cost
+    the pharmacogenomic stage, not the whole assessment. Stage 8 simply does
+    not run, and `stages_completed` says so.
+    """
+    if not rxcuis:
+        return []
+    try:
+        with Session(engine) as session:
+            rows = session.scalars(
+                select(PgxGuideline).where(PgxGuideline.rxcui.in_(rxcuis))
+            ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        PgxRecommendation(
+            rxcui=str(r.rxcui),
+            gene=r.gene,
+            phenotype=r.phenotype,
+            recommendation=r.recommendation or "",
+            implication=r.implication or "",
+            classification=r.classification or "",
+            evidence_level=r.evidence_level or "",
+            action_required=bool(r.action_required),
+        )
+        for r in rows
+    ]
+
+
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
@@ -417,7 +480,10 @@ def post_assess(
         raise HTTPException(status_code=400, detail=f"at most {MAX_CANDIDATES} candidates")
 
     profiles = approved_profiles(candidates)
-    results = [assess(patient, rxcui, risk_profiles=profiles).as_dict() for rxcui in candidates]
+    pgx = pgx_for(candidates)
+    results = [
+        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx).as_dict() for rxcui in candidates
+    ]
     request_id = record_assessment(principal, patient, results)
     return {
         "ruleset_version": RULESET_VERSION,
@@ -427,6 +493,9 @@ def post_assess(
         # So a caller can tell "no label risk applies to this patient" apart from
         # "nobody has approved a profile for this drug yet".
         "risk_profiles_applied": len(profiles),
+        # Same distinction for Tier 3: zero means no CPIC guideline covers these
+        # drugs, not that the genotype was ignored.
+        "pgx_guidelines_applied": len(pgx),
         "results": results,
     }
 
@@ -628,6 +697,7 @@ def create_patient(
             blood_group=blood,
             allergy_codes=_norm_codes(body.allergy_codes),
             condition_codes=_norm_codes(body.condition_codes),
+            pgx_phenotypes=_norm_phenotypes(body.pgx_phenotypes),
         )
         session.add(row)
         session.flush()
@@ -666,6 +736,8 @@ def update_patient(
             row.allergy_codes = _norm_codes(body.allergy_codes)
         if body.condition_codes is not None:
             row.condition_codes = _norm_codes(body.condition_codes)
+        if body.pgx_phenotypes is not None:
+            row.pgx_phenotypes = _norm_phenotypes(body.pgx_phenotypes)
         session.flush()
         return _patient_dict(row)
 
@@ -695,10 +767,11 @@ def cart_check(
     # list precisely so a ten-item cart costs a single query.
     cart_rxcuis = [item.rxcui.strip() for item in body.items if item.rxcui.strip()]
     profiles = approved_profiles(cart_rxcuis)
+    pgx = pgx_for(cart_rxcuis)
     results: list[dict] = []
     for item in body.items:
         rxcui = item.rxcui.strip()
-        assessment = assess(vector, rxcui, risk_profiles=profiles)
+        assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx)
         # Surface all findings as warnings for the cart (demo: no hard block UI).
         warnings = [_finding_dict(f) for f in assessment.findings]
 
@@ -761,6 +834,7 @@ def cart_check(
         # profile covers this cart" from "the prognosis stage never ran", which
         # otherwise look identical from a response with no PP-3 findings in it.
         "risk_profiles_applied": len(profiles),
+        "pgx_guidelines_applied": len(pgx),
     }
 
 

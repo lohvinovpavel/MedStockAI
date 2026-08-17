@@ -414,11 +414,59 @@ class Patient(Base):
     condition_codes: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
+    # Tier 3 input, as "GENE:phenotype" in CPIC's vocabulary. Reported by the
+    # lab, never derived here — see PatientVector.pgx_phenotypes.
+    pgx_phenotypes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PgxGuideline(Base):
+    """Tier 3: a CPIC gene–drug recommendation, keyed the way CPIC keys it.
+
+    Reference class — a guideline is about a drug and a phenotype, never about a
+    person, so no `hospital_id`.
+
+    `phenotype` holds CPIC's own `lookupkey` value ("Poor Metabolizer",
+    "*57:01 positive"), not a vocabulary of ours. Inventing a parallel one would
+    mean a mapping layer nobody could audit against the source, and the source
+    is the whole point of a guideline lookup.
+
+    `action_required` separates "this genotype changes prescribing" from "use
+    per standard dosing". CPIC publishes no usable flag for it — its three
+    candidate booleans are `false` on every row — so it is derived from the
+    phenotype by `patient.is_baseline_phenotype`, which is the one piece of
+    judgement in this feed and is documented as ours there.
+    """
+
+    __tablename__ = "pgx_guideline"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    gene: Mapped[str] = mapped_column(Text, nullable=False)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    phenotype: Mapped[str] = mapped_column(Text, nullable=False)
+    # Verbatim CPIC. Shown to the pharmacist as-is — the reviewable basis again.
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    implication: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # CPIC's own strength field: Strong | Moderate | Optional | No Recommendation.
+    classification: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # CPIC level of the underlying gene-drug pair: A | B.
+    evidence_level: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    action_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    population: Mapped[str] = mapped_column(Text, nullable=False, server_default="general")
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("gene", "rxcui", "phenotype", "population", name="uq_pgx_guideline"),
     )
 
 

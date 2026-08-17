@@ -83,6 +83,17 @@ class PatientVector:
     condition_codes: tuple[str, ...] = ()
     active_rxcuis: tuple[str, ...] = ()
     prior_adr_rxcuis: tuple[str, ...] = ()
+    # Tier 3. "GENE:phenotype" pairs in CPIC's own vocabulary, e.g.
+    # "CYP2C19:Poor Metabolizer", "HLA-B:*57:01 positive".
+    #
+    # §2.3 of the use-cases doc calls this `pgx_alleles`, and this takes
+    # phenotypes instead **on purpose**: turning a diplotype like *2/*2 into a
+    # phenotype needs CPIC's allele-definition and diplotype tables, and a
+    # mis-mapped diplotype is a clinical error we would have authored. The
+    # reporting lab already states the phenotype, and every CPIC recommendation
+    # is keyed on it. Taking what the lab asserts keeps that inference where the
+    # accountability for it already sits.
+    pgx_phenotypes: tuple[str, ...] = ()
     patient_ref: str | None = None
 
     @classmethod
@@ -103,6 +114,7 @@ class PatientVector:
             condition_codes=tup("condition_codes"),
             active_rxcuis=tup("active_rxcuis"),
             prior_adr_rxcuis=tup("prior_adr_rxcuis"),
+            pgx_phenotypes=tup("pgx_phenotypes"),
             patient_ref=(str(payload["patient_ref"]) if payload.get("patient_ref") else None),
         )
 
@@ -129,6 +141,7 @@ class PatientVector:
                 "condition_codes": sorted(self.condition_codes),
                 "active_rxcuis": sorted(self.active_rxcuis),
                 "prior_adr_rxcuis": sorted(self.prior_adr_rxcuis),
+                "pgx_phenotypes": sorted(self.pgx_phenotypes),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -333,6 +346,124 @@ def prognosis_findings(
     return findings
 
 
+@dataclass(frozen=True)
+class PgxRecommendation:
+    """One CPIC gene–drug–phenotype row, as Tier 3 consumes it."""
+
+    rxcui: str
+    gene: str
+    phenotype: str
+    recommendation: str = ""
+    implication: str = ""
+    classification: str = ""
+    evidence_level: str = ""
+    action_required: bool = False
+
+
+# CPIC's own strength field drives the weight, once a phenotype is judged worth
+# weighting at all — see is_baseline_phenotype.
+PGX_BASE: dict[str, int] = {"strong": 40, "moderate": 25, "optional": 10}
+
+# Phenotype values that mean "this genotype is the ordinary one", and values
+# that mean "we could not tell". Neither is a finding worth scoring.
+#
+# **This list is ours, not CPIC's, and that is worth knowing.** The API carries
+# `dosinginformation`, `alternatedrugavailable` and `otherprescribingguidance`,
+# which look exactly like the structured actionable flag this needs — and they
+# are `false` on every row (checked across the full recommendation set, not a
+# sample). So the reassuring-versus-actionable split has to come from somewhere,
+# and the phenotype vocabulary is the least inferential source available: it is
+# a short enumerable set, it describes the *patient's* genotype rather than
+# CPIC's prose, and a reader can check it against the values in `pgx_guideline`.
+# The alternative was matching words like "avoid" in the recommendation text,
+# which is not a thing a clinical weight should rest on.
+_BASELINE_PHENOTYPES: tuple[str, ...] = (
+    "normal metabolizer",
+    "normal function",
+    "normal risk",
+    "negative",
+)
+_UNINFORMATIVE_PHENOTYPES: tuple[str, ...] = ("indeterminate", "uncertain", "unknown", "n/a")
+
+
+def is_baseline_phenotype(phenotype: str) -> bool:
+    """True when this phenotype warrants no score — either it is the ordinary
+    genotype, or it is one CPIC could not resolve."""
+    value = phenotype.strip().casefold()
+    return any(m in value for m in (*_BASELINE_PHENOTYPES, *_UNINFORMATIVE_PHENOTYPES))
+
+
+def _pgx_key(value: str) -> tuple[str, str]:
+    """Split "CYP2C19:Poor Metabolizer" into its gene and phenotype, casefolded
+    for comparison. A value with no colon is treated as a bare phenotype with no
+    gene, which will simply never match."""
+    gene, _, phenotype = value.partition(":")
+    return gene.strip().casefold(), phenotype.strip().casefold()
+
+
+def pgx_findings(
+    vector: PatientVector, recommendations: Sequence[PgxRecommendation]
+) -> list[Finding]:
+    """Tier 3 — a guideline lookup, not a prediction.
+
+    Deterministic and trivially explainable: the patient's reported phenotype
+    either matches a CPIC row for this drug or it does not, and the row's own
+    text is what the pharmacist reads.
+
+    **It never blocks**, even for a pairing as absolute as abacavir with
+    HLA-B*57:01. Hard gates stay in Tier 0 where they are human-curated, because
+    the only way to derive a block here would be to read CPIC's recommendation
+    prose for words like "avoid" — and a text match is not a thing a hard
+    contraindication should rest on. What Tier 3 contributes is a strongly
+    weighted, verbatim-cited finding; the pharmacist decides.
+
+    A matched row where CPIC asks for nothing different still produces a
+    finding, at weight 0. "We checked your genotype against this drug and the
+    guideline says standard dosing" is worth saying — silence would be
+    indistinguishable from never having looked.
+    """
+    if not vector.pgx_phenotypes:
+        return []
+
+    held = {_pgx_key(p) for p in vector.pgx_phenotypes}
+    findings: list[Finding] = []
+    for rec in recommendations:
+        if (rec.gene.strip().casefold(), rec.phenotype.strip().casefold()) not in held:
+            continue
+
+        if not rec.action_required:
+            findings.append(
+                Finding(
+                    code="PGX_STANDARD_DOSING",
+                    severity=Severity.INFO,
+                    weight=0,
+                    message=(
+                        f"{rec.gene} {rec.phenotype}: CPIC advises standard dosing "
+                        f"({rec.recommendation or 'no change'})"
+                    ),
+                    source=f"CPIC level {rec.evidence_level or '?'}",
+                    stage=8,
+                )
+            )
+            continue
+
+        weight = PGX_BASE.get(rec.classification.strip().casefold(), PGX_BASE["moderate"])
+        findings.append(
+            Finding(
+                code="PGX_ACTIONABLE",
+                severity=Severity.HIGH if weight >= 25 else Severity.MODERATE,
+                weight=weight,
+                message=(
+                    f"{rec.gene} {rec.phenotype}: {rec.recommendation or 'see guideline'}"
+                    + (f" — {rec.implication}" if rec.implication else "")
+                ),
+                source=f"CPIC level {rec.evidence_level or '?'}, {rec.classification or 'unclassified'}",
+                stage=8,
+            )
+        )
+    return findings
+
+
 def _class_of(rxcui: str) -> str | None:
     return DRUG_CLASS.get(str(rxcui))
 
@@ -365,12 +496,16 @@ def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> Patien
     """
     allergies = tuple(str(a) for a in (getattr(row, "allergy_codes", None) or ()))
     conditions = tuple(str(c) for c in (getattr(row, "condition_codes", None) or ()))
+    phenotypes = tuple(str(p) for p in (getattr(row, "pgx_phenotypes", None) or ()))
     dob = getattr(row, "date_of_birth", None)
     return PatientVector(
         age_band=age_band_from_dob(dob) if isinstance(dob, date) else "unknown",
         allergy_codes=allergies,
         condition_codes=conditions,
         active_rxcuis=tuple(str(r) for r in active_rxcuis),
+        # A phenotype is not an identifier: it is a band-like clinical fact, the
+        # same class of thing as the eGFR band beside it.
+        pgx_phenotypes=phenotypes,
         patient_ref=str(row.id) if getattr(row, "id", None) else None,
     )
 
@@ -427,6 +562,7 @@ def assess(
     rxcui: str,
     today=None,
     risk_profiles: Sequence[RiskProfile] = (),
+    pgx: Sequence[PgxRecommendation] = (),
 ) -> Assessment:
     """Run the deterministic stages for one candidate drug.
 
@@ -526,7 +662,14 @@ def assess(
         stages.append(7)
         findings.extend(prognosis_findings(vector, applicable))
 
-    # --- stage 8 (pharmacogenomics) is an offline table; not seeded here ----
+    # --- stage 8: pharmacogenomics (Tier 3) --------------------------------
+    # Only rows for this drug. Like stage 7 the caller does the filtering, and
+    # like stage 7 it is repeated here so a caller that forgets cannot leak
+    # another drug's guideline into this answer.
+    applicable_pgx = [p for p in pgx if str(p.rxcui) == str(rxcui)]
+    if applicable_pgx and vector.pgx_phenotypes:
+        stages.append(8)
+        findings.extend(pgx_findings(vector, applicable_pgx))
 
     # --- stage 9: age ------------------------------------------------------
     stages.append(9)
