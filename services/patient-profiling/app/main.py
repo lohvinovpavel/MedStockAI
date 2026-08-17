@@ -421,7 +421,24 @@ def record_assessment(
                             "rxcui": r.get("rxcui"),
                             "verdict": r.get("verdict"),
                             "score": r.get("score"),
-                            "codes": [f.get("code") for f in (r.get("findings") or [])],
+                            # Code, weight, source and stage per finding — enough
+                            # for /explain to rebuild the score decomposition
+                            # without re-running anything.
+                            #
+                            # Deliberately **not** the finding's message. Those
+                            # embed the patient's own band values ("eGFR 30-44,
+                            # age 75-89"), and writing them here in clear would
+                            # put more of the vector into the audit table than
+                            # the feature hash beside it deliberately withholds.
+                            "findings": [
+                                {
+                                    "code": f.get("code"),
+                                    "weight": f.get("weight"),
+                                    "source": f.get("source"),
+                                    "stage": f.get("stage"),
+                                }
+                                for f in (r.get("findings") or [])
+                            ],
                         }
                         for r in results
                     ]
@@ -497,6 +514,132 @@ def post_assess(
         # drugs, not that the genotype was ignored.
         "pgx_guidelines_applied": len(pgx),
         "results": results,
+    }
+
+
+def _band_for(score: int | None) -> dict | None:
+    """Which band turned this score into this verdict, and what the next one is.
+
+    "You are 4 points below amber" is a different conversation from "you are
+    just inside it", and neither is visible from a colour.
+    """
+    if score is None:
+        return None
+    applied = next((t, v) for t, v in reversed(BANDS) if score >= t)
+    above = [(t, v) for t, v in BANDS if t > score]
+    return {
+        "from_score": applied[0],
+        "verdict": str(applied[1]),
+        "next_verdict": str(above[0][1]) if above else None,
+        "points_to_next": (above[0][0] - score) if above else None,
+    }
+
+
+@patients.get("/explain/{request_id}")
+def explain(
+    request_id: str,
+    principal: Principal = Depends(require("profile:explain")),
+) -> dict:
+    """Why a logged assessment said what it said.
+
+    This is the use-cases doc's PP-3 — "pharmacist asks why" — and the reason
+    §6 gives for the FDA CDS exclusion holding: criterion (d) requires that a
+    professional can independently review the *basis* of a recommendation, and
+    a bare risk score with no reviewable basis does not qualify.
+
+    §7 sketched this around SHAP contributions, because it assumed a Tier 2
+    model. There is no model on this path: every stage is deterministic, so the
+    contributions are not estimated, they are **the arithmetic itself**. Each
+    finding's weight, its share of the total, the band that turned the total
+    into a colour, and how far the score sits from the next band.
+
+    **The stored ruleset version is checked against the current one.** If they
+    differ, this says so and refuses to pretend, because explaining a
+    six-month-old decision with today's weights is exactly the lie §7 warns
+    about — and it is a lie that would look like a perfectly good answer.
+    """
+    try:
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            row = session.scalars(
+                select(AssessmentLog)
+                .where(
+                    AssessmentLog.request_id == request_id,
+                    AssessmentLog.hospital_id == principal.hospital_id,
+                )
+                .limit(1)
+            ).first()
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such assessment")
+            logged = {
+                "request_id": row.request_id,
+                "actor_id": row.actor_id,
+                "feature_hash": row.feature_hash,
+                "ruleset_version": row.ruleset_version,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "result": dict(row.result or {}),
+            }
+    except HTTPException:
+        raise
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="assessment log unavailable") from exc
+
+    current = logged["ruleset_version"] == RULESET_VERSION
+    explained = []
+    for entry in logged["result"].get("assessments") or []:
+        findings = entry.get("findings") or []
+        total = sum(int(f.get("weight") or 0) for f in findings)
+        explained.append(
+            {
+                "rxcui": entry.get("rxcui"),
+                "verdict": entry.get("verdict"),
+                "score": entry.get("score"),
+                "band": _band_for(entry.get("score")),
+                "contributions": [
+                    {
+                        "code": f.get("code"),
+                        "weight": f.get("weight"),
+                        "stage": f.get("stage"),
+                        "source": f.get("source"),
+                        # Of the points that were scored, how much came from
+                        # here. Zero-weight findings are informational and say so
+                        # rather than dividing by a total they never joined.
+                        "share": (
+                            round(int(f.get("weight") or 0) / total, 3) if total else None
+                        ),
+                    }
+                    for f in sorted(findings, key=lambda x: -int(x.get("weight") or 0))
+                ],
+                # A blocked assessment has no score at all: a hard gate ends the
+                # pipeline and no number is produced, because a number beside an
+                # absolute contraindication invites someone to weigh it against
+                # a discount.
+                "blocked": entry.get("score") is None,
+            }
+        )
+
+    return {
+        "request_id": logged["request_id"],
+        "assessed_by": logged["actor_id"],
+        "assessed_at": logged["created_at"],
+        "feature_hash": logged["feature_hash"],
+        "ruleset_version": logged["ruleset_version"],
+        "current_ruleset_version": RULESET_VERSION,
+        # The honesty flag. False means the weights below are the ones that
+        # actually produced this answer, but they are no longer the ones the
+        # system would use today.
+        "explained_with_original_ruleset": current,
+        "caveat": None
+        if current
+        else (
+            f"This assessment ran under ruleset {logged['ruleset_version']}; the current "
+            f"ruleset is {RULESET_VERSION}. The contributions below are the ones that "
+            "produced this answer and do not describe how the same patient would be "
+            "assessed today."
+        ),
+        "assessments": explained,
+        # So a reader can check a weight against the published table rather than
+        # taking these numbers on trust.
+        "ruleset": {"weights": WEIGHTS, "bands": [{"from_score": t, "verdict": str(v)} for t, v in BANDS]},
     }
 
 

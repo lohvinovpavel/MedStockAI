@@ -16,7 +16,7 @@ Status: **draft**. §2 is a recommendation, not a settled decision.
 |---|---|---|---|
 | **PP-1** | Substitution safety check | `analogue` proposes an alternative drug | Risk score + ranked reasons + hard blocks |
 | **PP-2** | Profile risk assessment | Pharmacist opens a patient's assessment | Per-drug risk across the current regimen |
-| **PP-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations |
+| **PP-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations — **built**, `GET /explain/{request_id}` |
 
 PP-3 is not a nice-to-have. It is what keeps this system a decision *support* tool rather than a
 regulated medical device (§6), and what satisfies the human-in-the-loop requirement the product
@@ -299,6 +299,18 @@ professional, and (d) **lets that professional independently review the basis** 
 recommendation. Criteria (a)–(c) already hold. Criterion (d) is precisely PP-3 — which is why
 SHAP contributions and guideline citations are load-bearing, not decoration. FDA's 2022 CDS
 guidance reads (d) strictly: a bare risk score with no reviewable basis does not qualify.
+
+**Criterion (d) is now served, and without SHAP.** `GET /explain/{request_id}` returns, for a
+logged assessment: every finding's weight, its share of the score, the stage and source it came
+from, the band that turned the score into a colour, and how far the score sits from the next
+band. §7 sketched this around SHAP because it assumed a Tier 2 model — but nothing on this path
+is a model, so the contributions are not estimated, they *are* the arithmetic. When Tier 2
+lands, SHAP becomes an additional contribution source inside the same response, not a
+replacement for it.
+
+The response also compares the stored `ruleset_version` against the current one and refuses to
+pretend when they differ. Explaining a six-month-old decision with today's weights would look
+like a perfectly good answer and be a lie — which is the failure §7 predicts.
 
 **EU.** Under MDR Rule 11 and MDCG 2019-11, software providing information used for diagnostic
 or therapeutic decisions is typically **Class IIa or above** — a notified body, not a
