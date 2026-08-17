@@ -16,7 +16,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import DrugRiskProfile, Patient, PrognosisAssumption
+from medstock_shared.models import AssessmentLog, DrugRiskProfile, Patient, PrognosisAssumption
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
@@ -359,10 +359,51 @@ def review_risk_profile(
     return {"previous_status": previous, "profile": profile}
 
 
+def record_assessment(
+    principal: Principal, vector: PatientVector, results: list[dict]
+) -> str:
+    """Write the decision trail row, and return the request id.
+
+    **Fails the request if it cannot write.** An assessment that reaches a
+    clinician without a corresponding audit row is exactly the hole
+    docs/services.md §1.3 claims does not exist — and it is a silent hole, since
+    the answer looks identical either way. Answering unaudited is the worse
+    failure of the two, so this refuses rather than degrades.
+
+    Note the contrast with `approved_profiles`, which swallows a missing table:
+    that one degrades a *feature*, this one would falsify a *guarantee*.
+    """
+    request_id = str(uuid.uuid4())
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        session.add(
+            AssessmentLog(
+                hospital_id=principal.hospital_id,
+                request_id=request_id,
+                actor_id=principal.user_id,
+                feature_hash=vector.feature_hash(),
+                ruleset_version=RULESET_VERSION,
+                # The verdict and why, not the whole finding text — enough to
+                # reconstruct what the clinician was shown.
+                result={
+                    "assessments": [
+                        {
+                            "rxcui": r.get("rxcui"),
+                            "verdict": r.get("verdict"),
+                            "score": r.get("score"),
+                            "codes": [f.get("code") for f in (r.get("findings") or [])],
+                        }
+                        for r in results
+                    ]
+                },
+            )
+        )
+    return request_id
+
+
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
-    _: Principal = Depends(require("inventory:read")),
+    principal: Principal = Depends(require("inventory:read")),
 ) -> dict:
     """One patient, one or more candidate drugs.
 
@@ -377,8 +418,11 @@ def post_assess(
 
     profiles = approved_profiles(candidates)
     results = [assess(patient, rxcui, risk_profiles=profiles).as_dict() for rxcui in candidates]
+    request_id = record_assessment(principal, patient, results)
     return {
         "ruleset_version": RULESET_VERSION,
+        # Quote this back to dispute an answer; it is the key into assessment_log.
+        "request_id": request_id,
         "patient_ref": patient.patient_ref,
         # So a caller can tell "no label risk applies to this patient" apart from
         # "nobody has approved a profile for this drug yet".
@@ -702,8 +746,15 @@ def cart_check(
             }
         )
 
+    # Logged for the same reason /assess is: this produces a per-patient verdict
+    # a physician acts on. The cohort endpoints (/demand, /forecast) are not
+    # logged here — they answer a purchasing question about a group, not a
+    # clinical decision about a person, and assessment_log is the clinical trail.
+    request_id = record_assessment(principal, vector, results)
+
     return {
         "ruleset_version": RULESET_VERSION,
+        "request_id": request_id,
         "patient": patient_payload,
         "results": results,
         # Mirrors /assess. Zero here is meaningful: it distinguishes "no approved

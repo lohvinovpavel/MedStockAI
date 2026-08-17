@@ -422,6 +422,60 @@ class Patient(Base):
     )
 
 
+class AssessmentLog(Base):
+    """Who asked what of the rules engine, and what it answered.
+
+    Tenant class, and the only patient-adjacent table that is *supposed* to
+    exist under the no-PHI design (docs/patient-profiling-usecases.md §7). It
+    holds **no patient identifier at all** — `feature_hash` proves what was
+    asked without recording who it was about, which is what makes the decision
+    trail in docs/services.md §1.3 work while §2.4's "the audit log records the
+    decision, not the patient" stays true. Asked "which patient was this?", this
+    table cannot answer, and the hospital's own EHR can.
+
+    `patient_ref` is deliberately excluded from the hash. It is opaque to us,
+    but it is stable per patient, so hashing it would let anyone with the table
+    group every assessment ever made about one person — a re-identification
+    handle built out of the audit trail itself.
+
+    Recovering a vector from `feature_hash` is possible in principle: the field
+    space is small enough to enumerate. That is acceptable precisely because
+    what it would recover is a de-identified band vector — age band, eGFR band,
+    codes — and never an identity. The hash is an integrity check on the
+    question, not a secret.
+
+    `ruleset_version` rather than the `model_version` of §7's sketch: this
+    pipeline is deterministic, so what has to be pinned to explain an old answer
+    is the weight table and bands that produced it. When a Tier 2 model lands it
+    gets its own column and its own table; a version string that silently means
+    two different things would be worse than either.
+    """
+
+    __tablename__ = "assessment_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # One id per API call, echoed back to the caller so a clinician can quote it
+    # when they disagree with an answer.
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # The clinician, from the JWT `sub`. The decision is attributable to a
+    # person even though the subject of it is not.
+    actor_id: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    ruleset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # [{"rxcui": …, "verdict": …, "score": …, "codes": [...]}, …]
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # The audit read is "what happened at this hospital, newest first".
+        Index("ix_assessment_log_hospital_time", "hospital_id", "created_at"),
+        Index("ix_assessment_log_request", "request_id"),
+    )
+
+
 # --- Warehouse (docs/backend/specs/B1-facility-registry.md, issue #8): tenant
 # facility/location registry plus the two generated time series the demo runs
 # on — daily drug consumption (what prediction forecasts from, E1) and hourly

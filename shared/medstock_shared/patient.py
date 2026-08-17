@@ -18,6 +18,8 @@ change when they do.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -103,6 +105,35 @@ class PatientVector:
             prior_adr_rxcuis=tup("prior_adr_rxcuis"),
             patient_ref=(str(payload["patient_ref"]) if payload.get("patient_ref") else None),
         )
+
+    def feature_hash(self) -> str:
+        """Stable fingerprint of the question, for `assessment_log`.
+
+        **`patient_ref` is excluded, and that exclusion is the point.** It is
+        opaque to us but stable per patient, so including it would let anyone
+        holding the audit table group every assessment ever made about one
+        person — building a re-identification handle out of the audit trail the
+        no-PHI design depends on (docs/patient-profiling-usecases.md §2.4).
+
+        Sequence fields are sorted before hashing: the same allergies in a
+        different order are the same question, and a hash that disagreed would
+        make the log unable to recognise a repeat.
+        """
+        payload = json.dumps(
+            {
+                "age_band": self.age_band,
+                "sex": self.sex,
+                "egfr_band": self.egfr_band,
+                "hepatic": self.hepatic,
+                "allergy_codes": sorted(self.allergy_codes),
+                "condition_codes": sorted(self.condition_codes),
+                "active_rxcuis": sorted(self.active_rxcuis),
+                "prior_adr_rxcuis": sorted(self.prior_adr_rxcuis),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

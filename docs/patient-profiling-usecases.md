@@ -278,20 +278,43 @@ Neither applies to a capstone that is not placed on the market. Both are worth o
 
 Nothing here is a tenant table, because nothing here is about a person.
 
-| Table | Class | Key columns |
-|---|---|---|
-| `pgx_guideline` | reference | `gene` · `rxcui` · `phenotype` · `recommendation` · `evidence_level` · `source_url` |
-| `interaction_rule` | reference | `rxcui_a` · `rxcui_b` · `severity` · `mechanism` · `source` |
-| `adr_signal` | reference | `rxcui` · `reaction_code` · `prr` · `ror` · `n_reports` · `computed_at` |
-| `model_version` | reference | `name` · `version` · `trained_at` · `metrics` · `feature_schema` |
-| `assessment_log` | tenant, RLS | `request_id` · `actor_id` · `feature_hash` · `model_version` · `result` · `created_at` |
+| Table | Class | Key columns | Status |
+|---|---|---|---|
+| `pgx_guideline` | reference | `gene` · `rxcui` · `phenotype` · `recommendation` · `evidence_level` · `source_url` | planned — Tier 3 |
+| `interaction_rule` | reference | `rxcui_a` · `rxcui_b` · `severity` · `mechanism` · `source` | planned |
+| `adr_signal` | reference | `rxcui` · `reaction_code` · `prr` · `ror` · `n_reports` · `computed_at` | planned — Tier 1 |
+| `model_version` | reference | `name` · `version` · `trained_at` · `metrics` · `feature_schema` | planned — Tier 2, blocked on MIMIC-IV |
+| `drug_risk_profile` | reference | see [prognosis-and-procurement.md](prognosis-and-procurement.md) §4 | **built** |
+| `assessment_log` | tenant | `hospital_id` · `request_id` · `actor_id` · `feature_hash` · `ruleset_version` · `result` · `created_at` | **built** |
 
 `assessment_log` is the only tenant table and holds **no patient identifier** — `feature_hash`
 proves what was asked without recording who it was about. That is what makes the audit trail in
 [services.md](services.md) §1.3 work under a no-PHI design.
 
+Two details the implementation settled:
+
+- **`patient_ref` is excluded from the hash.** It is opaque to us but stable per patient, so
+  hashing it would let anyone holding this table group every assessment ever made about one
+  person — a re-identification handle assembled out of the audit trail itself. Pinned by
+  `services/patient-profiling/tests/test_feature_hash.py`.
+- **`ruleset_version`, not `model_version`.** This pipeline is deterministic, so what has to be
+  pinned to explain an old answer is the weight table and the bands. When a Tier 2 model lands it
+  gets its own column; one version string quietly meaning two different things would be worse
+  than either.
+
+The write **fails the request** if it cannot happen. An assessment reaching a clinician with no
+audit row is precisely the hole §1.3 claims does not exist, and it is a silent one — the answer
+looks identical either way.
+
 `model_version` exists so an assessment from six months ago can be explained with the model that
 produced it. Without it, PP-3 silently becomes a lie the moment the model is retrained.
+
+**No table in this schema has an RLS policy**, this one included, despite the class column above
+and §1.1 of [services.md](services.md). `session_scope` sets `app.hospital_id` and nothing reads
+it; isolation is application-level `WHERE hospital_id` throughout. Adding a policy here alone
+would also be a silent no-op — the services connect as the owning role, and Postgres bypasses RLS
+for table owners without `FORCE ROW LEVEL SECURITY`, which is worse than absent because it looks
+present. Tracked separately; it is a schema-wide decision, not this table's.
 
 ---
 
