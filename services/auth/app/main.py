@@ -5,7 +5,14 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from medstock_shared import COOKIE_NAME, Principal, credentials_token, current_principal, engine, settings
+from medstock_shared import (
+    COOKIE_NAME,
+    Principal,
+    credentials_token,
+    current_principal,
+    engine,
+    settings,
+)
 from medstock_shared.db import SessionLocal
 from medstock_shared.models import AppUser, Hospital, Membership
 from sqlalchemy import select, text

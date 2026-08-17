@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -211,7 +211,7 @@ def _band_index(band: str) -> int | None:
 
 def age_band_from_dob(dob: date, today: date | None = None) -> str:
     """Map calendar age to the PatientVector age_band vocabulary."""
-    today = today or date.today()
+    today = today or datetime.now(tz=UTC).date()
     years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     if years < 18:
         return "18-39"  # pediatric bands not modeled; nearest adult band
@@ -239,7 +239,7 @@ def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> Patien
         allergy_codes=allergies,
         condition_codes=conditions,
         active_rxcuis=tuple(str(r) for r in active_rxcuis),
-        patient_ref=str(getattr(row, "id")) if getattr(row, "id", None) else None,
+        patient_ref=str(row.id) if getattr(row, "id", None) else None,
     )
 
 

@@ -6,7 +6,6 @@ from .models import AICache, AppUser, Base, Hospital, Membership
 __all__ = [
     "COOKIE_NAME",
     "TASKS",
-    "credentials_token",
     "AICache",
     "AIError",
     "AITask",
@@ -17,6 +16,7 @@ __all__ = [
     "Principal",
     "Settings",
     "ask_ai",
+    "credentials_token",
     "current_principal",
     "dedupe_key",
     "engine",
