@@ -65,8 +65,8 @@ Implement the warehouse service (GitHub issue #8 — "Warehouse — service to t
 - [x] 6. Warehouse service `services/warehouse/app/main.py`: facilities (+operated filter, haversine `?from=` distance), locations, stock (drug join), consumption (date window), conditions, excursions (grouped per location×drug with affected quantity). Perms: `facility:read` for registry/conditions/excursions, `inventory:read` for stock/consumption. Mounted at `""` and `/api/warehouse`.
 - [x] 7. Tests green: 33 ingest (determinism regenerate-and-diff, statistical contract incl. heatwave dominance, stock-vs-history-tail consistency, seed guard) + 12 warehouse (auth 401/403, 404s, distance, date windows, planted excursion detected exactly once). RLS cross-tenant test deferred — policies are a repo-wide open item (docs/services.md §8), noted in test docstring.
 - [x] 8. Web `(dashboard)/warehouse` page: facility selector, excursion alert callout (grouped per location with affected-stock table), consumption chart (90d/1y/3y ranges, weekly bucketing, stockout windows as red reference areas), separate temperature + humidity charts with strictest-requirement lines, stock-by-location table. Legacy stub `(legacy)/warehouse` removed (route collision). SideNav entry + dev rewrite :8004 added. `npm run build` passes. All endpoints verified through the Next proxy with a minted dev JWT; visual eyeball pending (Chrome extension not connected) — stack left running at localhost:3002/warehouse.
-- [ ] 9. Docs sweep — update all docs touched by implemented decisions: `docs/demo-data.md` (3 years, artifacts, gen_demo/seed_demo), `docs/services.md` warehouse row, `docs/backend/db-schema.md` (new tables + built-status), `docs/backend/backend-features.md` statuses, B1 spec status, and document the generated-data contract for #7 (cohorts, planted signals/excursions, storage classes).
-- [ ] 10. Full verification pass (migrations from scratch, seed, both services' tests, web build), then single PR to `main`.
+- [x] 9. Docs sweep done: `docs/demo-data.md` (tenant tables, gen/seed split, 3 years, new §6a planted-signal contract for #7), `docs/services.md` warehouse row (endpoints + conditions), `docs/backend/db-schema.md` (registry rows + build-order note), `docs/backend/backend-features.md` (B1 ✅ + new B7 row, B2 uq note), B1 spec status ✅ with deviations block.
+- [x] 10. Verified: migration down/up (downgrade deletes facility-scoped stock rows before restoring the narrow key — destructive by necessity, commented), reseed, full 8-service test matrix (209 passed), ruff clean, `npm run build` clean. Committed as `0b03be0`, pushed over HTTPS (SSH key maps to a no-push account), **PR #29**: https://github.com/lohvinovpavel/MedStockAI/pull/29.
 
 ## Testing Plan
 
@@ -90,10 +90,15 @@ None — all settled in the grilling session (see Design Decisions).
 ## Resume
 
 ### In-flight artifacts
-_Nothing yet — filled at first checkpoint._
+- All work committed as `0b03be0` on `feature/warehouse`, pushed; **PR #29** open against `main` (https://github.com/lohvinovpavel/MedStockAI/pull/29). Working tree clean apart from task-file updates.
+- Local dev stack left running: warehouse API on :8004 (dev JWT keys + token in the session scratchpad), `npm run dev` on :3002 (:3000 held by the cursor stop-hook's older instance). Local Postgres `medstock-postgres` is migrated to head and demo-seeded.
+- Push note: origin's SSH key maps to `mykhailochaus-GLO` (no push); push via HTTPS with gh (`MChaus`) credentials.
 
 ### First actions on resume
-_Nothing yet — task not started. Begin at checklist step 1._
+1. Check PR #29 CI (per-service matrix) — `gh pr checks 29 --repo lohvinovpavel/MedStockAI`; fix anything red.
+2. Visual pass of `localhost:3002/warehouse` (Chrome extension was unavailable this session) — needs a `medstock_token` cookie; mint per `services/auth/README.md` local-dev recipe.
+3. On merge: mark this task DONE; issue #7 (prediction) builds on `consumption_daily` + the §6a contract in `docs/demo-data.md`.
+- Anti-patterns: don't regenerate artifacts unless the generator changed (regen changes committed bytes; the determinism test enforces agreement); don't re-add the `(legacy)/warehouse` stub (route collision).
 
 ## Worklog
 
@@ -101,3 +106,4 @@ _Nothing yet — task not started. Begin at checklist step 1._
 - 2026-08-17: Docs-sweep requirement added at user's request (AC + step 9 broadened).
 - 2026-08-17: Plan approved by user. Status → IN_PROGRESS.
 - 2026-08-17: Steps 1–2 done. `.gitignore` staged; incidental `web/package-lock.json` churn (npm libc-field noise) restored to HEAD. Migration `migrations/versions/20260817_warehouse.py` up/down verified against local Postgres; ruff clean. Design deltas vs. plan, driven by B1 spec: perm named `facility:read` (not `warehouse:read`); `stock_snapshot.location_id` NOT retyped to FK — instead `facility_id` FK added and `location_id` remains the shelf code matching `storage_location.code`; storage requirements live on global `drug` table (excursion query needs them in DB, not just CSV); facility seed rows go in seed_demo (deviates from B1 rule 5 "ship as migration" — demo-data.md's ENVIRONMENT=demo guard wins).
+- 2026-08-17: Steps 3–10 done — drugs.csv (100/100 RxNav-resolved), gen_demo/seed_demo + committed artifacts, warehouse API, 45 new tests (209 total matrix green), dashboard page (`npm run build` clean), docs sweep, commit `0b03be0`, **PR #29** opened. Further design deltas: stock natural key widened to include `facility_id` (every facility has a "fridge-1"); consumption chart anchored to the data's fixed END_DATE 2026-08-14, not the wall clock; migration downgrade deletes facility-scoped stock rows before restoring the narrow key (documented destructive); bulk-hall summer coupling tuned so excursions tell a three-tier story (2160 h misplaced drug / 102 h heatwave / 7 h fridge failure).

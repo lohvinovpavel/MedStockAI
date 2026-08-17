@@ -2,4 +2,4 @@
 
 | ID | Task | Status | Updated | Summary |
 |----|------|--------|---------|---------|
-| 001 | Warehouse service + synthetic demo data (issue #8) | IN_PROGRESS | 2026-08-17 | B1 facility/location registry, consumption_daily + location_condition tables, numpy generator (3y daily consumption, 90d hourly telemetry, DEMO_SEED=42, committed artifacts), seed_demo loader, warehouse API incl. /excursions, dashboard warehouse page, 4-layer tests. One PR on feature/warehouse. |
+| 001 | Warehouse service + synthetic demo data (issue #8) | IN_PROGRESS | 2026-08-17 | Built & shipped as PR #29 (commit 0b03be0): B1 facility/storage_location registry, consumption_daily (3y, stockout-censored) + location_condition tables, deterministic gen_demo/seed_demo with committed artifacts + 100 real drugs, warehouse API incl. computed /excursions, dashboard page, 45 new tests. Awaiting CI + review/merge; visual page check pending. |
