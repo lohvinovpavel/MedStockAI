@@ -10,6 +10,10 @@ WORKDIR /srv
 COPY pyproject.toml uv.loc[k] alembic.ini ./
 COPY shared ./shared
 COPY migrations ./migrations
+# Demo seeding runs as a one-off Job in-cluster (deploy/k8s/seed-stock-job.yaml),
+# so the scripts have to be in the image. Same reasoning as migrations above:
+# any image can run them, none runs them on startup.
+COPY scripts ./scripts
 COPY services/${SERVICE} ./services/${SERVICE}
 
 RUN uv sync --package medstock-${SERVICE} --no-dev

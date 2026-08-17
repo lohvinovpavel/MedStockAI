@@ -1,0 +1,41 @@
+# Demo stock for the dashboard shelf. One-off, run by hand — deliberately not
+# in kustomization.yaml, for the same reason seed-job.yaml is not: seeding is
+# something you decide to do, not something a rollout does to you.
+#
+# Why this exists at all: ingest-certification certifies `shelf_ndcs()`, which
+# reads stock_snapshot. Until the ten dashboard NDCs are in that table the daily
+# job certifies drugs nobody can see and every badge on the shelf reads
+# "unknown" — with nothing anywhere reporting an error.
+#
+# Run it after `migrate`, once per environment:
+#   kubectl -n medstock apply -f deploy/k8s/seed-stock-job.yaml
+#   kubectl -n medstock wait --for=condition=complete job/seed-stock --timeout=300s
+#   kubectl -n medstock create job certify-now --from=cronjob/ingest-certification
+#
+# The last line is the point: it certifies the freshly seeded shelf immediately
+# rather than leaving the dashboard grey until 05:00.
+#
+# Re-running is safe. Every write is ON CONFLICT DO UPDATE on
+# (hospital_id, ndc, location_id).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-stock
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: seed-stock
+        # Any image: all carry shared/ + scripts/ (see the root Dockerfile).
+        image: ghcr.io/medstockai/inventory:latest
+        workingDir: /srv
+        command: ["python", "scripts/seed_stock.py"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits: { memory: 256Mi }

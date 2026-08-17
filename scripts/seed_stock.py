@@ -47,6 +47,30 @@ DRUGS: tuple[dict, ...] = (
     {"rxcui": "200801", "name": "furosemide 20 MG Oral Tablet [Lasix]", "in_formulary": False},
 )
 
+# The ten SKUs the dashboard shelf shows (web/lib/mock-data.ts).
+#
+# Seeded by NDC rather than resolved through RxNorm like DRUGS above, because
+# these were chosen *as* NDCs: each is a real, currently-listed product picked so
+# COMP-1 has something genuine to say about it. Going back through an RxCUI would
+# hand back a different pack and lose exactly that.
+#
+# They belong in stock_snapshot because that is what `shelf_ndcs()` reads, and
+# the ingest-certification CronJob certifies the shelf. Without these rows the
+# daily job certifies drugs nobody can see and every badge on the dashboard sits
+# at "unknown".
+DASHBOARD_SHELF: tuple[dict, ...] = (
+    {"ndc": "62135009120", "name": "Amoxicillin/Clavulanate 875mg", "quantity": 900},
+    {"ndc": "16714097720", "name": "Propofol 1% Emulsion", "quantity": 250},
+    {"ndc": "82804006601", "name": "Ceftriaxone 1g", "quantity": 9},
+    {"ndc": "00487990130", "name": "Salbutamol 100mcg Inhaler", "quantity": 140},
+    {"ndc": "00338011220", "name": "Norepinephrine 4mg/4mL", "quantity": 60},
+    {"ndc": "00069406101", "name": "Azithromycin 250mg", "quantity": 420},
+    {"ndc": "00024586900", "name": "Insulin Glargine 100U/mL", "quantity": 75},
+    {"ndc": "63323041125", "name": "Midazolam 5mg/mL", "quantity": 180},
+    {"ndc": "00143938610", "name": "Paracetamol 1g IV", "quantity": 300},
+    {"ndc": "00338043304", "name": "Heparin Sodium 5000IU/mL", "quantity": 95},
+)
+
 # Optional `quantity` (all locations) and `locations` freeze demo stock; otherwise random.
 # 197603 is on live GET /analogues/212033?mode=full (diflunisal — not aspirin).
 # High band is quantity > 100 so this analogue ranks first in Full.
@@ -124,6 +148,26 @@ def build_stock_rows(
     return rows
 
 
+def build_shelf_rows(hospital_id: str) -> list[dict]:
+    """The dashboard shelf, one line each at the main pharmacy.
+
+    No RNG and no RxNorm round-trip: these NDCs are fixed so that what the
+    CronJob certifies is exactly what the screen shows.
+    """
+    rows = [
+        {
+            "hospital_id": hospital_id,
+            "ndc": drug["ndc"],
+            "location_id": "main-pharmacy",
+            "quantity": int(drug["quantity"]),
+        }
+        for drug in DASHBOARD_SHELF
+    ]
+    for drug in DASHBOARD_SHELF:
+        print(f"{drug['ndc']} {drug['name']}")
+    return rows
+
+
 def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list[str]) -> None:
     if rows:
         stmt = insert(StockSnapshot).values(rows)
@@ -148,6 +192,7 @@ def main() -> int:
     rows.extend(
         build_stock_rows(args.hospital_id, ANALOGUE_DRUGS, rng, demo_edges=False)
     )
+    rows.extend(build_shelf_rows(args.hospital_id))
     formulary = [
         d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]
     ]
@@ -161,7 +206,9 @@ def main() -> int:
     finally:
         session.close()
     print(
-        f"upserted {len(rows)} stock line(s), {len(formulary)} formulary rxcui(s) "
+        f"upserted {len(rows)} stock line(s) "
+        f"({len(DASHBOARD_SHELF)} of them the dashboard shelf), "
+        f"{len(formulary)} formulary rxcui(s) "
         f"for hospital_id={args.hospital_id} locations={','.join(LOCATIONS)}"
     )
     return 0
