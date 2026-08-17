@@ -369,10 +369,13 @@ present. Tracked separately; it is a schema-wide decision, not this table's.
 5. **PharmGKB / DrugBank licensing** — free for research, not for a product. Affects what can be
    claimed on stage.
 6. **Deployment region**, before the first migration. §5.
-7. **New permissions** — `profile:assess`, `profile:explain`. Neither exists in
-   `shared/medstock_shared/auth.py`. Partly addressed: `profile:review` and `profile:approve` are
-   in the table now for the PP-3 approval gate
-   ([prognosis-and-procurement.md](prognosis-and-procurement.md) §1.3), the second held by the
-   pharmacist role and no other. `/assess` and `/demand` still run on `inventory:read`, which is
-   too coarse — anyone who can see stock can run an assessment. Splitting those is a change to
-   endpoints teammates are already calling, so it is left for its own commit.
+7. ~~**New permissions**~~ **Done.** `profile:assess` and `profile:explain` exist, alongside
+   `profile:review` and `profile:approve` from the PP-3 approval gate
+   ([prognosis-and-procurement.md](prognosis-and-procurement.md) §1.3). `/assess`, `/demand` and
+   `/forecast` are on `profile:assess` rather than `inventory:read`, so seeing stock no longer
+   implies being able to run a clinical assessment.
+
+   `profile:explain` goes to pharmacist and physician. A prescriber who cannot ask *why* a line
+   was flagged has been handed a verdict without its basis, which is precisely what §6's CDS
+   exclusion turns on — so withholding it from the physician would undermine the exclusion the
+   design relies on.

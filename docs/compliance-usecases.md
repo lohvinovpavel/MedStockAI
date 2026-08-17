@@ -278,6 +278,12 @@ findings are replayed, not re-fetched.
 3. **HTML scraping enters the codebase** for import alerts and warning letters. No JSON
    alternative exists. Accept the fragility, or cut import certification from the MVP scope.
 4. **Two calls vs. a SQL join** for the inventory badge — §2.2.
-5. **New permissions.** `certificate:read` and `certification:explore` do not exist in
-   `shared/medstock_shared/auth.py`; today no role grants anything compliance-specific beyond
-   `audit:read`.
+5. ~~**New permissions.**~~ **Done.** `certificate:read` and `certification:explore` are in
+   `shared/medstock_shared/auth.py`, and `/status`, `/certificates/{ndc}` and `/explore` are on
+   them instead of `inventory:read`.
+
+   The split is not about secrecy. `/explore` triggers a live openFDA fetch and openFDA's budget
+   is 1 000 requests a day *per IP, shared across every feed* ([services.md](services.md) §7), so
+   a permission that let anyone who can see stock spend it would let one curious user starve the
+   nightly CronJobs. Reading an already-computed certificate costs a SQL query and is granted to
+   pharmacist, physician, director and admin; exploring is pharmacist and admin only.

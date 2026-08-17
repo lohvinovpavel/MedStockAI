@@ -99,7 +99,7 @@ def get_ruleset(_: Principal = Depends(require("inventory:read"))) -> dict:
 @app.get("/status")
 def get_status(
     ndc: list[str] = Query(default=[], description="Repeatable. One page of stock, max 100."),
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("certificate:read")),
 ) -> dict:
     """Batch traffic light. Built for the inventory page: one call per page of
     stock rather than one call per row.
@@ -172,7 +172,7 @@ def _codes_by_ndc(session: Session, ndcs: list[str]) -> dict[str, list[str]]:
 @app.post("/explore")
 def post_explore(
     payload: dict = Body(default={}),
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("certification:explore")),
 ) -> dict:
     """COMP-2, explicitly, for a handful of NDCs at once.
 
@@ -202,7 +202,7 @@ def post_explore(
 @app.get("/certificates/{ndc}")
 def get_certificate(
     ndc: str,
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("certificate:read")),
 ) -> dict:
     """The evidence behind one colour: every finding, with the source that
     produced it. This is what a pharmacist opens when they disagree."""

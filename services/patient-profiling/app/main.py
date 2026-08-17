@@ -466,7 +466,7 @@ def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
-    principal: Principal = Depends(require("inventory:read")),
+    principal: Principal = Depends(require("profile:assess")),
 ) -> dict:
     """One patient, one or more candidate drugs.
 
@@ -503,7 +503,7 @@ def post_assess(
 @app.post("/demand")
 def post_demand(
     payload: dict = Body(...),
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("profile:assess")),
 ) -> dict:
     """Cohort -> purchasing plan.
 
@@ -585,7 +585,7 @@ def assumption(name: str, fallback: float) -> tuple[float, str]:
 @patients.post("/forecast")
 def forecast(
     payload: dict = Body(...),
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("profile:assess")),
 ) -> dict:
     """Cohort -> purchasing plan, plus where the therapy is heading (PP-4).
 

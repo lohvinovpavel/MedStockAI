@@ -54,6 +54,14 @@ def current_principal(request: Request) -> Principal:
 # every operational permission in this table and still must not be able to sign
 # off clinical content; a gate a non-clinician can pass is not the gate the
 # design claims. `profile:review` is the read side and is safe to share.
+#
+# `certification:explore` is separated from `certificate:read` for a reason that
+# is not secrecy: exploring an unknown NDC triggers a live openFDA fetch
+# (COMP-2), and openFDA's budget is 1 000 requests a day **per IP, shared across
+# every feed** (docs/services.md §7). Letting anyone who can see stock spend
+# that budget lets one curious user starve the nightly CronJobs. Reading an
+# already-computed certificate costs a SQL query, so it is shared widely;
+# spending the budget is not.
 PERMS: dict[str, set[str]] = {
     "pharmacist": {
         "queue:read",
@@ -63,6 +71,10 @@ PERMS: dict[str, set[str]] = {
         "facility:read",
         "profile:review",
         "profile:approve",
+        "profile:assess",
+        "profile:explain",
+        "certificate:read",
+        "certification:explore",
     },
     "physician": {
         "alert:read",
@@ -71,6 +83,12 @@ PERMS: dict[str, set[str]] = {
         "patient:read",
         "patient:write",
         "facility:read",
+        # Prescribing is the whole reason /cart-check exists, and a physician
+        # who cannot ask why a line was flagged is handed a verdict without its
+        # basis — which is what §6's CDS exclusion turns on.
+        "profile:assess",
+        "profile:explain",
+        "certificate:read",
     },
     "director": {
         "dashboard:read",
@@ -81,6 +99,7 @@ PERMS: dict[str, set[str]] = {
         # So the accept rate in docs/prognosis-and-procurement.md §5.4 is
         # readable by the person who has to decide whether to trust extraction.
         "profile:review",
+        "certificate:read",
     },
     "admin": {
         "mapping:approve",
@@ -92,6 +111,8 @@ PERMS: dict[str, set[str]] = {
         "patient:write",
         "facility:read",
         "profile:review",
+        "certificate:read",
+        "certification:explore",
     },
 }
 
