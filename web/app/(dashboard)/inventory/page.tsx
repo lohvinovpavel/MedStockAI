@@ -58,7 +58,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
-import { AnaloguesDialog } from "@/components/dashboard/AnaloguesDialog";
 import { StatTile } from "@/components/dashboard/StatTile";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
@@ -266,7 +265,6 @@ export default function InventoryPage() {
   const [status, setStatus] = useState<"all" | StockRisk>("all");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [analogueItem, setAnalogueItem] = useState<InventoryItem | null>(null);
   const [certItem, setCertItem] = useState<InventoryItem | null>(null);
 
   const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
@@ -470,7 +468,12 @@ export default function InventoryPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuGroup>
-                              <DropdownMenuItem onSelect={() => { selectRow(item); setAnalogueItem(item); }}>
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  selectRow(item);
+                                  router.push(`/analogue?q=${encodeURIComponent(item.drugName)}`);
+                                }}
+                              >
                                 <Repeat2 /> Find analogues
                               </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => setCertItem(item)}>
@@ -502,11 +505,6 @@ export default function InventoryPage() {
           </Table>
       </div>
 
-      <AnaloguesDialog
-        item={analogueItem}
-        open={analogueItem !== null}
-        onOpenChange={(o) => !o && setAnalogueItem(null)}
-      />
       <CertificateDialog
         item={certItem}
         open={certItem !== null}

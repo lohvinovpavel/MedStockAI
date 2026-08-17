@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { AnaloguesList } from "@/components/AnaloguesList";
 import { StockBand, type StockStatus } from "@/components/StockBand";
@@ -29,8 +29,8 @@ type SourceStock = {
   stock_status: StockStatus;
 };
 
-export function DrugSearch() {
-  const [query, setQuery] = useState("");
+export function DrugSearch({ initialQuery = "" }: { initialQuery?: string }) {
+  const [query, setQuery] = useState(initialQuery);
   const [items, setItems] = useState<DrugIdentity[] | null>(null);
   const [confirmed, setConfirmed] = useState<DrugIdentity | null>(null);
   const [packages, setPackages] = useState<PackageRow[] | null>(null);
@@ -38,9 +38,8 @@ export function DrugSearch() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function onSearch(event: FormEvent) {
-    event.preventDefault();
-    const q = query.trim();
+  const runSearch = useCallback(async (raw: string) => {
+    const q = raw.trim();
     if (!q) return;
     setBusy(true);
     setError(null);
@@ -52,16 +51,25 @@ export function DrugSearch() {
       setItems(body.items as DrugIdentity[]);
     } catch (err) {
       setItems(null);
+      const message = err instanceof Error ? err.message : "search failed";
       setError(
-        err instanceof Error && err.message === "missing credentials"
+        message === "missing credentials" || message === "invalid token"
           ? "Sign in to search preparations."
-          : err instanceof Error
-            ? err.message
-            : "search failed",
+          : message,
       );
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!initialQuery.trim()) return;
+    void runSearch(initialQuery);
+  }, [initialQuery, runSearch]);
+
+  function onSearch(event: FormEvent) {
+    event.preventDefault();
+    void runSearch(query);
   }
 
   async function confirmDrug(item: DrugIdentity) {

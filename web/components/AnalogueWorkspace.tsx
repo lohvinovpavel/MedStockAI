@@ -73,7 +73,7 @@ export function AnalogueWorkspace() {
 
         <TabsContent value="analogues" className="flex flex-col gap-3">
           <ServiceHealth service="analogue" />
-          <DrugSearch />
+          <DrugSearch key={searchParams.get("q") ?? ""} initialQuery={searchParams.get("q") ?? ""} />
         </TabsContent>
 
         {canPrescribe && (

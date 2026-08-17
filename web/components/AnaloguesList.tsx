@@ -61,13 +61,6 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
     };
   }, [rxcui]);
 
-  function onMode(next: AnalogueMode) {
-    setMode(next);
-    setItems(null);
-    setRationaleUnavailable(false);
-    setError(null);
-  }
-
   async function load(nextMode = mode, nextUseAi = useAi) {
     setBusy(true);
     setError(null);
@@ -90,6 +83,13 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function onMode(next: AnalogueMode) {
+    setMode(next);
+    setItems(null);
+    setRationaleUnavailable(false);
+    setError(null);
   }
 
   function onUseAi(next: boolean) {
