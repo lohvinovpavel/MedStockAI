@@ -17,6 +17,7 @@ from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
 from medstock_shared.models import (
+    AdrSignal,
     AssessmentLog,
     DrugRiskProfile,
     Patient,
@@ -27,6 +28,7 @@ from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
     WEIGHTS,
+    AdrSignalRow,
     PatientVector,
     PgxRecommendation,
     RiskProfile,
@@ -480,6 +482,31 @@ def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
     ]
 
 
+def adr_signals_for(rxcuis: list[str]) -> list[AdrSignalRow]:
+    """Precomputed FAERS ratios for these drugs (Tier 1).
+
+    Degrades to "no signals" if the table is missing, like the other two feed
+    readers: an unseeded feed costs stage 7a, not the assessment.
+    """
+    if not rxcuis:
+        return []
+    try:
+        with Session(engine) as session:
+            rows = session.scalars(select(AdrSignal).where(AdrSignal.rxcui.in_(rxcuis))).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        AdrSignalRow(
+            rxcui=str(r.rxcui),
+            reaction=r.reaction,
+            prr=float(r.prr or 0),
+            ror=float(r.ror or 0),
+            n_reports=int(r.n_reports or 0),
+        )
+        for r in rows
+    ]
+
+
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
@@ -498,8 +525,10 @@ def post_assess(
 
     profiles = approved_profiles(candidates)
     pgx = pgx_for(candidates)
+    adr = adr_signals_for(candidates)
     results = [
-        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx).as_dict() for rxcui in candidates
+        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr).as_dict()
+        for rxcui in candidates
     ]
     request_id = record_assessment(principal, patient, results)
     return {
@@ -513,6 +542,7 @@ def post_assess(
         # Same distinction for Tier 3: zero means no CPIC guideline covers these
         # drugs, not that the genotype was ignored.
         "pgx_guidelines_applied": len(pgx),
+        "adr_signals_applied": len(adr),
         "results": results,
     }
 
@@ -911,10 +941,11 @@ def cart_check(
     cart_rxcuis = [item.rxcui.strip() for item in body.items if item.rxcui.strip()]
     profiles = approved_profiles(cart_rxcuis)
     pgx = pgx_for(cart_rxcuis)
+    adr = adr_signals_for(cart_rxcuis)
     results: list[dict] = []
     for item in body.items:
         rxcui = item.rxcui.strip()
-        assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx)
+        assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         # Surface all findings as warnings for the cart (demo: no hard block UI).
         warnings = [_finding_dict(f) for f in assessment.findings]
 
@@ -978,6 +1009,7 @@ def cart_check(
         # otherwise look identical from a response with no PP-3 findings in it.
         "risk_profiles_applied": len(profiles),
         "pgx_guidelines_applied": len(pgx),
+        "adr_signals_applied": len(adr),
     }
 
 

@@ -188,6 +188,28 @@ buildable — and only Tier 2 is the black box.
 |---|---|---|---|---|
 | **0** | Deterministic rules | Hard contraindications, allergy cross-reactivity (β-lactam class), renal/hepatic dose limits, duplicate therapy | Knowledge bases | Trivially |
 | **1** | Disproportionality analysis — PRR / ROR / IC | "This reaction is reported N× above baseline for this drug" | FAERS | Yes — it is a ratio |
+
+**Tier 1 is built** (`services/ingest/app/faers.py` → `adr_signal` → stage 7a). PRR and ROR from
+the standard 2×2 table, screened on the conventional floors: at least 3 reports and PRR ≥ 2.
+
+Three things measured while building it:
+
+- **The keyless baseline is the top 100 reactions, not 1 000.** Asking a count query for
+  `limit=1000` returns `403 API_KEY_MISSING`. Every other feed here is keyless by design, so 100
+  is what ships — and it is a real coverage limit, because a drug-specific reaction outside the
+  overall top 100 has no baseline and is skipped rather than given a guessed one. Metformin's
+  lactic acidosis is one such casualty; it is caught by Tier 3's label extraction instead.
+  Registering an openFDA key would raise the ceiling and materially widen this tier.
+- **Confounding by indication is visible in the output, not theoretical.** Metformin's strongest
+  signal is *blood glucose increased* at PRR 4.6 over 8 659 reports. Metformin does not raise
+  blood glucose; it is prescribed to people whose glucose is already high. This is why the tier
+  carries a small weight and why every message it emits says "reported", never "causes".
+- **openFDA answers 404 for "no matching reports"**, which for a drug nobody has filed an event
+  against is an ordinary result rather than an error.
+
+The weight is deliberately the smallest in the table. A FAERS ratio is identical for every
+patient on the drug, so if it could outweigh a renal or prior-ADR finding it would flatten the
+distinctions the assessment exists to make. It nudges; it does not decide.
 | **2** | Gradient boosting or survival model | Individual risk score for a named reaction | MIMIC-IV, offline | Via SHAP |
 | **3** | Pharmacogenomic guideline lookup | CYP2C19 → clopidogrel, HLA-B\*57:01 → abacavir, etc. | CPIC level A/B pairs | Trivially |
 
@@ -375,9 +397,10 @@ present. Tracked separately; it is a schema-wide decision, not this table's.
    before it is on the critical path.
 4. **Scope the MVP tiers.** Tiers 0, 1 and 3 are deliverable and genuinely useful. Tier 2 is the
    "complex ML" ask and the one that can slip. Decide whether Tier 2 is committed or a stretch.
-   **Tier 0 and Tier 3 are built.** Tier 1 (FAERS disproportionality → `adr_signal`) is still
-   open and has no external blocker — OFFSIDES/TWOSIDES is a ready-made baseline. Tier 2
-   cannot start until MIMIC-IV credentialing does, which is item 3 and has not been begun.
+   **Tiers 0, 1 and 3 are built.** Tier 2 is the only one left and cannot start until MIMIC-IV
+   credentialing does, which is item 3 and has not been begun. It is therefore a stretch by
+   circumstance rather than by choice — and the pipeline is built so it arrives as an additional
+   contribution inside `/explain`, not a rewrite.
 5. **PharmGKB / DrugBank licensing** — free for research, not for a product. Affects what can be
    claimed on stage.
 6. **Deployment region**, before the first migration. §5.

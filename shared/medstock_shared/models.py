@@ -427,6 +427,46 @@ class Patient(Base):
     )
 
 
+class AdrSignal(Base):
+    """Tier 1: how far above baseline a reaction is *reported* for a drug.
+
+    Reference class. Computed offline from openFDA FAERS by
+    `services/ingest/app/faers.py` and read at stage 7.
+
+    **These are reporting ratios, not risks.** FAERS is a spontaneous reporting
+    system: it has no denominator, it is subject to notoriety bias (a drug in
+    the news gets reported more), and it is confounded by indication (the
+    reaction may belong to the disease, not the drug). A PRR of 4 means this
+    reaction is reported four times more often for this drug than across all
+    drugs — it does not mean the drug caused anything. Every message this table
+    produces says so, because a ratio presented as a risk is the single way this
+    tier misleads.
+
+    `n_reports` is kept because the ratio alone is meaningless: 2 reports out of
+    3 is a PRR that will move wildly on the next report, and the standard signal
+    criteria require a minimum count for exactly that reason.
+    """
+
+    __tablename__ = "adr_signal"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # MedDRA preferred term as openFDA reports it, e.g. "LACTIC ACIDOSIS".
+    reaction: Mapped[str] = mapped_column(Text, nullable=False)
+    # Proportional reporting ratio and reporting odds ratio.
+    prr: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    ror: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    # a — reports naming both this drug and this reaction.
+    n_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # a+b — all reports naming this drug, so the ratio can be re-derived.
+    n_drug_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("rxcui", "reaction", name="uq_adr_signal_natural"),)
+
+
 class PgxGuideline(Base):
     """Tier 3: a CPIC gene–drug recommendation, keyed the way CPIC keys it.
 

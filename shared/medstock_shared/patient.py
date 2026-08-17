@@ -56,6 +56,11 @@ WEIGHTS: dict[str, int] = {
     "AGE_INAPPROPRIATE": 20,
     "INTERACTION_MODERATE": 15,
     "NARROW_THERAPEUTIC_INDEX": 10,
+    # Tier 1. Small on purpose: a FAERS ratio is the same for every patient on
+    # the drug, so it must not outweigh a stage that knows something about this
+    # person. It nudges; it does not decide.
+    "ADR_SIGNAL_STRONG": 10,
+    "ADR_SIGNAL": 5,
 }
 BANDS: tuple[tuple[int, Verdict], ...] = ((0, Verdict.GREEN), (30, Verdict.AMBER), (60, Verdict.RED))
 
@@ -347,6 +352,62 @@ def prognosis_findings(
 
 
 @dataclass(frozen=True)
+class AdrSignalRow:
+    """One precomputed FAERS disproportionality row, as Tier 1 consumes it."""
+
+    rxcui: str
+    reaction: str
+    prr: float = 0.0
+    ror: float = 0.0
+    n_reports: int = 0
+
+
+# Evans et al. — the conventional screening criteria for a spontaneous-reporting
+# signal. The count floor matters more than the ratio: 2 reports out of 3 gives
+# a spectacular PRR that the next report will destroy.
+ADR_MIN_REPORTS = 3
+ADR_PRR_SIGNAL = 2.0
+ADR_PRR_STRONG = 4.0
+
+
+def adr_findings(signals: Sequence[AdrSignalRow]) -> list[Finding]:
+    """Tier 1 — a population reporting signal for the drug.
+
+    Deliberately **not patient-specific**: FAERS knows about drugs and
+    reactions, not about this patient. It is the same offset for everyone on the
+    drug, which is why it carries a small weight and sits below every stage that
+    does know something about the person.
+
+    Every message says "reported", never "causes". FAERS has no denominator, is
+    subject to notoriety bias, and is confounded by indication — a PRR of 4 says
+    this reaction is reported four times more often for this drug than across
+    all drugs, and says nothing about causation. Presenting a reporting ratio as
+    a risk is the one way this tier misleads, so the wording is part of the
+    contract, not decoration.
+    """
+    findings: list[Finding] = []
+    for signal in signals:
+        if signal.n_reports < ADR_MIN_REPORTS or signal.prr < ADR_PRR_SIGNAL:
+            continue
+        strong = signal.prr >= ADR_PRR_STRONG
+        findings.append(
+            Finding(
+                code="ADR_SIGNAL_STRONG" if strong else "ADR_SIGNAL",
+                severity=Severity.MODERATE if strong else Severity.LOW,
+                weight=WEIGHTS["ADR_SIGNAL_STRONG"] if strong else WEIGHTS["ADR_SIGNAL"],
+                message=(
+                    f"{signal.reaction.title()} is *reported* {signal.prr:.1f}x above baseline "
+                    f"for this drug ({signal.n_reports} reports). A reporting ratio, not a "
+                    f"risk — FAERS has no denominator and does not establish cause."
+                ),
+                source="openFDA FAERS",
+                stage=7,
+            )
+        )
+    return findings
+
+
+@dataclass(frozen=True)
 class PgxRecommendation:
     """One CPIC gene–drug–phenotype row, as Tier 3 consumes it."""
 
@@ -563,6 +624,7 @@ def assess(
     today=None,
     risk_profiles: Sequence[RiskProfile] = (),
     pgx: Sequence[PgxRecommendation] = (),
+    adr_signals: Sequence[AdrSignalRow] = (),
 ) -> Assessment:
     """Run the deterministic stages for one candidate drug.
 
@@ -652,14 +714,26 @@ def assess(
                         "feature vector", 6)
             )
 
-    # --- stage 7: label-derived prognosis (PP-3) ----------------------------
+    # --- stage 7a: population signal (Tier 1, FAERS) ------------------------
+    # patient-pipeline.md §2 puts the FAERS ratio at stage 7 and
+    # prognosis-and-procurement.md §1.4 calls the label-derived stage "7b", so
+    # both live here: two population-level signals, told apart by their code.
+    applicable_adr = [s for s in adr_signals if str(s.rxcui) == str(rxcui)]
+    if applicable_adr:
+        stages.append(7)
+        findings.extend(adr_findings(applicable_adr))
+
+    # --- stage 7b: label-derived prognosis (PP-3) ---------------------------
     # Only profiles for this drug, and only ones a pharmacist has approved —
     # the caller is responsible for that filter, but guard it here too, because
     # an unapproved profile reaching a screen is the one failure this design
     # cannot tolerate.
     applicable = [p for p in risk_profiles if str(p.rxcui) == str(rxcui)]
     if applicable:
-        stages.append(7)
+        # 7a may already have claimed it; `stages_completed` is a list of stages
+        # that ran, not a tally of findings, so 7 must appear at most once.
+        if 7 not in stages:
+            stages.append(7)
         findings.extend(prognosis_findings(vector, applicable))
 
     # --- stage 8: pharmacogenomics (Tier 3) --------------------------------
