@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "20260817_warehouse"
-down_revision: str | None = "20260815_patient"
+down_revision: str | None = "20260814_prog"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
