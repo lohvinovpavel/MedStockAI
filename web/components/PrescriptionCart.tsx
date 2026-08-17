@@ -1,8 +1,31 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Search, TriangleAlert } from "lucide-react";
+import { Callout } from "@/components/dashboard/Callout";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { cn } from "@/lib/utils";
 
 type DrugHit = {
   rxcui: string;
@@ -42,6 +65,7 @@ type CartLineResult = {
   warnings: Warning[];
   exclude_ingredient: string | null;
   exclude_ingredient_name: string | null;
+  score?: number | null;
 };
 
 type AnalogueHit = {
@@ -66,6 +90,7 @@ type PrescriptionSnapshot = {
 };
 
 const STORAGE_KEY = "medstock-prescribe-cart";
+const NO_PATIENT = "__none__";
 
 function newItemId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -371,345 +396,409 @@ export function PrescriptionCart() {
 
   if (user && user.role !== "physician" && user.role !== "admin") {
     return (
-      <div className="prescribe">
-        <p>
-          Physician-only demo flow. Sign in as <code>ben@stmarys.org</code>.
-        </p>
-      </div>
+      <Callout tone="warning">
+        Physician-only demo flow. Sign in as{" "}
+        <span className="font-mono">ben@stmarys.org</span>.
+      </Callout>
     );
   }
 
   return (
-    <div className="prescribe">
-      <p className="lede">
-        Search drugs, add them to the appointment cart, select a patient profile,
-        review warnings, replace with analogues, then accept to generate a
-        prescription summary. Cart lives in this browser tab only.
-      </p>
-
-      <section className="prescribe-grid">
-        <div>
-          <h2>Drug search</h2>
-          <form className="row" onSubmit={onSearch}>
-            <div>
-              <label htmlFor="cart-drug-q">Query</label>
-              <input
-                id="cart-drug-q"
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="aspirin caffeine"
-              />
-            </div>
-            <button type="submit" disabled={searchBusy || !query.trim()}>
-              {searchBusy ? "Searching…" : "Search"}
-            </button>
-          </form>
-          {searchError && <p className="error">{searchError}</p>}
-          <ul className="result-list">
-            {hits.map((hit) => (
-              <li key={hit.rxcui}>
-                <div className="hit-row">
-                  <div>
-                    <strong>{hit.name}</strong>
-                    <div className="muted">RxCUI {hit.rxcui}</div>
-                  </div>
-                  <button type="button" onClick={() => addToCart(hit)}>
-                    Add
-                  </button>
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Drug search</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <form className="flex flex-wrap items-end gap-2" onSubmit={onSearch}>
+              <div className="min-w-40 flex-1">
+                <Label htmlFor="cart-drug-q" className="mb-1.5 text-xs text-muted-foreground">
+                  Query
+                </Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="cart-drug-q"
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="aspirin caffeine"
+                    className="h-8 pl-8 text-xs"
+                  />
                 </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div>
-          <h2>Patient</h2>
-          {patientsError && <p className="error">{patientsError}</p>}
-          <div className="row">
-            <div>
-              <label htmlFor="patient-select">Profile</label>
-              <select
-                id="patient-select"
-                value={cart.patientId ?? ""}
-                onChange={(e) =>
-                  setCart((prev) => ({
-                    ...prev,
-                    patientId: e.target.value || null,
-                  }))
-                }
-              >
-                <option value="">Select patient…</option>
-                {patients.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name} ({p.date_of_birth})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button type="button" className="secondary" onClick={startCreatePatient}>
-              New
-            </button>
-            {selectedPatient && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => startEditPatient(selectedPatient)}
-              >
-                Edit
-              </button>
-            )}
-          </div>
-          {selectedPatient && (
-            <p className="muted small">
-              Allergies: {selectedPatient.allergy_codes.join(", ") || "none"} ·
-              Conditions: {selectedPatient.condition_codes.join(", ") || "none"} ·
-              Blood: {selectedPatient.blood_group ?? "—"}
-            </p>
-          )}
-
-          {showPatientForm && (
-            <form className="patient-form" onSubmit={savePatient}>
-              <h3>{editingId ? "Edit patient" : "New patient"}</h3>
-              <label htmlFor="p-name">Full name</label>
-              <input
-                id="p-name"
-                type="text"
-                required
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-              />
-              <label htmlFor="p-dob">Date of birth</label>
-              <input
-                id="p-dob"
-                type="date"
-                required
-                value={formDob}
-                onChange={(e) => setFormDob(e.target.value)}
-              />
-              <label htmlFor="p-blood">Blood group</label>
-              <select
-                id="p-blood"
-                value={formBlood}
-                onChange={(e) => setFormBlood(e.target.value)}
-              >
-                {["unknown", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
-              <label htmlFor="p-all">Allergies (comma-separated)</label>
-              <input
-                id="p-all"
-                type="text"
-                value={formAllergies}
-                onChange={(e) => setFormAllergies(e.target.value)}
-                placeholder="penicillin, caffeine"
-              />
-              <label htmlFor="p-cond">Conditions / avoid codes</label>
-              <input
-                id="p-cond"
-                type="text"
-                value={formConditions}
-                onChange={(e) => setFormConditions(e.target.value)}
-                placeholder="avoid_caffeine"
-              />
-              {formError && <p className="error">{formError}</p>}
-              <div className="row">
-                <button type="submit" disabled={formBusy}>
-                  {formBusy ? "Saving…" : "Save"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setShowPatientForm(false)}
-                >
-                  Cancel
-                </button>
               </div>
+              <Button type="submit" size="sm" className="h-8 text-xs" disabled={searchBusy || !query.trim()}>
+                {searchBusy ? "Searching…" : "Search"}
+              </Button>
             </form>
-          )}
-        </div>
-      </section>
+            {searchError && <p className="text-xs text-destructive">{searchError}</p>}
+            <ul className="flex flex-col gap-2">
+              {hits.map((hit) => (
+                <li key={hit.rxcui} className="flex items-center justify-between gap-3 rounded-md border p-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{hit.name}</p>
+                    <p className="font-mono text-[11px] text-muted-foreground">RxCUI {hit.rxcui}</p>
+                  </div>
+                  <Button type="button" size="sm" className="h-7 shrink-0 text-xs" onClick={() => addToCart(hit)}>
+                    Add
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
 
-      <section>
-        <div className="cart-header">
-          <h2>Appointment cart</h2>
-          <div className="row cart-actions">
-            <button
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Patient</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {patientsError && <p className="text-xs text-destructive">{patientsError}</p>}
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-40 flex-1">
+                <Label htmlFor="patient-select" className="mb-1.5 text-xs text-muted-foreground">
+                  Profile
+                </Label>
+                <Select
+                  value={cart.patientId ?? NO_PATIENT}
+                  onValueChange={(value) =>
+                    setCart((prev) => ({
+                      ...prev,
+                      patientId: value === NO_PATIENT ? null : value,
+                    }))
+                  }
+                >
+                  <SelectTrigger id="patient-select" size="sm" className="h-8 w-full text-xs">
+                    <SelectValue placeholder="Select patient…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={NO_PATIENT}>Select patient…</SelectItem>
+                      {patients.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.full_name} ({p.date_of_birth})
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={startCreatePatient}>
+                New
+              </Button>
+              {selectedPatient && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => startEditPatient(selectedPatient)}
+                >
+                  Edit
+                </Button>
+              )}
+            </div>
+            {selectedPatient && (
+              <p className="text-[11px] text-muted-foreground">
+                Allergies: {selectedPatient.allergy_codes.join(", ") || "none"} · Conditions:{" "}
+                {selectedPatient.condition_codes.join(", ") || "none"} · Blood:{" "}
+                {selectedPatient.blood_group ?? "—"}
+              </p>
+            )}
+
+            {showPatientForm && (
+              <form className="flex flex-col gap-2 rounded-md border p-3" onSubmit={savePatient}>
+                <h3 className="text-sm font-medium">{editingId ? "Edit patient" : "New patient"}</h3>
+                <div>
+                  <Label htmlFor="p-name" className="mb-1.5 text-xs text-muted-foreground">
+                    Full name
+                  </Label>
+                  <Input
+                    id="p-name"
+                    type="text"
+                    required
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="p-dob" className="mb-1.5 text-xs text-muted-foreground">
+                    Date of birth
+                  </Label>
+                  <Input
+                    id="p-dob"
+                    type="date"
+                    required
+                    value={formDob}
+                    onChange={(e) => setFormDob(e.target.value)}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="p-blood" className="mb-1.5 text-xs text-muted-foreground">
+                    Blood group
+                  </Label>
+                  <Select value={formBlood} onValueChange={setFormBlood}>
+                    <SelectTrigger id="p-blood" size="sm" className="h-8 w-full text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {["unknown", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((g) => (
+                          <SelectItem key={g} value={g}>
+                            {g}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="p-all" className="mb-1.5 text-xs text-muted-foreground">
+                    Allergies (comma-separated)
+                  </Label>
+                  <Input
+                    id="p-all"
+                    type="text"
+                    value={formAllergies}
+                    onChange={(e) => setFormAllergies(e.target.value)}
+                    placeholder="penicillin, caffeine"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="p-cond" className="mb-1.5 text-xs text-muted-foreground">
+                    Conditions / avoid codes
+                  </Label>
+                  <Input
+                    id="p-cond"
+                    type="text"
+                    value={formConditions}
+                    onChange={(e) => setFormConditions(e.target.value)}
+                    placeholder="avoid_caffeine"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                {formError && <p className="text-xs text-destructive">{formError}</p>}
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" className="h-8 text-xs" disabled={formBusy}>
+                    {formBusy ? "Saving…" : "Save"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setShowPatientForm(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card size="sm">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle>Appointment cart</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            <Button
               type="button"
-              className="secondary"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
               onClick={clearCart}
               disabled={cart.items.length === 0 && !cart.patientId}
             >
               Cancel / clear
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              size="sm"
+              className="h-8 text-xs"
               onClick={acceptPrescription}
               disabled={!selectedPatient || cart.items.length === 0}
             >
-              Accept &amp; generate prescription
-            </button>
+              Accept & generate prescription
+            </Button>
           </div>
-        </div>
-        {!cart.patientId && cart.items.length > 0 && (
-          <p className="muted">Select a patient to run contraindication checks.</p>
-        )}
-        {checkBusy && <p className="muted">Checking cart…</p>}
-        {checkError && <p className="error">{checkError}</p>}
-        {cart.items.length === 0 ? (
-          <p className="muted">Cart is empty.</p>
-        ) : (
-          <ul className="cart-list">
-            {cart.items.map((item) => {
-              const line = resultsByRxcui.get(item.rxcui);
-              const warnings = line?.warnings ?? [];
-              const hasWarning = warnings.length > 0;
-              const open = openWarningFor === item.id;
-              return (
-                <li key={item.id} className={hasWarning ? "has-warning" : undefined}>
-                  <div className="cart-line">
-                    <div>
-                      <strong>{item.name}</strong>
-                      <div className="muted">RxCUI {item.rxcui}</div>
-                      {line && (
-                        <div className="muted small">
-                          verdict: {line.verdict}
-                          {line.score != null ? ` · score ${line.score}` : ""}
-                        </div>
-                      )}
-                    </div>
-                    <div className="cart-line-actions">
-                      {hasWarning && (
-                        <button
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {!cart.patientId && cart.items.length > 0 && (
+            <p className="text-xs text-muted-foreground">Select a patient to run contraindication checks.</p>
+          )}
+          {checkBusy && <p className="text-xs text-muted-foreground">Checking cart…</p>}
+          {checkError && <p className="text-xs text-destructive">{checkError}</p>}
+          {cart.items.length === 0 ? (
+            <div className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
+              Cart is empty.
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {cart.items.map((item) => {
+                const line = resultsByRxcui.get(item.rxcui);
+                const warnings = line?.warnings ?? [];
+                const hasWarning = warnings.length > 0;
+                const open = openWarningFor === item.id;
+                return (
+                  <li
+                    key={item.id}
+                    className={cn(
+                      "rounded-md border p-2.5",
+                      hasWarning && "border-amber-300 dark:border-amber-500/40",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{item.name}</p>
+                        <p className="font-mono text-[11px] text-muted-foreground">RxCUI {item.rxcui}</p>
+                        {line && (
+                          <p className="text-[11px] text-muted-foreground">
+                            verdict: {line.verdict}
+                            {line.score != null ? ` · score ${line.score}` : ""}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                        {hasWarning && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 border-amber-300 text-xs text-amber-700 dark:border-amber-500/40 dark:text-amber-400"
+                            onClick={() => (open ? setOpenWarningFor(null) : void findAnalogues(item))}
+                          >
+                            <TriangleAlert data-icon="inline-start" />
+                            Warning ({warnings.length})
+                          </Button>
+                        )}
+                        <Button
                           type="button"
-                          className="warn-btn"
-                          onClick={() =>
-                            open ? setOpenWarningFor(null) : void findAnalogues(item)
-                          }
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => removeFromCart(item.id)}
                         >
-                          Warning ({warnings.length})
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => removeFromCart(item.id)}
-                      >
-                        Remove
-                      </button>
+                          Remove
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                  {open && (
-                    <div className="warning-panel">
-                      <h3>Why this warning</h3>
-                      <ul>
-                        {warnings.map((w, idx) => (
-                          <li key={`${w.code}-${idx}`}>
-                            <strong>{w.code}</strong>: {w.message}
-                            <span className="muted"> ({w.source})</span>
-                          </li>
-                        ))}
-                      </ul>
-                      {(line?.exclude_ingredient || line?.exclude_ingredient_name) && (
-                        <p>
-                          Suggested filter: exclude{" "}
-                          <code>
-                            {line.exclude_ingredient_name || line.exclude_ingredient}
-                          </code>
-                        </p>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void findAnalogues(item)}
-                        disabled={analogueBusy}
-                      >
-                        {analogueBusy
-                          ? "Finding analogues…"
-                          : "Find analogues without this ingredient"}
-                      </button>
-                      {analogueError && <p className="error">{analogueError}</p>}
-                      {analogueUsedAi && !analogueRationaleUnavailable && (
-                        <p className="muted small">Gemini filtered this analogue list.</p>
-                      )}
-                      {analogueRationaleUnavailable && (
-                        <p className="muted small">
-                          AI rationale unavailable — showing unfiltered Full list
-                          (still excluding the avoided ingredient).
-                        </p>
-                      )}
-                      <ul className="result-list analogue-inline">
-                        {analogues.map((a) => (
-                          <li key={a.rxcui}>
-                            <div className="hit-row">
-                              <div>
-                                <strong>{a.name}</strong>
-                                <div className="muted">RxCUI {a.rxcui}</div>
-                                {a.reason && (
-                                  <div className="small">{a.reason}</div>
-                                )}
+                    {open && (
+                      <div className="mt-3 flex flex-col gap-2 border-t pt-3">
+                        <h3 className="text-sm font-medium">Why this warning</h3>
+                        <ul className="flex flex-col gap-1.5 text-xs">
+                          {warnings.map((w, idx) => (
+                            <li key={`${w.code}-${idx}`}>
+                              <span className="font-medium">{w.code}</span>: {w.message}{" "}
+                              <span className="text-muted-foreground">({w.source})</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {(line?.exclude_ingredient || line?.exclude_ingredient_name) && (
+                          <p className="text-xs">
+                            Suggested filter: exclude{" "}
+                            <span className="font-mono">
+                              {line.exclude_ingredient_name || line.exclude_ingredient}
+                            </span>
+                          </p>
+                        )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 w-fit text-xs"
+                          onClick={() => void findAnalogues(item)}
+                          disabled={analogueBusy}
+                        >
+                          {analogueBusy
+                            ? "Finding analogues…"
+                            : "Find analogues without this ingredient"}
+                        </Button>
+                        {analogueError && <p className="text-xs text-destructive">{analogueError}</p>}
+                        {analogueUsedAi && !analogueRationaleUnavailable && (
+                          <p className="text-[11px] text-muted-foreground">Gemini filtered this analogue list.</p>
+                        )}
+                        {analogueRationaleUnavailable && (
+                          <p className="text-[11px] text-muted-foreground">
+                            AI rationale unavailable — showing unfiltered Full list (still excluding the
+                            avoided ingredient).
+                          </p>
+                        )}
+                        <ul className="flex flex-col gap-2">
+                          {analogues.map((a) => (
+                            <li key={a.rxcui} className="flex items-start justify-between gap-3 rounded-md border p-2.5">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium">{a.name}</p>
+                                <p className="font-mono text-[11px] text-muted-foreground">RxCUI {a.rxcui}</p>
+                                {a.reason && <p className="text-xs">{a.reason}</p>}
                                 {a.citation && (
-                                  <div className="muted small">
-                                    cite: {a.citation}
-                                  </div>
+                                  <p className="text-[11px] text-muted-foreground">cite: {a.citation}</p>
                                 )}
                               </div>
-                              <button
+                              <Button
                                 type="button"
+                                size="sm"
+                                className="h-7 shrink-0 text-xs"
                                 onClick={() => replaceWithAnalogue(item.id, a)}
                               >
                                 Replace with analogue
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                      {!analogueBusy && analogues.length === 0 && !analogueError && (
-                        <p className="muted">No analogues returned yet.</p>
-                      )}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      {prescription && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <h2>Prescription generated</h2>
-            <p className="muted small">{new Date(prescription.at).toLocaleString()}</p>
-            <p>
-              <strong>{prescription.patient.full_name}</strong> · DOB{" "}
-              {prescription.patient.date_of_birth} · Blood{" "}
-              {prescription.patient.blood_group ?? "—"}
-            </p>
-            <ol>
-              {prescription.items.map((item) => {
-                const line = prescription.results.find((r) => r.rxcui === item.rxcui);
-                return (
-                  <li key={item.id}>
-                    {item.name} (RxCUI {item.rxcui})
-                    {line?.warnings?.length
-                      ? ` — ${line.warnings.length} warning(s) noted`
-                      : ""}
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                        {!analogueBusy && analogues.length === 0 && !analogueError && (
+                          <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
+                        )}
+                      </div>
+                    )}
                   </li>
                 );
               })}
-            </ol>
-            <p className="muted">
-              Demo only — not persisted. Cart is clear for the next patient.
-            </p>
-            <button type="button" onClick={() => setPrescription(null)}>
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={prescription !== null} onOpenChange={(open) => !open && setPrescription(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Prescription generated</DialogTitle>
+            <DialogDescription>
+              {prescription ? new Date(prescription.at).toLocaleString() : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {prescription && (
+            <div className="flex flex-col gap-2 text-sm">
+              <p>
+                <span className="font-medium">{prescription.patient.full_name}</span> · DOB{" "}
+                {prescription.patient.date_of_birth} · Blood {prescription.patient.blood_group ?? "—"}
+              </p>
+              <ol className="list-decimal space-y-1 pl-4 text-xs">
+                {prescription.items.map((item) => {
+                  const line = prescription.results.find((r) => r.rxcui === item.rxcui);
+                  return (
+                    <li key={item.id}>
+                      {item.name} (RxCUI {item.rxcui})
+                      {line?.warnings?.length ? ` — ${line.warnings.length} warning(s) noted` : ""}
+                    </li>
+                  );
+                })}
+              </ol>
+              <p className="text-[11px] text-muted-foreground">
+                Demo only — not persisted. Cart is clear for the next patient.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" size="sm" onClick={() => setPrescription(null)}>
               Done
-            </button>
-          </div>
-        </div>
-      )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

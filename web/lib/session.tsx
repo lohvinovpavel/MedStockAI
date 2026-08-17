@@ -62,7 +62,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (user !== null) return;
     if (PUBLIC_PATHS.includes(pathname)) return; // guards /auth against redirecting to itself
-    router.replace(`/auth?next=${encodeURIComponent(pathname)}`);
+    const qs = typeof window !== "undefined" ? window.location.search : "";
+    router.replace(`/auth?next=${encodeURIComponent(`${pathname}${qs}`)}`);
   }, [user, pathname, router]);
 
   async function login(email: string, password: string) {

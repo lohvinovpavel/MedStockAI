@@ -2,6 +2,8 @@
 
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Repeat2, Stethoscope } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DrugSearch } from "@/components/DrugSearch";
 import { PrescriptionCart } from "@/components/PrescriptionCart";
 import { ServiceHealth } from "@/components/ServiceHealth";
@@ -34,47 +36,48 @@ export function AnalogueWorkspace() {
   );
 
   return (
-    <div className="analogue-workspace">
-      <div className="tab-bar" role="tablist" aria-label="Analogue workspace">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "analogues"}
-          className={tab === "analogues" ? "tab active" : "tab"}
-          onClick={() => setTab("analogues")}
-        >
-          Пошук аналогів
-        </button>
-        {canPrescribe && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "pryznachennia"}
-            className={tab === "pryznachennia" ? "tab active" : "tab"}
-            onClick={() => setTab("pryznachennia")}
-          >
-            Призначення
-          </button>
-        )}
+    <div className="flex flex-col gap-4 p-4">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">
+          {tab === "pryznachennia" ? "Призначення" : "Analogues"}
+        </h1>
+        <p className="text-xs text-muted-foreground">
+          {tab === "pryznachennia"
+            ? "Search drugs, check a patient profile, and generate a prescription summary. Cart lives in this browser tab only."
+            : "Search by name, confirm a preparation to see shelf status, then find analogues ranked in-stock first. No patient profile is involved."}
+        </p>
       </div>
 
-      {tab === "analogues" ? (
-        <div role="tabpanel">
-          <h1>Пошук аналогів</h1>
-          <p>
-            Search by name, confirm a preparation to see its shelf status, then
-            find analogues ranked in-stock first with High / Normal / Low / Out
-            of stock. No patient profile is involved.
-          </p>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          if (value === "analogues" || (value === "pryznachennia" && canPrescribe)) {
+            setTab(value);
+          }
+        }}
+      >
+        <TabsList variant="line">
+          <TabsTrigger value="analogues">
+            <Repeat2 /> Пошук аналогів
+          </TabsTrigger>
+          {canPrescribe && (
+            <TabsTrigger value="pryznachennia">
+              <Stethoscope /> Призначення
+            </TabsTrigger>
+          )}
+        </TabsList>
+
+        <TabsContent value="analogues" className="flex flex-col gap-3">
           <ServiceHealth service="analogue" />
           <DrugSearch />
-        </div>
-      ) : (
-        <div role="tabpanel">
-          <h1>Призначення</h1>
-          <PrescriptionCart />
-        </div>
-      )}
+        </TabsContent>
+
+        {canPrescribe && (
+          <TabsContent value="pryznachennia">
+            <PrescriptionCart />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }

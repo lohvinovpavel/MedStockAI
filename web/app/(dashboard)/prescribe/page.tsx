@@ -10,8 +10,6 @@ export default function PrescribeRedirectPage() {
     router.replace("/analogue?tab=pryznachennia");
   }, [router]);
   return (
-    <main>
-      <p className="muted">Redirecting to Призначення…</p>
-    </main>
+    <div className="p-4 text-xs text-muted-foreground">Redirecting to Призначення…</div>
   );
 }
