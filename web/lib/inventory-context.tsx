@@ -70,6 +70,10 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       form: "Received batch",
       inn: "—",
       atcCode: "—",
+      // Deliberately empty. Someone typing a free-text drug name has given us
+      // nothing to certify, so the badge reads "unknown" rather than assuming
+      // the best — that gap is precisely what COMP-2 exploration is for.
+      ndc: "",
       batchNumber: batch.batchNumber,
       currentStock: batch.quantity,
       unit: "units",

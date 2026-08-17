@@ -86,6 +86,11 @@ export interface InventoryItem {
   form: string;
   inn: string;
   atcCode: string;
+  // Package NDC, 11-digit — the key COMP-1 certification is stored under.
+  // Real, and deliberately so: the shelf quantities and batch numbers around
+  // it are invented, but the badge has to read genuine FDA data about a
+  // genuine product or it proves nothing (docs/demo-data.md).
+  ndc: string;
   batchNumber: string;
   currentStock: number;
   unit: string;
@@ -122,6 +127,7 @@ export const inventory: InventoryItem[] = [
     form: "Film-coated tablet",
     inn: "Amoxicillin, Clavulanic acid",
     atcCode: "J01CR02",
+    ndc: "62135009120", // Chartwell RX — actively marketed, no open recall
     batchNumber: "AMX-24118-B",
     currentStock: 900,
     unit: "boxes",
@@ -144,6 +150,7 @@ export const inventory: InventoryItem[] = [
     form: "IV emulsion, 20mL ampoule",
     inn: "Propofol",
     atcCode: "N01AX10",
+    ndc: "16714097720", // NorthStar Rx — actively marketed, no open recall
     batchNumber: "PPF-24902-C",
     currentStock: 250,
     unit: "ampoules",
@@ -165,6 +172,7 @@ export const inventory: InventoryItem[] = [
     form: "Powder for injection, vial",
     inn: "Ceftriaxone sodium",
     atcCode: "J01DD04",
+    ndc: "82804006601", // Proficient Rx — actively marketed, no open recall
     batchNumber: "CFX-25011-A",
     currentStock: 9,
     unit: "vials",
@@ -187,6 +195,7 @@ export const inventory: InventoryItem[] = [
     form: "Pressurized MDI",
     inn: "Salbutamol sulfate",
     atcCode: "R03AC02",
+    ndc: "00487990130", // Nephron — FDA shortage, status Current
     batchNumber: "SLB-24775-D",
     currentStock: 310,
     unit: "inhalers",
@@ -204,6 +213,7 @@ export const inventory: InventoryItem[] = [
     form: "IV concentrate, ampoule",
     inn: "Norepinephrine bitartrate",
     atcCode: "C01CA03",
+    ndc: "00338011220", // Baxter — Class II recall ongoing, wrong concentration
     batchNumber: "NEP-25033-A",
     currentStock: 6,
     unit: "ampoules",
@@ -225,6 +235,7 @@ export const inventory: InventoryItem[] = [
     form: "Film-coated tablet",
     inn: "Azithromycin",
     atcCode: "J01FA10",
+    ndc: "00069406101", // Pfizer — FDA shortage, status To Be Discontinued
     batchNumber: "AZT-24610-B",
     currentStock: 520,
     unit: "boxes",
@@ -242,6 +253,7 @@ export const inventory: InventoryItem[] = [
     form: "Prefilled pen, 3mL",
     inn: "Insulin glargine",
     atcCode: "A10AE04",
+    ndc: "00024586900", // Sanofi-Aventis — actively marketed, no open recall
     batchNumber: "IGL-25102-A",
     currentStock: 26,
     unit: "pens",
@@ -263,6 +275,7 @@ export const inventory: InventoryItem[] = [
     form: "Injection, 3mL ampoule",
     inn: "Midazolam",
     atcCode: "N05CD08",
+    ndc: "63323041125", // Fresenius Kabi — FDA shortage, status Current
     batchNumber: "MDZ-24988-C",
     currentStock: 90,
     unit: "ampoules",
@@ -280,6 +293,7 @@ export const inventory: InventoryItem[] = [
     form: "Infusion bag, 100mL",
     inn: "Paracetamol",
     atcCode: "N02BE01",
+    ndc: "00143938610", // Hikma — CLASS I recall ongoing, label mix-up
     batchNumber: "PCM-25064-B",
     currentStock: 410,
     unit: "bags",
@@ -297,6 +311,7 @@ export const inventory: InventoryItem[] = [
     form: "Injection, 5mL vial",
     inn: "Heparin sodium",
     atcCode: "B01AB01",
+    ndc: "00338043304", // Baxter — CLASS I recall (microbial) + current shortage
     batchNumber: "HEP-24855-A",
     currentStock: 5,
     unit: "vials",
