@@ -16,7 +16,14 @@ import { useCopilot, type CopilotFocus, type EmergencyPlanRequest } from "@/lib/
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { forecastFor, inventoryFor, isoPlusDays, parLevel, suppliers, type CertStatus } from "@/lib/mock-data";
+import { forecastFor, inventoryFor, isoPlusDays, parLevel, suppliers } from "@/lib/mock-data";
+import { apiFetch } from "@/lib/api";
+import {
+  CERT_LABELS,
+  CERT_TONE,
+  type CertResult,
+  type CertStatus,
+} from "@/components/CertificationBadge";
 import { cn } from "@/lib/utils";
 
 type ResponseCard =
@@ -34,7 +41,14 @@ type ResponseCard =
       confidence: number;
     }
   | { kind: "analogues"; items: { name: string; matchScore: number; stockHere: number }[] }
-  | { kind: "certificate"; status: CertStatus; authority: string; number: string }
+  | {
+      kind: "certificate";
+      ndc: string;
+      status: CertStatus;
+      reasons: number;
+      transient: number;
+      persistent: number;
+    }
   | { kind: "emergency"; drugName: string; surgePct: number; depletionDays: number | null; airFreightDays: number; costPremiumPct: number };
 
 type Message = {
@@ -55,11 +69,44 @@ const QUICK_ACTIONS = [
   { key: "certificate", label: "Check Certificate", icon: ShieldCheck },
 ] as const;
 
+/**
+ * One NDC's traffic light, from the same `GET /status` the shelf uses.
+ *
+ * An unreachable service resolves to `unavailable`, never to `green`. Telling a
+ * pharmacist a drug is certified because the check failed is the one answer
+ * this feature exists to prevent, and a chat card asserts it more plainly than
+ * a badge does.
+ */
+async function certificateStatus(ndc: string): Promise<CertResult> {
+  const unavailable: CertResult = { status: "unavailable", reasons: 0, transient: 0, persistent: 0 };
+  if (!ndc) return unavailable;
+  try {
+    const body = await apiFetch("compliance", `/status?ndc=${encodeURIComponent(ndc)}`);
+    const row = (body?.results ?? [])[0] as CertResult | undefined;
+    return row ?? unavailable;
+  } catch {
+    return unavailable;
+  }
+}
+
+function certificateText(drugName: string, status: CertStatus): string {
+  if (status === "unavailable") {
+    return `I could not reach the compliance service, so ${drugName} has not been checked. This is not a clean result — treat it as unknown.`;
+  }
+  if (status === "unknown") {
+    return `No FDA certification record is held for ${drugName}. That is not the same as clean: nothing has been checked against it.`;
+  }
+  if (status === "green") {
+    return `${drugName} is actively marketed with no open recall.`;
+  }
+  return `${drugName} has open findings against it — details below.`;
+}
+
 // Reads the same mock-data every other page reads, keyed off whatever SKU
 // is actually focused — the quick actions used to return fixed literals
 // (a hardcoded PO regardless of drug, analogues from facilities that no
 // longer exist) with no connection to what was on screen.
-function replyFor(action: string, focus: CopilotFocus, facilityId: string): Message {
+async function replyFor(action: string, focus: CopilotFocus, facilityId: string): Promise<Message> {
   if (focus?.kind !== "sku") {
     return {
       id: id(),
@@ -128,11 +175,26 @@ function replyFor(action: string, focus: CopilotFocus, facilityId: string): Mess
     };
   }
   if (action === "certificate") {
+    // Real compliance data, same source as the shelf badge. Fetched here rather
+    // than in the card view so the message keeps working the way every other
+    // card does: it carries its data, which is what makes copy-to-clipboard
+    // able to quote a status it can actually see.
+    //
+    // A chat message is a snapshot by nature -- it records what was true when
+    // asked, and is not expected to repaint later.
+    const result = await certificateStatus(item.ndc);
     return {
       id: id(),
       role: "assistant",
-      text: `Certificate status for ${item.drugName}, verified against the manufacturer registry.`,
-      card: { kind: "certificate", status: item.certStatus, authority: item.certAuthority, number: item.certNumber },
+      text: certificateText(item.drugName, result.status),
+      card: {
+        kind: "certificate",
+        ndc: item.ndc,
+        status: result.status,
+        reasons: result.reasons ?? 0,
+        transient: result.transient ?? 0,
+        persistent: result.persistent ?? 0,
+      },
     };
   }
   return {
@@ -190,7 +252,17 @@ function formatCardForCopy(card: ResponseCard): string {
     return ["Bio-Equivalent Analogues", ...card.items.map((it) => `${it.name} — ${it.matchScore}% match — ${it.stockHere > 0 ? `${it.stockHere} in stock` : "not stocked here"}`)].join("\n");
   }
   if (card.kind === "certificate") {
-    return `Certificate Status\nStatus: ${card.status}\nAuthority: ${card.authority}\nNumber: ${card.number}`;
+    const lines = [
+      "Certificate Status",
+      `NDC: ${card.ndc}`,
+      `Status: ${CERT_LABELS[card.status]}`,
+    ];
+    if (card.reasons > 0) {
+      // Standing vs transient is the part worth pasting into a ticket: a recall
+      // clears, a dead listing does not.
+      lines.push(`Findings: ${card.reasons} (${card.persistent} standing, ${card.transient} transient)`);
+    }
+    return lines.join("\n");
   }
   return `Emergency Supply Plan\nScenario: ${card.surgePct}% of baseline demand\nStock depletes in: ${card.depletionDays != null ? `${card.depletionDays}d` : "30d+"}\nFreight: Air (expedited), ${card.airFreightDays} days\nCost premium: +${card.costPremiumPct}%`;
 }
@@ -256,9 +328,19 @@ function ResponseCardView({
           <CardTitle className="text-xs font-medium text-muted-foreground">Certificate Status</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-1 px-3 text-sm">
-          <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={card.status === "valid" ? "default" : "secondary"} className="capitalize">{card.status}</Badge></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Authority</span><span>{card.authority}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Number</span><span className="font-mono text-xs">{card.number}</span></div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Status</span>
+            <StatusBadge tone={CERT_TONE[card.status]} className="normal-case">
+              {CERT_LABELS[card.status]}
+            </StatusBadge>
+          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">NDC</span><span className="font-mono text-xs">{card.ndc}</span></div>
+          {card.reasons > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Findings</span>
+              <span>{card.persistent} standing · {card.transient} transient</span>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -341,8 +423,9 @@ export function CopilotDrawer() {
       setMessages((m) => [...m, { id: id(), role: "user", text: QUICK_ACTIONS.find((a) => a.key === action)?.label ?? action }]);
     }
     setPending(true);
-    window.setTimeout(() => {
-      setMessages((m) => [...m, replyFor(action, focus, facilityId)]);
+    window.setTimeout(async () => {
+      const reply = await replyFor(action, focus, facilityId);
+      setMessages((m) => [...m, reply]);
       setPending(false);
     }, 300);
   }

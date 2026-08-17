@@ -33,13 +33,21 @@ export type CertResult = {
   codes?: string[];
 };
 
-const LABELS: Record<CertStatus, string> = {
+/**
+ * Exported because the copilot drawer renders the same statuses in its
+ * certificate card. One vocabulary, one place: a second copy would let the
+ * drawer call an NDC "Certified" on the same screen where the shelf calls it
+ * "Unknown", and nothing would flag the contradiction.
+ */
+export const CERT_LABELS: Record<CertStatus, string> = {
   green: "Certified",
   yellow: "Attention",
   red: "Not certified",
   unknown: "Unknown",
   unavailable: "Unavailable",
 };
+
+const LABELS = CERT_LABELS;
 
 const TITLES: Record<CertStatus, string> = {
   green: "Actively marketed, no open recall",
@@ -49,13 +57,15 @@ const TITLES: Record<CertStatus, string> = {
   unavailable: "Compliance service unreachable — status not checked",
 };
 
-const TONE: Record<CertStatus, StatusTone> = {
+export const CERT_TONE: Record<CertStatus, StatusTone> = {
   green: "normal",
   yellow: "warning",
   red: "critical",
   unknown: "neutral",
   unavailable: "neutral",
 };
+
+const TONE = CERT_TONE;
 
 // compliance caps a batch at 100; one page of stock is well inside that.
 const MAX_BATCH = 100;
