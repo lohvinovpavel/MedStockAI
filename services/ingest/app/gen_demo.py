@@ -9,9 +9,12 @@ RxCUIs/NDCs) and writes three gzipped CSVs next to it:
   stock.csv.gz        current on-hand per facility/location/NDC
   conditions.csv.gz   90 days × hourly temp/humidity per storage location
 
-Same seed → byte-identical output (gzip mtime pinned to 0); a test regenerates
-and diffs against the committed artifacts, so generator code and data can't
-drift apart. Never derive anything from wall-clock time here.
+Same seed → identical CSV content (gzip mtime pinned to 0 so even the .gz
+bytes are stable for one zlib build; different zlib builds deflate to
+different bytes, which is why the determinism test compares decompressed
+content). A test regenerates and diffs against the committed artifacts, so
+generator code and data can't drift apart. Never derive anything from
+wall-clock time here.
 
 Planted signals — the contract with prediction (issue #7):
   * weekly profile: weekend dip (Sat 0.55×, Sun 0.50×)

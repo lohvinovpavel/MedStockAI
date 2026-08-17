@@ -12,6 +12,7 @@ Three layers, all against the committed artifacts in data/demo:
 
 import csv
 import gzip
+import hashlib
 import shutil
 import statistics
 from collections import defaultdict
@@ -47,12 +48,18 @@ def test_seed_is_pinned():
 
 
 def test_regeneration_reproduces_committed_artifacts(tmp_path, monkeypatch):
+    """Compares the *decompressed* content, not the .gz bytes: identical CSV
+    content deflates to different bytes under different zlib builds (CI's
+    system 3.12 vs a uv-managed 3.14). Digests keep the assert operands tiny —
+    handing pytest two 1.6 MB bytestrings to diff is what once hung CI."""
     committed = data_dir()
     shutil.copy(committed / "drugs.csv", tmp_path / "drugs.csv")
     monkeypatch.setenv("DEMO_DATA_DIR", str(tmp_path))
     gen_demo.run()
     for name in ARTIFACTS:
-        assert (tmp_path / name).read_bytes() == (committed / name).read_bytes(), (
+        regenerated = hashlib.sha256(gzip.decompress((tmp_path / name).read_bytes())).hexdigest()
+        stored = hashlib.sha256(gzip.decompress((committed / name).read_bytes())).hexdigest()
+        assert regenerated == stored, (
             f"{name} drifted from the generator — rerun `python -m app.gen_demo` and commit"
         )
 
