@@ -19,7 +19,7 @@ change when they do.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
@@ -542,10 +542,60 @@ class DemandLine:
     units_needed: int = 0
     on_hand: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
+    # PP-4. at_risk counts only patients *on* the drug whose own profile flags
+    # it — a subset of on_therapy, unlike `flagged` which spans the whole
+    # cohort including people who will never take it. Conflating the two
+    # inflates the projection with patients who are not there to leave.
+    at_risk: int = 0
+    switch_in: int = 0  # expected arrivals from a drug they are at risk on
 
     @property
     def shortfall(self) -> int:
         return max(0, self.units_needed - self.on_hand)
+
+    def cohort_fit(self, cohort_size: int) -> float:
+        """Share of the whole cohort who could ever take this.
+
+        A drug most of the cohort cannot take is a bad stocking bet even when
+        current usage looks healthy (docs/prognosis-and-procurement.md §2.3).
+        """
+        if cohort_size <= 0:
+            return 0.0
+        return round(self.eligible / cohort_size, 4)
+
+    def projected(self, switch_rate: float) -> int:
+        """projected = on_therapy − (at_risk × switch_rate) + switch_in
+
+        Rounded to whole patients, and never below zero: switch_rate is an
+        assumption, and an assumption must not be able to produce a negative
+        headcount and have it read as a real number downstream.
+        """
+        moved = self.at_risk * switch_rate
+        return max(0, round(self.on_therapy - moved + self.switch_in))
+
+
+def assess_current_therapy(
+    patient: PatientVector,
+    rxcui: str,
+    risk_profiles: Sequence[RiskProfile] = (),
+) -> Assessment:
+    """Risk of a drug the patient is **already taking**.
+
+    `assess` answers a different question: *should we start this patient on this
+    drug*. Asked about current therapy it blocks every time on
+    DUPLICATE_INGREDIENT -- the patient is, correctly, already on it. Used as a
+    risk signal that reads as "100% of patients are at risk", which is not a
+    finding, it is the question being asked wrong.
+
+    So the drug is removed from the active list and the patient re-assessed as
+    if considering it fresh. Everything that makes current therapy risky still
+    fires -- renal floor, age, prior ADR, PP-3 label profiles, interactions with
+    the *rest* of the regimen -- while the tautology does not. Interactions are
+    unaffected by the removal because a drug cannot interact with itself.
+    """
+    others = tuple(r for r in patient.active_rxcuis if str(r) != str(rxcui))
+    as_if_new = replace(patient, active_rxcuis=others)
+    return assess(as_if_new, rxcui, risk_profiles=risk_profiles)
 
 
 def best_substitute(
@@ -553,6 +603,7 @@ def best_substitute(
     withdrawn: str,
     candidates: Sequence[str],
     unavailable: set[str],
+    risk_profiles: Sequence[RiskProfile] = (),
 ) -> tuple[str | None, str]:
     """The safest in-class replacement for one patient, or a reason there is none.
 
@@ -571,7 +622,7 @@ def best_substitute(
             continue
         if _class_of(rxcui) != target_class:
             continue
-        result = assess(patient, rxcui)
+        result = assess(patient, rxcui, risk_profiles=risk_profiles)
         if result.verdict is Verdict.BLOCKED:
             continue
         score = result.score or 0
@@ -588,6 +639,7 @@ def plan_demand(
     on_hand: dict[str, int] | None = None,
     unavailable: Sequence[str] = (),
     units_per_patient: int = 30,
+    risk_profiles: Sequence[RiskProfile] = (),
 ) -> tuple[dict[str, DemandLine], dict[str, int]]:
     """Aggregate a cohort into a purchasing plan.
 
@@ -614,7 +666,7 @@ def plan_demand(
         # Safety statistics across every candidate — useful to a pharmacist even
         # where it does not drive a purchase.
         for rxcui in known:
-            result = assess(patient, rxcui)
+            result = assess(patient, rxcui, risk_profiles=risk_profiles)
             line = lines[rxcui]
             if result.verdict is Verdict.BLOCKED:
                 line.blocked += 1
@@ -634,8 +686,27 @@ def plan_demand(
             if rxcui not in unavailable_set:
                 lines[rxcui].on_therapy += 1
                 lines[rxcui].units_needed += units_per_patient
+                # PP-4: is this patient, on this drug, flagged by their own
+                # profile? Assessed as current therapy rather than as a new
+                # prescription -- see assess_current_therapy for why the plain
+                # call would count every patient as at risk.
+                on_therapy_result = assess_current_therapy(
+                    patient, rxcui, risk_profiles=risk_profiles
+                )
+                if on_therapy_result.verdict is not Verdict.GREEN:
+                    lines[rxcui].at_risk += 1
+                    # Where they would go if switched. Counted as pressure on
+                    # the alternative now, so a re-order decision is visible
+                    # this quarter rather than a surprise next.
+                    destination, _ = best_substitute(
+                        patient, rxcui, known, unavailable_set, risk_profiles=risk_profiles
+                    )
+                    if destination is not None:
+                        lines[destination].switch_in += 1
                 continue
-            alternative, reason = best_substitute(patient, rxcui, known, unavailable_set)
+            alternative, reason = best_substitute(
+                patient, rxcui, known, unavailable_set, risk_profiles=risk_profiles
+            )
             if alternative is None:
                 unserved[reason] = unserved.get(reason, 0) + 1
                 continue

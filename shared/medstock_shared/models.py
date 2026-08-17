@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -316,6 +317,32 @@ class DrugRiskProfile(Base):
 
     __table_args__ = (
         UniqueConstraint("rxcui", "reaction", name="uq_drug_risk_profile_natural"),
+    )
+
+
+class PrognosisAssumption(Base):
+    """PP-4: a number the forecast assumes rather than measures.
+
+    Reference class, no `hospital_id` — these are model parameters, not tenant
+    data.
+
+    `switch_rate` lives here rather than in code for one reason: it is the share
+    of flagged patients a pharmacist actually switches, and nobody has measured
+    it. A literal in a function reads like a derived constant. A row with a
+    `note` reads like what it is — an assumption someone chose, which a director
+    can see, question and change without a deploy
+    (docs/prognosis-and-procurement.md §2.2).
+    """
+
+    __tablename__ = "prognosis_assumption"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    # Why this number and not another. Shown wherever the forecast is.
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
 

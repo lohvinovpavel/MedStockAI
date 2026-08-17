@@ -16,7 +16,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import DrugRiskProfile, Patient
+from medstock_shared.models import DrugRiskProfile, Patient, PrognosisAssumption
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
@@ -286,6 +286,120 @@ def post_demand(
         # purchasing problem or a clinical one.
         "unservable": unserved,
         "unservable_total": sum(unserved.values()),
+    }
+
+
+DEFAULT_SWITCH_RATE = 0.6
+
+
+def assumption(name: str, fallback: float) -> tuple[float, str]:
+    """One PP-4 assumption and the note explaining it.
+
+    Falls back rather than failing if the table is missing, for the same reason
+    approved_profiles does: the migration not having run is a deployment state,
+    not a reason a director cannot see a forecast. The fallback matches the
+    value the migration seeds, so a degraded read gives the same number rather
+    than a quietly different one.
+    """
+    try:
+        with Session(engine) as session:
+            row = session.execute(
+                select(PrognosisAssumption).where(PrognosisAssumption.name == name)
+            ).scalar_one_or_none()
+    except (ProgrammingError, SQLAlchemyError):
+        return fallback, "assumption table unavailable — using the built-in default"
+    if row is None:
+        return fallback, "no row for this assumption — using the built-in default"
+    return float(row.value), str(row.note or "")
+
+
+@patients.post("/forecast")
+def forecast(
+    payload: dict = Body(...),
+    _: Principal = Depends(require("inventory:read")),
+) -> dict:
+    """Cohort -> purchasing plan, plus where the therapy is heading (PP-4).
+
+    Body: the `/plan` body, plus optional `switch_rate` and `horizon_days`.
+
+    `/plan` answers *what are they on, and what is safe*. This adds *and where
+    is that going*: two hospitals with the same headcount and the same current
+    prescriptions still need different stock, because their patients differ
+    (docs/prognosis-and-procurement.md §2.1).
+
+    Every projected number here rests on `switch_rate`, which is assumed rather
+    than measured, so the response echoes it back under `assumptions`. A
+    forecast that does not say which of its inputs were chosen rather than
+    observed is the one dishonest thing this design could do.
+    """
+    raw_cohort = payload.get("cohort") or []
+    if len(raw_cohort) > MAX_COHORT:
+        raise HTTPException(status_code=400, detail=f"cohort of at most {MAX_COHORT}")
+    cohort = [PatientVector.from_json(p) for p in raw_cohort]
+    candidates = [str(c) for c in (payload.get("candidates") or []) if c]
+    if not cohort or not candidates:
+        raise HTTPException(status_code=422, detail="cohort and candidates must not be empty")
+
+    seeded_rate, note = assumption("switch_rate", DEFAULT_SWITCH_RATE)
+    override = payload.get("switch_rate")
+    if override is None:
+        switch_rate, rate_source = seeded_rate, "prognosis_assumption"
+    else:
+        try:
+            switch_rate = float(override)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="switch_rate must be a number") from None
+        if not 0.0 <= switch_rate <= 1.0:
+            raise HTTPException(status_code=422, detail="switch_rate must be between 0 and 1")
+        rate_source, note = "request", "supplied per-request, overriding the stored assumption"
+
+    profiles = approved_profiles(candidates)
+    unavailable = [str(u) for u in (payload.get("unavailable") or [])]
+    lines, unserved = plan_demand(
+        cohort,
+        candidates,
+        on_hand={str(k): int(v) for k, v in (payload.get("on_hand") or {}).items()},
+        unavailable=unavailable,
+        units_per_patient=int(payload.get("units_per_patient") or 30),
+        risk_profiles=profiles,
+    )
+
+    cohort_size = len(cohort)
+    return {
+        "ruleset_version": RULESET_VERSION,
+        "cohort_size": cohort_size,
+        "horizon_days": int(payload.get("horizon_days") or 90),
+        "unavailable": unavailable,
+        "lines": [
+            {
+                "rxcui": line.rxcui,
+                "on_therapy": line.on_therapy,
+                "substitutes_for": line.substitutes_for,
+                "eligible": line.eligible,
+                "blocked": line.blocked,
+                "flagged": line.flagged,
+                "at_risk": line.at_risk,
+                "switch_in": line.switch_in,
+                "cohort_fit": line.cohort_fit(cohort_size),
+                "projected_patients": line.projected(switch_rate),
+                "projected_units": line.projected(switch_rate)
+                * int(payload.get("units_per_patient") or 30),
+                "units_needed": line.units_needed,
+                "on_hand": line.on_hand,
+                "shortfall": line.shortfall,
+                "block_reasons": line.reasons,
+            }
+            for line in sorted(lines.values(), key=lambda x: -x.units_needed)
+        ],
+        "total_shortfall": sum(line.shortfall for line in lines.values()),
+        "unservable": unserved,
+        "unservable_total": sum(unserved.values()),
+        "risk_profiles_applied": len(profiles),
+        # Everything below was chosen, not derived. Named so a reader can tell
+        # which parts of the forecast are observation and which are assumption.
+        "assumptions": {
+            "switch_rate": {"value": switch_rate, "source": rate_source, "note": note},
+        },
     }
 
 

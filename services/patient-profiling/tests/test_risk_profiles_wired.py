@@ -23,10 +23,17 @@ import ast
 from pathlib import Path
 
 _MAIN = Path(__file__).resolve().parents[1] / "app" / "main.py"
+# The cohort path too. plan_demand and best_substitute both called assess()
+# without profiles, which made PP-4's at_risk blind to PP-3 -- the two are
+# supposed to come from the same approved table precisely so they cannot
+# disagree (docs/prognosis-and-procurement.md §3).
+_SHARED = Path(__file__).resolve().parents[3] / "shared" / "medstock_shared" / "patient.py"
+
+_SOURCES = (_MAIN, _SHARED)
 
 
-def _assess_calls() -> list[ast.Call]:
-    tree = ast.parse(_MAIN.read_text(encoding="utf-8"))
+def _assess_calls(path: Path) -> list[ast.Call]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     return [
         node
         for node in ast.walk(tree)
@@ -36,25 +43,28 @@ def _assess_calls() -> list[ast.Call]:
     ]
 
 
-def test_the_source_is_where_we_think_it_is():
-    assert _MAIN.is_file(), f"missing {_MAIN}"
+def test_the_sources_are_where_we_think_they_are():
+    for path in _SOURCES:
+        assert path.is_file(), f"missing {path}"
 
 
 def test_there_is_something_to_check():
     # A rename or refactor that leaves zero call sites would make every
     # assertion below vacuously true.
-    assert _assess_calls(), "no assess() call sites found -- has it been renamed?"
+    for path in _SOURCES:
+        assert _assess_calls(path), f"no assess() call sites in {path.name} -- renamed?"
 
 
 def test_every_assess_call_passes_risk_profiles():
-    missing = [
-        call.lineno
-        for call in _assess_calls()
-        if not any(kw.arg == "risk_profiles" for kw in call.keywords)
-    ]
+    missing: list[str] = []
+    for path in _SOURCES:
+        missing += [
+            f"{path.name}:{call.lineno}"
+            for call in _assess_calls(path)
+            if not any(kw.arg == "risk_profiles" for kw in call.keywords)
+        ]
     assert not missing, (
-        f"assess() called without risk_profiles at {_MAIN.name} line(s) "
-        f"{', '.join(str(n) for n in missing)}. The call will succeed and the "
-        "response will look normal, but PP-3 prognosis findings will be missing "
-        "from it. Pass risk_profiles=approved_profiles([...])."
+        f"assess() called without risk_profiles at {', '.join(missing)}. The call "
+        "will succeed and the result will look normal, but PP-3 prognosis findings "
+        "will be missing from it -- silently, because risk_profiles defaults to ()."
     )
