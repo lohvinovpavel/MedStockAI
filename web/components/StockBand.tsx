@@ -1,3 +1,5 @@
+import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+
 export type StockStatus = "none" | "low" | "normal" | "high";
 
 const LABELS: Record<StockStatus, string> = {
@@ -5,6 +7,13 @@ const LABELS: Record<StockStatus, string> = {
   low: "Low",
   normal: "Normal",
   high: "High",
+};
+
+const TONE: Record<StockStatus, StatusTone> = {
+  none: "stockout",
+  low: "warning",
+  normal: "normal",
+  high: "surplus",
 };
 
 export function StockBand({
@@ -15,8 +24,8 @@ export function StockBand({
   quantity: number;
 }) {
   return (
-    <span className={`stock-band stock-band-${status}`}>
+    <StatusBadge tone={TONE[status]}>
       {LABELS[status]} · {quantity}
-    </span>
+    </StatusBadge>
   );
 }

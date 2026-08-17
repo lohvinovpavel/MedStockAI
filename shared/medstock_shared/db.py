@@ -12,7 +12,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 
-engine = create_engine(settings.database_url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+# connect_timeout: formulary overlay is best-effort. An unreachable DB must
+# fail in seconds (SQLAlchemyError → empty formulary), not hang until Next's
+# rewrite proxy returns 500 Internal Server Error.
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
+    pool_timeout=5,
+    connect_args={"connect_timeout": 5},
+)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 

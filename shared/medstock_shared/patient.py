@@ -20,7 +20,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import Any
 
 RULESET_VERSION = "2026.08.1"
 
@@ -162,6 +164,16 @@ ALLERGY_CLASS: dict[str, str] = {
     "nsaid": "nsaid",
     "aspirin": "nsaid",
     "ace_inhibitor": "ace_inhibitor",
+    # Ingredient-level demo codes (not drug-class allergies) — handled by
+    # avoided_ingredient_warnings(), not ALLERGY_MATCH class gates.
+    "caffeine": "ingredient:caffeine",
+}
+
+# Profile codes (allergy or condition) → RxNorm ingredient RxCUI to avoid.
+# Used by the physician cart-check path (warnings only).
+AVOID_INGREDIENT_CODES: dict[str, tuple[str, str]] = {
+    "caffeine": ("1886", "caffeine"),
+    "avoid_caffeine": ("1886", "caffeine"),
 }
 
 # (class_a, class_b) -> severity code
@@ -195,6 +207,87 @@ def _class_of(rxcui: str) -> str | None:
 
 def _band_index(band: str) -> int | None:
     return EGFR_ORDER.index(band) if band in EGFR_ORDER else None
+
+
+def age_band_from_dob(dob: date, today: date | None = None) -> str:
+    """Map calendar age to the PatientVector age_band vocabulary."""
+    today = today or datetime.now(tz=UTC).date()
+    years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    if years < 18:
+        return "18-39"  # pediatric bands not modeled; nearest adult band
+    if years < 40:
+        return "18-39"
+    if years < 65:
+        return "40-64"
+    if years < 75:
+        return "65-74"
+    if years < 90:
+        return "75-89"
+    return "90+"
+
+
+def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> PatientVector:
+    """Strip PHI from a Patient ORM row into the de-identified rules vector.
+
+    Demo exception: the DB row may hold name/DOB; the vector never does.
+    """
+    allergies = tuple(str(a) for a in (getattr(row, "allergy_codes", None) or ()))
+    conditions = tuple(str(c) for c in (getattr(row, "condition_codes", None) or ()))
+    dob = getattr(row, "date_of_birth", None)
+    return PatientVector(
+        age_band=age_band_from_dob(dob) if isinstance(dob, date) else "unknown",
+        allergy_codes=allergies,
+        condition_codes=conditions,
+        active_rxcuis=tuple(str(r) for r in active_rxcuis),
+        patient_ref=str(row.id) if getattr(row, "id", None) else None,
+    )
+
+
+def profile_avoided_ingredients(vector: PatientVector) -> list[tuple[str, str, str]]:
+    """Return (profile_code, ingredient_rxcui, ingredient_name) from allergies+conditions."""
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for code in (*vector.allergy_codes, *vector.condition_codes):
+        key = code.lower().strip()
+        mapped = AVOID_INGREDIENT_CODES.get(key)
+        if not mapped:
+            continue
+        ing_rxcui, ing_name = mapped
+        if ing_rxcui in seen:
+            continue
+        seen.add(ing_rxcui)
+        out.append((key, ing_rxcui, ing_name))
+    return out
+
+
+def avoided_ingredient_warnings(
+    vector: PatientVector,
+    rxcui: str,
+    ingredients: Sequence[dict[str, str]],
+) -> list[Finding]:
+    """Warnings when the drug's RxNorm ingredients intersect profile avoid-codes.
+
+    Severity is always LOW (warning only) — cart UI never hard-blocks on this.
+    """
+    findings: list[Finding] = []
+    ing_by_id = {str(i["rxcui"]): str(i.get("name") or i["rxcui"]) for i in ingredients}
+    for profile_code, ing_rxcui, ing_name in profile_avoided_ingredients(vector):
+        if ing_rxcui not in ing_by_id:
+            # Also match by name substring when RxCUI resolution used a synonym.
+            hay = " ".join(ing_by_id.values()).lower()
+            if ing_name.lower() not in hay:
+                continue
+        findings.append(
+            Finding(
+                "AVOIDED_INGREDIENT",
+                Severity.LOW,
+                0,
+                f"Patient profile flags '{profile_code}' — this drug contains {ing_name}",
+                "profile + RxNorm ingredient",
+                4,
+            )
+        )
+    return findings
 
 
 def assess(vector: PatientVector, rxcui: str, today=None) -> Assessment:

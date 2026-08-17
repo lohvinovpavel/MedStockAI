@@ -86,11 +86,24 @@ def _concept(rxcui: str, name: str, tty: str, score: float) -> dict:
     }
 
 
-def _from_groups(groups: list, score: float) -> list[dict]:
+def _as_list(value) -> list:
+    """RxNav JSON collapses a one-element array to an object."""
+    if not value:
+        return []
+    if isinstance(value, dict):
+        return [value]
+    return list(value)
+
+
+def _from_groups(groups, score: float) -> list[dict]:
     items: list[dict] = []
-    for group in groups or []:
+    for group in _as_list(groups):
+        if not isinstance(group, dict):
+            continue
         tty = group.get("tty")
-        for concept in group.get("conceptProperties") or []:
+        for concept in _as_list(group.get("conceptProperties")):
+            if not isinstance(concept, dict):
+                continue
             concept_tty = concept.get("tty") or tty
             if concept_tty not in SELECTABLE_TTY:
                 continue
@@ -103,7 +116,7 @@ def _from_groups(groups: list, score: float) -> list[dict]:
 
 def _drugs_json(term: str) -> list[dict]:
     data = _get("/drugs.json", {"name": term})
-    groups = data.get("drugGroup", {}).get("conceptGroup") or []
+    groups = (data.get("drugGroup") or {}).get("conceptGroup")
     return _from_groups(groups, score=100.0)
 
 
@@ -117,7 +130,7 @@ def _properties(rxcui: str) -> dict | None:
 
 def _related_groups(rxcui: str, tty: str) -> list:
     data = _get(f"/rxcui/{rxcui}/related.json?tty={tty}")
-    return data.get("relatedGroup", {}).get("conceptGroup") or []
+    return _as_list((data.get("relatedGroup") or {}).get("conceptGroup"))
 
 
 def _related_selectable(rxcui: str, score: float) -> list[dict]:
@@ -132,6 +145,31 @@ def _ingredient_rxcuis(rxcui: str) -> list[str]:
             if rid:
                 ids.append(str(rid))
     return list(dict.fromkeys(ids))
+
+
+def ingredients_for_rxcui(rxcui: str) -> list[dict[str, str]]:
+    """Ingredient (IN) concepts for an SCD/SBD — rxcui + name. Empty on miss."""
+    rows: list[dict[str, str]] = []
+    for group in _related_groups(str(rxcui).strip(), "IN"):
+        for concept in group.get("conceptProperties") or []:
+            rid = concept.get("rxcui")
+            if not rid:
+                continue
+            rows.append(
+                {
+                    "rxcui": str(rid),
+                    "name": str(concept.get("name") or rid),
+                }
+            )
+    # Dedupe by rxcui, preserve order.
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if row["rxcui"] in seen:
+            continue
+        seen.add(row["rxcui"])
+        out.append(row)
+    return out
 
 
 def related_scd_sbd(rxcui: str, limit: int = ANALOGUE_CANDIDATE_LIMIT) -> list[dict]:
@@ -169,14 +207,6 @@ def related_scd_sbd(rxcui: str, limit: int = ANALOGUE_CANDIDATE_LIMIT) -> list[d
         return out
 
     return _cached(("related_scd_sbd", source, cap), _RELATED_TTL, fill)
-
-
-def _as_list(value) -> list:
-    if not value:
-        return []
-    if isinstance(value, dict):
-        return [value]
-    return list(value)
 
 
 _ATC_SOURCES = ("ATC", "ATCPROD", "ATC2")
@@ -376,9 +406,7 @@ def _approximate(term: str, max_entries: int) -> list[dict]:
         "/approximateTerm.json",
         {"term": term, "maxEntries": str(max_entries)},
     )
-    raw = data.get("approximateGroup", {}).get("candidate") or []
-    if isinstance(raw, dict):
-        raw = [raw]
+    raw = [c for c in _as_list((data.get("approximateGroup") or {}).get("candidate")) if isinstance(c, dict)]
     lifted: list[dict] = []
     workers = min(4, len(raw)) or 1
     with ThreadPoolExecutor(max_workers=workers) as pool:

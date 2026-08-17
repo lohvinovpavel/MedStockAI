@@ -14,6 +14,7 @@ import {
   Moon,
   Package,
   Plus,
+  Repeat2,
   ScrollText,
   Settings,
   ShoppingCart,
@@ -42,6 +43,7 @@ import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/inventory", label: "Inventory & Batches", icon: Package },
+  { href: "/analogue", label: "Analogues", icon: Repeat2 },
   { href: "/forecasts", label: "Restock & Forecasts", icon: TrendingUp },
   { href: "/orders", label: "Purchase & Orders", icon: ShoppingCart },
   { href: "/shortages", label: "Shortage Matrix", icon: Globe },

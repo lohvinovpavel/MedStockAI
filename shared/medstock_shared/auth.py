@@ -22,12 +22,17 @@ class Principal:
     role: str
 
 
-def current_principal(request: Request) -> Principal:
+def credentials_token(request: Request) -> str | None:
     header = request.headers.get("authorization", "")
     # Cookie is how the browser authenticates (httpOnly, docs/services.md §2).
     # The Bearer header stays for curl and for local dev token minting — one
     # `or`, and both paths land on the same verification below.
     token = header[7:] if header.startswith("Bearer ") else request.cookies.get(COOKIE_NAME)
+    return token or None
+
+
+def current_principal(request: Request) -> Principal:
+    token = credentials_token(request)
     if not token:
         raise HTTPException(status_code=401, detail="missing credentials")
     try:
@@ -44,9 +49,23 @@ def current_principal(request: Request) -> Principal:
 
 PERMS: dict[str, set[str]] = {
     "pharmacist": {"queue:read", "recommendation:approve", "inventory:read", "drug:search"},
-    "physician": {"alert:read", "inventory:read", "drug:search"},
+    "physician": {
+        "alert:read",
+        "inventory:read",
+        "drug:search",
+        "patient:read",
+        "patient:write",
+    },
     "director": {"dashboard:read", "audit:read", "inventory:read", "drug:search"},
-    "admin": {"mapping:approve", "formulary:write", "audit:read", "inventory:read", "drug:search"},
+    "admin": {
+        "mapping:approve",
+        "formulary:write",
+        "audit:read",
+        "inventory:read",
+        "drug:search",
+        "patient:read",
+        "patient:write",
+    },
 }
 
 

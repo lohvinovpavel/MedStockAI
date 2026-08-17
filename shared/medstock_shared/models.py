@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -285,4 +285,35 @@ class CertificationFinding(Base):
 
     __table_args__ = (
         UniqueConstraint("ndc", "code", "source_ref", name="uq_cert_finding_natural"),
+    )
+
+
+# --- Demo patient registry (physician prescription cart). Tenant table with
+# deliberate PHI for the capstone demo — not production BAA posture. Rules
+# engine still receives only a PatientVector via patient_row_to_vector().
+
+
+class Patient(Base):
+    """Hospital-scoped patient profile for the physician prescribe demo.
+
+    `allergy_codes` / `condition_codes` feed the de-identified vector. Name and
+    date of birth stay here and never enter ask_ai() / ai_cache.
+    """
+
+    __tablename__ = "patient"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(Text, nullable=False)
+    date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
+    blood_group: Mapped[str | None] = mapped_column(Text)
+    allergy_codes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
+    condition_codes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

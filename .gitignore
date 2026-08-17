@@ -12,3 +12,6 @@ node_modules/
 .claude/
 .agents/
 skills-lock.json
+.dev-hospital-id.txt
+jwt-private-key.pem
+jwt-public-key.pem

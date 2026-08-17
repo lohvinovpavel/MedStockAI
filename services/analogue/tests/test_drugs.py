@@ -49,7 +49,18 @@ def test_search_also_mounted_under_ingress_prefix(monkeypatch):
 
 def test_search_requires_bearer_token():
     app.dependency_overrides.clear()
-    assert TestClient(app).get("/drugs/search", params={"q": "aspirin"}).status_code == 401
+    res = TestClient(app).get("/drugs/search", params={"q": "aspirin"})
+    assert res.status_code == 401
+    assert res.json()["detail"] == "missing credentials"
+
+
+def test_search_cookie_is_read_as_credentials():
+    app.dependency_overrides.clear()
+    client = TestClient(app)
+    client.cookies.set("medstock_token", "not-a-jwt")
+    res = client.get("/drugs/search", params={"q": "aspirin"})
+    assert res.status_code == 401
+    assert res.json()["detail"] == "invalid token"
 
 
 def test_packages_lists_ndcs(monkeypatch):

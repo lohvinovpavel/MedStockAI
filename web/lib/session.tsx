@@ -32,7 +32,15 @@ export function useSession() {
   return ctx;
 }
 
-export function SessionProvider({ children }: { children: React.ReactNode }) {
+export function SessionProvider({
+  children,
+  redirectToAuth = true,
+}: {
+  children: React.ReactNode;
+  // Legacy scaffold sends logged-out users to /auth. The mock dashboard
+  // must not — demo-login users have no cookie and still need Analogues.
+  redirectToAuth?: boolean;
+}) {
   const [user, setUser] = useState<Me | null | undefined>(undefined);
   const pathname = usePathname();
   const router = useRouter();
@@ -50,8 +58,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     refresh();
   }, [refresh]);
 
-  // Every apiFetch call funnels 401s through this one event, so an 8h token
-  // expiring mid-session on any page logs the user out without threading a
+  // Auth 401s (not analogue/patients probes) funnel through this event so an
+  // 8h token expiring mid-session clears the user without threading a
   // callback through every page.
   useEffect(() => {
     const onUnauthorized = () => setUser(null);
@@ -60,10 +68,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!redirectToAuth) return;
     if (user !== null) return;
     if (PUBLIC_PATHS.includes(pathname)) return; // guards /auth against redirecting to itself
-    router.replace(`/auth?next=${encodeURIComponent(pathname)}`);
-  }, [user, pathname, router]);
+    const qs = typeof window !== "undefined" ? window.location.search : "";
+    router.replace(`/auth?next=${encodeURIComponent(`${pathname}${qs}`)}`);
+  }, [user, pathname, router, redirectToAuth]);
 
   async function login(email: string, password: string) {
     await apiFetch("auth", "/login", {
@@ -85,7 +95,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const gated = user === undefined && !PUBLIC_PATHS.includes(pathname);
+  const gated = redirectToAuth && user === undefined && !PUBLIC_PATHS.includes(pathname);
 
   return (
     <SessionContext.Provider value={{ user, login, logout, refresh }}>

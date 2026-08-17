@@ -1,4 +1,4 @@
-from .auth import COOKIE_NAME, Principal, current_principal, require
+from .auth import COOKIE_NAME, Principal, credentials_token, current_principal, require
 from .config import Settings, settings
 from .db import engine, session_scope
 from .models import AICache, AppUser, Base, Hospital, Membership
@@ -16,6 +16,7 @@ __all__ = [
     "Principal",
     "Settings",
     "ask_ai",
+    "credentials_token",
     "current_principal",
     "dedupe_key",
     "engine",

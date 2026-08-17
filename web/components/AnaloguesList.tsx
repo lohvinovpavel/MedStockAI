@@ -3,7 +3,18 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { StockBand, type StockStatus } from "@/components/StockBand";
+import { Callout } from "@/components/dashboard/Callout";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export type AnalogueRow = {
   rxcui: string;
@@ -27,7 +38,6 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
   const [rationaleUnavailable, setRationaleUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const radios = `analogue-mode-${rxcui}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -50,13 +60,6 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
       cancelled = true;
     };
   }, [rxcui]);
-
-  function onMode(next: AnalogueMode) {
-    setMode(next);
-    setItems(null);
-    setRationaleUnavailable(false);
-    setError(null);
-  }
 
   async function load(nextMode = mode, nextUseAi = useAi) {
     setBusy(true);
@@ -82,6 +85,13 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
     }
   }
 
+  function onMode(next: AnalogueMode) {
+    setMode(next);
+    setItems(null);
+    setRationaleUnavailable(false);
+    setError(null);
+  }
+
   function onUseAi(next: boolean) {
     if (!aiAvailable) return;
     setUseAi(next);
@@ -91,30 +101,39 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
   }
 
   return (
-    <div className="analogues">
-      <fieldset className="mode-row">
-        <legend>Analogue search</legend>
-        <label>
-          <input
-            type="radio"
-            name={radios}
-            checked={mode === "ingredient"}
-            onChange={() => onMode("ingredient")}
-          />
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "ingredient" ? "secondary" : "outline"}
+          className="h-7 text-xs"
+          aria-pressed={mode === "ingredient"}
+          onClick={() => onMode("ingredient")}
+        >
           Ingredient
-        </label>
-        <label>
-          <input
-            type="radio"
-            name={radios}
-            checked={mode === "full"}
-            onChange={() => onMode("full")}
-          />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "full" ? "secondary" : "outline"}
+          className="h-7 text-xs"
+          aria-pressed={mode === "full"}
+          onClick={() => onMode("full")}
+        >
           Full (therapeutic)
-        </label>
-        <label>
+        </Button>
+        <label
+          className={cn(
+            "flex items-center gap-1.5 text-xs",
+            mode !== "full" || busy || !aiAvailable
+              ? "cursor-not-allowed text-muted-foreground/60"
+              : "text-muted-foreground",
+          )}
+        >
           <input
             type="checkbox"
+            className="size-3.5 accent-primary"
             checked={useAi}
             disabled={mode !== "full" || busy || !aiAvailable}
             onChange={(event) => onUseAi(event.target.checked)}
@@ -122,72 +141,77 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
           Use AI
         </label>
         {aiStatusKnown && !aiAvailable ? (
-          <span className="muted">AI is not configured</span>
+          <span className="text-[11px] text-muted-foreground">AI is not configured</span>
         ) : null}
-      </fieldset>
-      <p className="muted">
+      </div>
+      <p className="text-[11px] text-muted-foreground">
         Ingredient: other strengths and brands of the same active ingredient. Full: a
         different ingredient in the same RxClass (ATC when available). Stock is attached
         automatically — in-stock first, each row with High / Normal / Low / Out of stock.
         Use AI filters the Full list; turn it off to see every candidate.
       </p>
-      <button type="button" onClick={() => void load()} disabled={busy}>
-        Find analogues
-      </button>
-      {error ? <p className="muted">{error}</p> : null}
+      <Button type="button" size="sm" className="h-8 w-fit text-xs" onClick={() => void load()} disabled={busy}>
+        {busy ? "Finding analogues…" : "Find analogues"}
+      </Button>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
       {rationaleUnavailable ? (
-        <p className="ai-banner" role="status">
+        <Callout tone="warning">
           Rationale unavailable. Showing the unfiltered Full list.
-        </p>
+        </Callout>
       ) : null}
       {items ? (
         items.length === 0 ? (
-          <p>No analogue options for this preparation.</p>
+          <div className="rounded-md border border-dashed py-8 text-center text-xs text-muted-foreground">
+            No analogue options for this preparation.
+          </div>
         ) : (
-          <>
-            <p className="muted">
+          <div className="overflow-hidden rounded-lg border bg-card">
+            <p className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               In-stock first (High → Normal → Low), then Out of stock. Quantity is
               packs on the shelf. Nothing is selected automatically.
             </p>
-            <table className="stock-table">
-              <thead>
-                <tr>
-                  <th>Preparation</th>
-                  <th>Type</th>
-                  <th>Quantity</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Preparation</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Quantity</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {items.map((row) => (
-                  <tr key={row.rxcui}>
-                    <td>
-                      {row.name}
-                      <div className="muted">
+                  <TableRow key={row.rxcui}>
+                    <TableCell>
+                      <p className="font-medium">{row.name}</p>
+                      <p className="font-mono text-[11px] text-muted-foreground">
                         RxCUI {row.rxcui} ·{" "}
                         <Link
                           href={`/inventory?rxcui=${encodeURIComponent(row.rxcui)}&name=${encodeURIComponent(row.name)}`}
+                          className="text-primary hover:underline"
                         >
                           Check inventory
                         </Link>
-                      </div>
+                      </p>
                       {row.reason ? (
-                        <div className="muted">
+                        <p className="mt-1 text-[11px] text-muted-foreground">
                           {row.reason}
                           {row.citation ? ` “${row.citation}”` : ""}
-                        </div>
+                        </p>
                       ) : null}
-                    </td>
-                    <td>{row.tty}</td>
-                    <td className={row.in_stock ? undefined : "qty-out"}>{row.quantity}</td>
-                    <td>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{row.tty}</TableCell>
+                    <TableCell className={cn("tabular-nums", !row.in_stock && "text-muted-foreground")}>
+                      {row.quantity}
+                    </TableCell>
+                    <TableCell>
                       <StockBand status={row.stock_status} quantity={row.quantity} />
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </>
+              </TableBody>
+            </Table>
+          </div>
         )
       ) : null}
     </div>

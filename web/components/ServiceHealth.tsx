@@ -20,8 +20,8 @@ export function ServiceHealth({ service }: { service: ServiceName }) {
   }, [service]);
 
   return (
-    <p>
-      backend health: <code>{status}</code>
+    <p className="font-mono text-[11px] text-muted-foreground">
+      backend health: <span className="text-foreground">{status}</span>
     </p>
   );
 }
