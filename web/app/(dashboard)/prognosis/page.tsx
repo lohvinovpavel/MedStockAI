@@ -27,9 +27,10 @@ import { ReviewGate } from "@/components/dashboard/ReviewGate";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useSession } from "@/lib/session";
 import {
-  canApprove,
+  approvalStance,
   reviewProfile,
   useRiskProfileQueue,
+  type ApprovalStance,
   type ProfileStatus,
   type RiskFactor,
   type RiskProfile,
@@ -94,11 +95,11 @@ function formatDate(iso: string | null) {
 /** The basis, spelled out. Opened from a row; this is what is being signed. */
 function ProfileDetail({
   profile,
-  mayApprove,
+  stance,
   onRuled,
 }: {
   profile: RiskProfile;
-  mayApprove: boolean;
+  stance: ApprovalStance;
   onRuled: () => void;
 }) {
   const [note, setNote] = useState("");
@@ -173,8 +174,15 @@ function ProfileDetail({
         </p>
       )}
 
-      {mayApprove ? (
+      {stance !== "denied" ? (
         <div className="flex flex-col gap-2">
+          {stance === "unconfirmed" && (
+            <p className="text-[11px] text-muted-foreground">
+              Your role could not be confirmed — the sign-in service did not answer. The controls
+              stay available because your session already carries the permission to read this
+              queue, and the server rules on the ruling itself.
+            </p>
+          )}
           <Textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -203,8 +211,8 @@ function ProfileDetail({
         </div>
       ) : (
         <p className="text-[11px] text-muted-foreground">
-          Ruling on a profile is a clinical judgement and is restricted to the pharmacist role. You
-          can read the queue and the accept rate.
+          Ruling on a profile is a clinical judgement and is restricted to the pharmacist role. Your
+          role can read the queue and the accept rate, but not rule.
         </p>
       )}
     </div>
@@ -216,7 +224,7 @@ export default function PrognosisPage() {
   const [status, setStatus] = useState("awaiting_approval");
   const [openId, setOpenId] = useState<number | null>(null);
   const { queue, state, refreshing, refresh } = useRiskProfileQueue(status);
-  const mayApprove = canApprove(user?.role);
+  const stance = approvalStance(user?.role);
 
   const items = queue?.items ?? [];
 
@@ -351,7 +359,7 @@ export default function PrognosisPage() {
                     {openId === profile.id && (
                       <TableRow>
                         <TableCell colSpan={7} className="p-0">
-                          <ProfileDetail profile={profile} mayApprove={mayApprove} onRuled={refresh} />
+                          <ProfileDetail profile={profile} stance={stance} onRuled={refresh} />
                         </TableCell>
                       </TableRow>
                     )}

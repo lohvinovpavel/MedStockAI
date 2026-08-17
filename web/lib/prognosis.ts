@@ -111,9 +111,29 @@ export async function reviewProfile(id: number, action: "approve" | "reject", no
 }
 
 /**
- * Only a pharmacist may rule (medstock_shared/auth.py). Mirrored here to keep
- * the buttons honest — a director can read this page, and offering them a
- * control that will always 403 is worse than not offering it. The server is
- * still the authority; this only decides what to render.
+ * Whether to offer the ruling controls. Three answers, not two.
+ *
+ * Only a pharmacist may rule (medstock_shared/auth.py), so a director — who can
+ * read this page — is not offered a control that would always 403.
+ *
+ * `unconfirmed` is the case an end-to-end run turned up. `useSession` reports
+ * `null` both for "logged out" and for "the auth service did not answer", and
+ * with auth down a pharmacist holding a perfectly valid cookie was told their
+ * *role* was insufficient — a false statement, and the buttons vanished for
+ * someone whose ruling patient-profiling would have accepted. Every service
+ * verifies the JWT locally precisely so auth is not a single point of failure
+ * (auth.py's module docstring); gating the controls on auth being reachable put
+ * that single point of failure back.
+ *
+ * So when the role cannot be confirmed the controls are offered and the server
+ * decides. That is safe here: this only renders inside a loaded queue, and the
+ * queue loading already proves a valid cookie carrying `profile:review`. If the
+ * holder turns out not to be a pharmacist the ruling comes back 403 and the
+ * toast says so — which is the server being the authority, as it should be.
  */
-export const canApprove = (role: string | undefined) => role === "pharmacist";
+export type ApprovalStance = "allowed" | "denied" | "unconfirmed";
+
+export function approvalStance(role: string | undefined): ApprovalStance {
+  if (role === undefined) return "unconfirmed";
+  return role === "pharmacist" ? "allowed" : "denied";
+}
