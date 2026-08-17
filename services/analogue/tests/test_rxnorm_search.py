@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 from app.main import load_formulary_rxcuis
 from medstock_shared.rxnorm import (
+    _from_groups,
     apply_formulary,
     parse_strength_and_form,
     related_scd_sbd,
@@ -15,6 +16,24 @@ def test_parse_scd_name():
     strength, form = parse_strength_and_form("aspirin 100 MG Oral Tablet")
     assert strength == "100 MG"
     assert form == "Oral Tablet"
+
+
+def test_from_groups_accepts_rxnav_single_object():
+    """RxNav JSON emits an object, not a one-element array, when there is one group."""
+    items = _from_groups(
+        {
+            "tty": "SCD",
+            "conceptProperties": {
+                "rxcui": "212033",
+                "name": "aspirin 325 MG Oral Tablet",
+                "tty": "SCD",
+            },
+        },
+        100.0,
+    )
+    assert len(items) == 1
+    assert items[0]["rxcui"] == "212033"
+    assert items[0]["name"] == "aspirin 325 MG Oral Tablet"
 
 
 def test_apply_formulary_sorts_without_changing_shape():

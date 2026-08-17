@@ -1,4 +1,4 @@
-from .auth import COOKIE_NAME, Principal, current_principal, require
+from .auth import COOKIE_NAME, Principal, credentials_token, current_principal, require
 from .config import Settings, settings
 from .db import engine, session_scope
 from .models import AICache, AppUser, Base, Hospital, Membership
@@ -6,6 +6,7 @@ from .models import AICache, AppUser, Base, Hospital, Membership
 __all__ = [
     "COOKIE_NAME",
     "TASKS",
+    "credentials_token",
     "AICache",
     "AIError",
     "AITask",

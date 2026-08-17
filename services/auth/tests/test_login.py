@@ -70,6 +70,9 @@ def test_login_round_trip(account: str) -> None:
     assert me.status_code == 200
     assert me.json()["email"] == account
     assert me.json()["hospital_name"] == "Test Hospital"
+    set_cookie = me.headers.get("set-cookie") or ""
+    assert "medstock_token=" in set_cookie
+    assert "Path=/" in set_cookie
 
 
 def test_email_is_case_insensitive(account: str) -> None:

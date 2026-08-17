@@ -9,45 +9,40 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldSeparator } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { apiFetch } from "@/lib/api";
 
 const DEMO_ROLES = [
-  { role: "Chief Pharmacist", email: "pharmacist@medstock.demo", icon: Stethoscope },
-  { role: "Procurement Officer", email: "procurement@medstock.demo", icon: ClipboardList },
-  { role: "Clinical Director", email: "director@medstock.demo", icon: UserCog },
+  { role: "Physician", email: "ben@stmarys.org", icon: Stethoscope },
+  { role: "Chief Pharmacist", email: "ann@stmarys.org", icon: ClipboardList },
+  { role: "Clinical Director", email: "cara@stmarys.org", icon: UserCog },
 ] as const;
 
 export default function LoginPage() {
   const router = useRouter();
-  const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [pending, setPending] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState("");
+  const [error, setError] = useState("");
+
+  async function signIn(nextEmail: string, nextPassword: string) {
+    setError("");
+    setPending(true);
+    try {
+      await apiFetch("auth", "/login", {
+        method: "POST",
+        body: JSON.stringify({ email: nextEmail, password: nextPassword }),
+      });
+      toast.success("Signed in.");
+      router.push("/analogue");
+    } catch {
+      setError("invalid credentials");
+      setPending(false);
+    }
+  }
 
   function submitCredentials(e: React.FormEvent) {
     e.preventDefault();
-    setPending(true);
-    window.setTimeout(() => {
-      setPending(false);
-      setStep("otp");
-    }, 500);
-  }
-
-  function submitOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setPending(true);
-    window.setTimeout(() => {
-      toast.success("Signed in.");
-      router.push("/inventory");
-    }, 500);
-  }
-
-  function demoLogin(role: string) {
-    setPending(true);
-    window.setTimeout(() => {
-      toast.success(`Signed in as ${role}.`);
-      router.push("/inventory");
-    }, 400);
+    void signIn(email, password);
   }
 
   return (
@@ -61,95 +56,67 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-sm gap-4 py-6">
         <CardHeader className="px-6">
-          <CardTitle className="text-base">
-            {step === "credentials" ? "Sign in to your facility" : "Verify your identity"}
-          </CardTitle>
+          <CardTitle className="text-base">Sign in to your facility</CardTitle>
           <CardDescription className="text-xs">
-            {step === "credentials"
-              ? "Clinical staff sign-in — 2FA is required for every session."
-              : `Enter the 6-digit code sent to ${email || "your device"}.`}
+            Clinical staff sign-in. The session cookie is used for analogue search and prescribing.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-6">
-          {step === "credentials" ? (
-            <>
-              <form onSubmit={submitCredentials}>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="login-email">Email</FieldLabel>
-                    <Input
-                      id="login-email"
-                      type="email"
-                      autoComplete="username"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@hospital.org"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="login-password">Password</FieldLabel>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      autoComplete="current-password"
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                    />
-                  </Field>
-                  <Button type="submit" className="w-full" disabled={pending}>
-                    {pending && <Loader2 className="animate-spin" data-icon="inline-start" />}
-                    Continue
-                  </Button>
-                </FieldGroup>
-              </form>
+          <form onSubmit={submitCredentials}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="login-email">Email</FieldLabel>
+                <Input
+                  id="login-email"
+                  type="email"
+                  autoComplete="username"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@hospital.org"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                <Input
+                  id="login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+              </Field>
+              {error ? (
+                <p className="text-xs text-destructive" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              <Button type="submit" className="w-full" disabled={pending}>
+                {pending && <Loader2 className="animate-spin" data-icon="inline-start" />}
+                Sign in
+              </Button>
+            </FieldGroup>
+          </form>
 
-              <FieldSeparator className="my-4">or try a demo role</FieldSeparator>
+          <FieldSeparator className="my-4">or fill a seeded account</FieldSeparator>
 
-              <div className="flex flex-col gap-2">
-                {DEMO_ROLES.map(({ role, icon: Icon }) => (
-                  <Button
-                    key={role}
-                    type="button"
-                    variant="outline"
-                    className="w-full justify-start text-xs"
-                    disabled={pending}
-                    onClick={() => demoLogin(role)}
-                  >
-                    <Icon data-icon="inline-start" />
-                    Demo Login as {role}
-                  </Button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <form onSubmit={submitOtp}>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="login-otp">Verification code</FieldLabel>
-                  <Input
-                    id="login-otp"
-                    inputMode="numeric"
-                    maxLength={6}
-                    required
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-                    placeholder="123456"
-                    className="tracking-[0.3em]"
-                  />
-                </Field>
-                <Button type="submit" className="w-full" disabled={pending || otp.length < 6}>
-                  {pending && <Loader2 className="animate-spin" data-icon="inline-start" />}
-                  Verify & Continue
-                </Button>
-                <Button type="button" variant="ghost" className="w-full text-xs" onClick={() => setStep("credentials")}>
-                  Back
-                </Button>
-              </FieldGroup>
-            </form>
-          )}
+          <div className="flex flex-col gap-2">
+            {DEMO_ROLES.map(({ role, email: demoEmail, icon: Icon }) => (
+              <Button
+                key={role}
+                type="button"
+                variant="outline"
+                className="w-full justify-start text-xs"
+                disabled={pending}
+                onClick={() => setEmail(demoEmail)}
+              >
+                <Icon data-icon="inline-start" />
+                Use {role} ({demoEmail})
+              </Button>
+            ))}
+          </div>
         </CardContent>
       </Card>
 

@@ -35,11 +35,15 @@ export function AnalogueWorkspace() {
     [pathname, router, searchParams],
   );
 
+  if (user === undefined) {
+    return <div className="p-4 text-xs text-muted-foreground">Loading…</div>;
+  }
+
   return (
     <div className="flex flex-col gap-4 p-4">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">
-          {tab === "pryznachennia" ? "Призначення" : "Analogues"}
+          {tab === "pryznachennia" ? "Prescribe" : "Analogues"}
         </h1>
         <p className="text-xs text-muted-foreground">
           {tab === "pryznachennia"
@@ -58,11 +62,11 @@ export function AnalogueWorkspace() {
       >
         <TabsList variant="line">
           <TabsTrigger value="analogues">
-            <Repeat2 /> Пошук аналогів
+            <Repeat2 /> Analogues
           </TabsTrigger>
           {canPrescribe && (
             <TabsTrigger value="pryznachennia">
-              <Stethoscope /> Призначення
+              <Stethoscope /> Prescribe
             </TabsTrigger>
           )}
         </TabsList>

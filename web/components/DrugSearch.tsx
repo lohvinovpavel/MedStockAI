@@ -52,7 +52,13 @@ export function DrugSearch() {
       setItems(body.items as DrugIdentity[]);
     } catch (err) {
       setItems(null);
-      setError(err instanceof Error ? err.message : "search failed");
+      setError(
+        err instanceof Error && err.message === "missing credentials"
+          ? "Sign in to search preparations."
+          : err instanceof Error
+            ? err.message
+            : "search failed",
+      );
     } finally {
       setBusy(false);
     }

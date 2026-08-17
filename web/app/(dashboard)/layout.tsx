@@ -5,6 +5,7 @@ import { CopilotProvider } from "@/lib/copilot-context";
 import { FacilityProvider } from "@/lib/facility-context";
 import { InventoryProvider } from "@/lib/inventory-context";
 import { OrdersProvider } from "@/lib/orders-context";
+import { SessionProvider } from "@/lib/session";
 import { MobileTopBar, SideNav } from "@/components/dashboard/SideNav";
 import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
 import { systemStatus } from "@/lib/mock-data";
@@ -44,11 +45,12 @@ function LiveTelemetry() {
 // no room for two fixed side columns on a phone/tablet), so MobileTopBar
 // supplies the only way to reach either — a hamburger Sheet for nav, a
 // button that opens the copilot as a Sheet. Mock-data driven — see
-// lib/mock-data.ts — no session gate here, that stays scoped to
-// app/(legacy).
+// lib/mock-data.ts. Session is available (Analogues / Prescribe need it)
+// but does not gate or bounce to /auth — demo-login users have no cookie.
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <FacilityProvider>
+    <SessionProvider redirectToAuth={false}>
+      <FacilityProvider>
       <InventoryProvider>
       <OrdersProvider>
         <CopilotProvider>
@@ -77,6 +79,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </CopilotProvider>
       </OrdersProvider>
       </InventoryProvider>
-    </FacilityProvider>
+      </FacilityProvider>
+    </SessionProvider>
   );
 }

@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
-from fastapi import Depends, FastAPI, HTTPException, Response
-from medstock_shared import COOKIE_NAME, Principal, current_principal, engine, settings
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from medstock_shared import COOKIE_NAME, Principal, credentials_token, current_principal, engine, settings
 from medstock_shared.db import SessionLocal
 from medstock_shared.models import AppUser, Hospital, Membership
 from sqlalchemy import select, text
@@ -97,15 +97,7 @@ def login(body: LoginRequest, response: Response) -> LoginResponse:
         user_id, hospital_id, role = str(user.id), str(membership.hospital_id), membership.role
 
     token, expires_at = mint_token(user_id, hospital_id, role)
-    response.set_cookie(
-        COOKIE_NAME,
-        token,
-        max_age=settings.jwt_ttl_hours * 3600,
-        httponly=True,   # not readable by any script on the page
-        secure=True,     # Chrome exempts http://localhost, so dev still works
-        samesite="lax",
-        path="/",
-    )
+    _set_session_cookie(response, token)
     return LoginResponse(
         user_id=user_id, hospital_id=hospital_id, role=role, expires_at=expires_at
     )
@@ -119,10 +111,33 @@ def logout(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/")
 
 
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=settings.jwt_ttl_hours * 3600,
+        httponly=True,   # not readable by any script on the page
+        secure=True,     # Chrome exempts http://localhost, so dev still works
+        samesite="lax",
+        path="/",
+    )
+
+
 @app.get("/me", response_model=MeResponse)
-def me(principal: Principal = Depends(current_principal)) -> MeResponse:
+def me(
+    request: Request,
+    response: Response,
+    principal: Principal = Depends(current_principal),
+) -> MeResponse:
     """Reads live rather than echoing the claims, so a deactivated user stops
     working on the next request instead of at token expiry."""
+    # Re-assert Path=/ on every /me. A cookie that landed on /api/auth
+    # (browser default when Path is dropped in a proxy) authenticates here
+    # but is not sent to /api/analogue — Analogues search then 401s
+    # "missing credentials" while the physician session still looks valid.
+    token = credentials_token(request)
+    if token:
+        _set_session_cookie(response, token)
     try:
         user_id = uuid.UUID(principal.user_id)
     except ValueError as exc:
