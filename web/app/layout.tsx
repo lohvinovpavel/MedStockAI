@@ -1,21 +1,27 @@
-import { SessionProvider } from "@/lib/session";
-import Nav from "@/components/Nav";
+import type { Metadata } from "next";
+import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
-export const metadata = { title: "MedStockAI" };
+export const metadata: Metadata = {
+  title: "MedStock AI",
+  description: "Mission-critical pharma inventory with real-time predictive AI & FDA compliance.",
+};
 
-// Baseline styling only (app/globals.css) — no design system, every page
-// here is still a placeholder for the real UI. Nav is generated from
-// SERVICES so a new entry there shows up here too. Stays a server component;
-// SessionProvider/Nav are the client boundary.
+// Deliberately bare — session gating and the legacy nav live in
+// app/(legacy)/layout.tsx, scoped to the old backend-integrated scaffold.
+// The marketing site, /login, and app/(dashboard) supply their own chrome.
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <SessionProvider>
-          <Nav />
-          {children}
-        </SessionProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <TooltipProvider delayDuration={200}>
+            {children}
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

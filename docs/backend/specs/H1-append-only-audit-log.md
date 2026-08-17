@@ -1,0 +1,107 @@
+# H1 — Append-only audit log
+
+**Owner:** Postgres itself — read through `compliance` · **Flows:** 8, 18 · **Status:** ❌
+**Blocks:** B4, D3, F1, F3, G2 · **Scope:** `audit:read`
+
+## Goal
+
+`docs/services.md` §1.3 builds the entire compliance story on a trigger that writes to
+`audit_log_entry`, and on `review_decision` as the table it fires from. **Neither table exists
+in `shared/medstock_shared/models.py`.** Every "Dr. Smirnov confirmed the switch", "ML pipeline
+updated the forecast", "certificate verified by OCR" line in flow 18 is currently fabricated,
+and the ISO-13485 footer claims a guarantee the schema cannot make.
+
+This is the highest-leverage missing table in the system. Build it before the features that
+depend on being audited.
+
+## Data model
+
+```sql
+CREATE TABLE audit_log_entry (
+  id             bigserial PRIMARY KEY,
+  hospital_id    uuid NOT NULL,
+  actor_id       uuid,                       -- NULL = a pipeline, not a person
+  actor_system   text,                       -- 'ingest-certification', 'prediction-cronjob', 'copilot'
+  entity_type    text NOT NULL,
+  entity_id      text NOT NULL,
+  action         text NOT NULL,              -- INSERT | UPDATE | DELETE | domain verb
+  before         jsonb,
+  after          jsonb,
+  ai_dedupe_key  text,                       -- links to ai_cache (H2)
+  occurred_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_audit_entity ON audit_log_entry (hospital_id, entity_type, entity_id, occurred_at DESC);
+CREATE INDEX ix_audit_time   ON audit_log_entry (hospital_id, occurred_at DESC);
+
+CHECK (actor_id IS NOT NULL OR actor_system IS NOT NULL)
+```
+
+## The trigger
+
+```sql
+CREATE FUNCTION write_audit_entry() RETURNS trigger AS $BODY$
+BEGIN
+  INSERT INTO audit_log_entry (hospital_id, actor_id, actor_system, entity_type, entity_id,
+                               action, before, after, ai_dedupe_key)
+  VALUES (
+    current_setting('app.hospital_id', true)::uuid,
+    nullif(current_setting('app.actor_id', true), '')::uuid,
+    nullif(current_setting('app.actor_system', true), ''),
+    TG_TABLE_NAME,
+    COALESCE(NEW.id, OLD.id)::text,
+    TG_OP,
+    CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) END,
+    CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE to_jsonb(NEW) END,
+    nullif(current_setting('app.ai_dedupe_key', true), '')
+  );
+  RETURN COALESCE(NEW, OLD);
+END;
+$BODY$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_review_decision AFTER INSERT OR UPDATE ON review_decision
+  FOR EACH ROW EXECUTE FUNCTION write_audit_entry();
+```
+
+Attach the same trigger to: `review_decision`, `purchase_order`, `stock_batch`,
+`transfer_request`, `par_level`, `formulary_item`, `drug_certification`.
+
+## Append-only is a grant
+
+```sql
+REVOKE UPDATE, DELETE ON audit_log_entry FROM app_role;
+GRANT  INSERT, SELECT  ON audit_log_entry TO   app_role;
+```
+
+"We remember to call `audit()`" is the same weak guarantee as "we remember to write
+`WHERE hospital_id`" — and with seven services it has to hold in seven codebases. A grant holds
+in zero. This is demonstrable in ten seconds at defense: connect as `app_role`, try
+`DELETE FROM audit_log_entry`, watch it fail.
+
+## Rules
+
+1. No service calls an audit function. If application code writes an audit row, the trigger is
+   missing from that table.
+2. `actor_id` and `actor_system` both come from session settings that `session_scope` (A4) sets
+   with `SET LOCAL`. A CronJob sets `app.actor_system` and leaves `app.actor_id` empty.
+3. A write with neither actor set violates the CHECK and **fails the business transaction**.
+   That is intended: an unattributable change to regulated data should not commit.
+4. `before`/`after` are whole-row JSONB. Storage is cheaper than a schema migration on the audit
+   table every time a domain table gains a column.
+5. Never log credentials, tokens, or `password_hash`. Do not attach this trigger to `app_user`
+   without a column filter.
+6. Retention: none for now. Deleting audit rows requires a documented policy, not a cron job
+   someone adds quietly.
+
+## Acceptance criteria
+
+- [ ] `DELETE FROM audit_log_entry` as `app_role` raises insufficient privilege.
+- [ ] `UPDATE` as `app_role` raises insufficient privilege.
+- [ ] Approving a recommendation produces an audit row with no application code calling `audit()`.
+- [ ] A write inside `session_scope` with no actor configured rolls back the whole transaction.
+- [ ] A CronJob write produces a row with `actor_system` set and `actor_id` null.
+- [ ] Flow 18's timeline is served entirely from this table — no fixture data remains.
+
+## Out of scope
+
+Hash-chaining or tamper-evident sealing of rows, WORM storage export, log shipping to an
+external SIEM, per-field redaction policies.

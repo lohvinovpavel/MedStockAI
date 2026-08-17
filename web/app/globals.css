@@ -1,370 +1,479 @@
-/* Minimal baseline so this reads as a working scaffold, not a wall of
-   unstyled text. Not a design system — no components, no theme tokens.
-   Replace freely once real UI work starts. */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
 
 :root {
   color-scheme: light dark;
-  --fg: #1a1a1a;
-  --bg: #ffffff;
-  --muted: #666;
-  --border: #ddd;
-  --accent: #2b5fd9;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  /* Brand blue — same accent as the legacy scaffold (--legacy-accent below),
+     reused here so the two shells read as one product instead of two. */
+  --primary: #2b5fd9;
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: #2b5fd9;
+  /* Categorical chart palette — was 5 shades of grey (hue carried nothing).
+     chart-1/2 are the forecast-chart's forecast/actual series; 3-5 are
+     spare categorical slots for future multi-series charts. */
+  --chart-1: #2b5fd9;
+  --chart-2: #d97706;
+  --chart-3: #059669;
+  --chart-4: #7c3aed;
+  --chart-5: #e11d48;
+  --radius: 0.625rem;
+
+  /* Legacy scaffold palette (app/(legacy)/*) — deliberately separate names
+     so they never shadow the shadcn tokens above. Scoped under .legacy. */
+  --legacy-fg: #1a1a1a;
+  --legacy-bg: #ffffff;
+  --legacy-muted: #666;
+  --legacy-border: #ddd;
+  --legacy-accent: #2b5fd9;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --fg: #e6e6e6;
-    --bg: #1a1a1a;
-    --muted: #999;
-    --border: #3a3a3a;
-    --accent: #6f9bff;
+    --legacy-fg: #e6e6e6;
+    --legacy-bg: #1a1a1a;
+    --legacy-muted: #999;
+    --legacy-border: #3a3a3a;
+    --legacy-accent: #6f9bff;
   }
 }
 
-* {
-  box-sizing: border-box;
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-body {
-  margin: 0;
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: #6f9bff;
+  --primary-foreground: oklch(0.145 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: #6f9bff;
+  --chart-1: #6f9bff;
+  --chart-2: #fbbf24;
+  --chart-3: #34d399;
+  --chart-4: #a78bfa;
+  --chart-5: #fb7185;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Legacy scaffold styling — app/(legacy)/* only, scoped under .legacy */
+/* so it can never leak onto the shadcn-based dashboard. Unstyled-but-  */
+/* working baseline, not a design system.                              */
+/* ------------------------------------------------------------------ */
+
+.legacy {
+  color: var(--legacy-fg);
+  background: var(--legacy-bg);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: var(--fg);
-  background: var(--bg);
   line-height: 1.5;
+  min-height: 100vh;
 }
 
-nav {
+.legacy nav {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
   padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--legacy-border);
 }
 
-nav a {
-  color: var(--fg);
+.legacy nav a {
+  color: var(--legacy-fg);
   text-decoration: none;
   font-size: 0.9rem;
 }
 
-nav a:hover {
-  color: var(--accent);
+.legacy nav a:hover {
+  color: var(--legacy-accent);
   text-decoration: underline;
 }
 
-nav button {
+.legacy nav button {
   padding: 0.2rem 0.6rem;
   font-size: 0.85rem;
 }
 
-.nav-user {
+.legacy .nav-user {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 
-.nav-user .muted {
+.legacy .nav-user .muted {
   font-size: 0.85rem;
 }
 
-main {
+.legacy main {
   max-width: 720px;
   margin: 0 auto;
   padding: 2rem 1.5rem;
 }
 
-h1 {
+.legacy h1 {
   font-size: 1.4rem;
   margin-bottom: 1rem;
 }
 
-p {
-  color: var(--muted);
+.legacy p {
+  color: var(--legacy-muted);
 }
 
-code {
-  background: color-mix(in srgb, var(--border) 40%, transparent);
+.legacy code {
+  background: color-mix(in srgb, var(--legacy-border) 40%, transparent);
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
   font-size: 0.85em;
 }
 
-a {
-  color: var(--accent);
+.legacy a {
+  color: var(--legacy-accent);
 }
 
-label {
+.legacy label {
   display: block;
   font-size: 0.9rem;
   margin-bottom: 0.35rem;
 }
 
-input[type="text"],
-input[type="email"],
-input[type="password"] {
+.legacy input[type="text"],
+.legacy input[type="email"],
+.legacy input[type="password"] {
   width: 100%;
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--legacy-border);
   border-radius: 4px;
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--legacy-bg);
+  color: var(--legacy-fg);
   font: inherit;
 }
 
-button {
+.legacy button {
   font: inherit;
   padding: 0.45rem 0.9rem;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--legacy-accent);
   border-radius: 4px;
-  background: var(--accent);
+  background: var(--legacy-accent);
   color: #fff;
   cursor: pointer;
 }
 
-button:disabled {
+.legacy button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-button.secondary {
+.legacy button.secondary {
   background: transparent;
-  color: var(--accent);
+  color: var(--legacy-accent);
 }
 
-.row {
+.legacy .row {
   display: flex;
   gap: 0.5rem;
   align-items: end;
   margin: 1rem 0;
 }
 
-.row > * {
+.legacy .row > * {
   flex: 1;
 }
 
-.row button {
+.legacy .row button {
   flex: 0 0 auto;
 }
 
-.result-list {
+.legacy .result-list {
   list-style: none;
   padding: 0;
   margin: 1rem 0;
 }
 
-.result-list li {
+.legacy .result-list li {
   margin: 0;
 }
 
-.result-list button.pick {
+.legacy .result-list button.pick {
   width: 100%;
   text-align: left;
   background: transparent;
-  color: var(--fg);
-  border: 1px solid var(--border);
+  color: var(--legacy-fg);
+  border: 1px solid var(--legacy-border);
   border-radius: 0;
   padding: 0.7rem 0.8rem;
 }
 
-.result-list li + li button.pick {
+.legacy .result-list li + li button.pick {
   border-top: none;
 }
 
-.result-list li:first-child button.pick {
+.legacy .result-list li:first-child button.pick {
   border-radius: 4px 4px 0 0;
 }
 
-.result-list li:last-child:not(.expanded) button.pick {
+.legacy .result-list li:last-child:not(.expanded) button.pick {
   border-radius: 0 0 4px 4px;
 }
 
-.result-list li:first-child:last-child:not(.expanded) button.pick {
+.legacy .result-list li:first-child:last-child:not(.expanded) button.pick {
   border-radius: 4px;
 }
 
-.result-list button.pick[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.legacy .result-list button.pick[aria-pressed="true"] {
+  border-color: var(--legacy-accent);
+  background: color-mix(in srgb, var(--legacy-accent) 12%, transparent);
 }
 
-.result-list li.expanded {
-  border: 1px solid var(--accent);
+.legacy .result-list li.expanded {
+  border: 1px solid var(--legacy-accent);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--legacy-accent) 12%, transparent);
   margin: 0.35rem 0;
   min-width: 0;
 }
 
-.result-list li.expanded button.pick,
-.result-list li.expanded button.pick[aria-pressed="true"] {
+.legacy .result-list li.expanded button.pick,
+.legacy .result-list li.expanded button.pick[aria-pressed="true"] {
   border: none;
   background: transparent;
   border-radius: 0;
 }
 
-.result-list li:has(+ li.expanded) button.pick {
+.legacy .result-list li:has(+ li.expanded) button.pick {
   border-radius: 0 0 4px 4px;
 }
 
-.result-list li.expanded + li button.pick {
-  border-top: 1px solid var(--border);
+.legacy .result-list li.expanded + li button.pick {
+  border-top: 1px solid var(--legacy-border);
   border-radius: 4px 4px 0 0;
 }
 
-.result-list li.expanded + li:last-child button.pick {
+.legacy .result-list li.expanded + li:last-child button.pick {
   border-radius: 4px;
 }
 
-.result-list li.expanded .identity {
+.legacy .result-list li.expanded .identity {
   margin-top: 0;
   border: none;
-  border-top: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-top: 1px solid color-mix(in srgb, var(--legacy-accent) 35%, var(--legacy-border));
   border-radius: 0;
   overflow-x: auto;
 }
 
-.badge {
+.legacy .badge {
   display: inline-block;
   font-size: 0.75rem;
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  color: var(--legacy-accent);
+  border: 1px solid var(--legacy-accent);
   padding: 0 0.35rem;
   border-radius: 4px;
   margin-left: 0.4rem;
 }
 
-.identity {
-  border: 1px solid var(--border);
+.legacy .identity {
+  border: 1px solid var(--legacy-border);
   padding: 0.9rem 1rem;
   border-radius: 4px;
   margin-top: 1.25rem;
 }
 
-.identity h2 {
+.legacy .identity h2 {
   font-size: 1rem;
   margin: 0 0 0.5rem;
 }
 
-.muted {
-  color: var(--muted);
+.legacy .muted {
+  color: var(--legacy-muted);
   font-size: 0.9rem;
 }
 
-.ai-banner {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border: 1px solid var(--accent);
+.legacy .ai-banner {
+  color: var(--legacy-fg);
+  background: color-mix(in srgb, var(--legacy-accent) 12%, transparent);
+  border: 1px solid var(--legacy-accent);
   border-radius: 4px;
   padding: 0.5rem 0.75rem;
   font-size: 0.9rem;
 }
 
-.stock-table {
+.legacy .stock-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9rem;
   margin-top: 0.5rem;
 }
 
-.stock-table th,
-.stock-table td {
+.legacy .stock-table th,
+.legacy .stock-table td {
   text-align: left;
   padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--legacy-border);
 }
 
-.stock-table th {
+.legacy .stock-table th {
   font-weight: 600;
   font-size: 0.8rem;
-  color: var(--muted);
+  color: var(--legacy-muted);
 }
 
-.qty-out {
-  color: var(--muted);
+.legacy .qty-out {
+  color: var(--legacy-muted);
 }
 
-.stock-band {
+.legacy .stock-band {
   display: inline-block;
   font-size: 0.8rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--legacy-border);
   white-space: nowrap;
 }
 
-.stock-band-none {
-  color: var(--muted);
+.legacy .stock-band-none {
+  color: var(--legacy-muted);
 }
 
-.stock-band-low {
+.legacy .stock-band-low {
   color: #b45309;
   border-color: #b45309;
 }
 
-.stock-band-normal {
-  color: var(--fg);
+.legacy .stock-band-normal {
+  color: var(--legacy-fg);
 }
 
-.stock-band-high {
-  color: var(--accent);
-  border-color: var(--accent);
+.legacy .stock-band-high {
+  color: var(--legacy-accent);
+  border-color: var(--legacy-accent);
 }
 
 /* COMP-1 certification traffic light. Colour is never the only signal — each
    badge carries a word and a title, so it survives colour-blindness and a
    greyscale projector at defense. */
-.cert-badge {
+.legacy .cert-badge {
   display: inline-block;
   font-size: 0.8rem;
   padding: 0.05rem 0.4rem;
   border-radius: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--legacy-border);
   white-space: nowrap;
 }
 
-.cert-badge-green {
+.legacy .cert-badge-green {
   color: #15803d;
   border-color: #15803d;
 }
 
-.cert-badge-yellow {
+.legacy .cert-badge-yellow {
   color: #b45309;
   border-color: #b45309;
 }
 
-.cert-badge-red {
+.legacy .cert-badge-red {
   color: #b91c1c;
   border-color: #b91c1c;
   font-weight: 600;
 }
 
-.cert-badge-unknown,
-.cert-badge-unavailable {
-  color: var(--muted);
+.legacy .cert-badge-unknown,
+.legacy .cert-badge-unavailable {
+  color: var(--legacy-muted);
 }
 
-.analogues {
+.legacy .analogues {
   margin-top: 0.9rem;
 }
 
-.analogues button {
+.legacy .analogues button {
   margin-bottom: 0.5rem;
 }
 
-.mode-row {
+.legacy .mode-row {
   border: none;
   padding: 0;
   margin: 0 0 0.35rem;
 }
 
-.mode-row legend {
+.legacy .mode-row legend {
   font-size: 0.9rem;
   padding: 0;
   margin-bottom: 0.35rem;
 }
 
-.mode-row label {
+.legacy .mode-row label {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -372,7 +481,7 @@ button.secondary {
   cursor: pointer;
 }
 
-.mode-row label:has(input:disabled) {
+.legacy .mode-row label:has(input:disabled) {
   opacity: 0.55;
   cursor: not-allowed;
 }
