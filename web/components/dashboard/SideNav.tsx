@@ -21,6 +21,7 @@ import {
   Sun,
   TrendingUp,
   User as UserIcon,
+  Warehouse,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -45,6 +46,7 @@ const TABS = [
   { href: "/inventory", label: "Inventory & Batches", icon: Package },
   { href: "/analogue", label: "Analogues", icon: Repeat2 },
   { href: "/forecasts", label: "Restock & Forecasts", icon: TrendingUp },
+  { href: "/warehouse", label: "Warehouse", icon: Warehouse },
   { href: "/orders", label: "Purchase & Orders", icon: ShoppingCart },
   { href: "/shortages", label: "Shortage Matrix", icon: Globe },
   { href: "/audit", label: "Audit Log", icon: ScrollText },

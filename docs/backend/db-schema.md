@@ -30,7 +30,10 @@ boundary is real, the data boundary is not). This is the schema behind the featu
 | `certification_finding` | reference | `ingest` writes, `compliance` reads | ✅ |
 | `formulary_item` | tenant | `inventory` | ✅ |
 | `stock_snapshot` | tenant | `inventory` | ✅ |
-| `facility` | tenant | `warehouse` | ❌ B1 |
+| `facility` | tenant | `warehouse` | ✅ B1 |
+| `storage_location` | tenant | `warehouse` | ✅ B1 — flat list per facility, `kind` ∈ room/fridge/freezer/cold_room |
+| `consumption_daily` | tenant | `warehouse` writes (seed; later B4 rollup), `prediction` reads | ✅ — 3y daily usage history, `stockout` marks censored days |
+| `location_condition` | tenant (via `storage_location` → `facility`) | `warehouse` | ✅ — hourly temp/humidity telemetry |
 | `stock_batch` | tenant | `inventory` | ❌ B4 |
 | `par_level` | tenant | `inventory` | ❌ B5 |
 | `supplier` | tenant | `warehouse` | ❌ F2 |
@@ -387,7 +390,11 @@ The proposed tables have a dependency order; taking them out of order means rewr
 1. **Fix `hospital_id` typing.** It is `Text` on the tenant tables and `UUID` on `hospital` —
    flagged in `models.py` as parallel-authoring drift. Ten new tables would otherwise inherit
    the wrong type. Do this first, while both tables are still nearly empty.
-2. `facility` — B1 blocks stock scoping, orders, transfers, and forecasts alike.
+2. `facility` — B1 blocks stock scoping, orders, transfers, and forecasts alike. ✅ done
+   (migration `20260817_warehouse`, with `storage_location`, `consumption_daily`,
+   `location_condition`, storage-requirement columns on `drug`, and
+   `stock_snapshot.facility_id` — the stock natural key is now
+   `(hospital_id, ndc, facility_id, location_id)`, NULLS NOT DISTINCT).
 3. `audit_log_entry` + `review_decision` + the trigger — H1. Every "AI suggested / pharmacist
    approved" claim in the UI is unbacked until these exist.
 4. `stock_batch` + `par_level` — B4/B5, which make "critical" and "expiring" objective.

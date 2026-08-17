@@ -1,7 +1,16 @@
 # B1 — Facility registry
 
-**Service:** `warehouse` · **Flows:** 3, 7, 14, 16, 17 · **Status:** ❌
+**Service:** `warehouse` · **Flows:** 3, 7, 14, 16, 17 · **Status:** ✅ (issue #8, migration `20260817_warehouse`)
 **Blocks:** B2, B4, B5, C5, E1, F3, G1, G2
+
+> Implementation deviations: seed rows ship via `services/ingest/app/seed_demo.py`
+> (`ENVIRONMENT=demo` guard, per `docs/demo-data.md` §5) rather than a migration (rule 5);
+> `location_id` was not retyped — `stock_snapshot` gained a `facility_id` FK and
+> `location_id` remains the intra-facility shelf code matching `storage_location.code`,
+> with the stock natural key widened to `(hospital_id, ndc, facility_id, location_id)`.
+> A `storage_location` table backs `GET /locations`, with `kind` driving condition
+> monitoring (see backend-features B7). Cross-tenant 404 awaits the repo-wide RLS
+> policies (A4).
 
 ## Goal
 
