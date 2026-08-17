@@ -26,6 +26,9 @@ spec:
         - name: JWT_PUBLIC_KEY
           valueFrom:
             configMapKeyRef: { name: medstock-jwt, key: public-key }
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef: { name: medstock-ai, key: gemini-api-key }
         resources:
           requests: { cpu: 50m, memory: 128Mi }
           limits:   { memory: 512Mi }
