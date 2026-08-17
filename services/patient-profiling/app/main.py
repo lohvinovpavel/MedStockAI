@@ -377,10 +377,14 @@ def cart_check(
         patient_payload = _patient_dict(row)
 
     avoided = profile_avoided_ingredients(vector)
+    # One lookup for the whole cart, not one per line: approved_profiles takes a
+    # list precisely so a ten-item cart costs a single query.
+    cart_rxcuis = [item.rxcui.strip() for item in body.items if item.rxcui.strip()]
+    profiles = approved_profiles(cart_rxcuis)
     results: list[dict] = []
     for item in body.items:
         rxcui = item.rxcui.strip()
-        assessment = assess(vector, rxcui)
+        assessment = assess(vector, rxcui, risk_profiles=profiles)
         # Surface all findings as warnings for the cart (demo: no hard block UI).
         warnings = [_finding_dict(f) for f in assessment.findings]
 
@@ -432,6 +436,10 @@ def cart_check(
         "ruleset_version": RULESET_VERSION,
         "patient": patient_payload,
         "results": results,
+        # Mirrors /assess. Zero here is meaningful: it distinguishes "no approved
+        # profile covers this cart" from "the prognosis stage never ran", which
+        # otherwise look identical from a response with no PP-3 findings in it.
+        "risk_profiles_applied": len(profiles),
     }
 
 
