@@ -3,6 +3,9 @@ const authOrigin = process.env.AUTH_PROXY_ORIGIN ?? "http://127.0.0.1:8000";
 const inventoryOrigin = process.env.INVENTORY_PROXY_ORIGIN ?? "http://127.0.0.1:8001";
 const analogueOrigin = process.env.ANALOGUE_PROXY_ORIGIN ?? "http://127.0.0.1:8002";
 const patientsOrigin = process.env.PATIENTS_PROXY_ORIGIN ?? "http://127.0.0.1:8003";
+// 8004, not 8003: patient-profiling claimed 8003 first, and the whole point of
+// the one-port-per-service rule below is that two backends can run at once.
+const complianceOrigin = process.env.COMPLIANCE_PROXY_ORIGIN ?? "http://127.0.0.1:8004";
 
 export default {
   // Required by the runtime stage of web/Dockerfile.
@@ -27,6 +30,9 @@ export default {
       { source: "/api/inventory/:path*", destination: `${inventoryOrigin}/:path*` },
       { source: "/api/analogue/:path*", destination: `${analogueOrigin}/:path*` },
       { source: "/api/patients/:path*", destination: `${patientsOrigin}/:path*` },
+      // COMP-1 traffic light on the inventory shelf. Without this line the
+      // badge reads "unavailable" in local dev however healthy the service is.
+      { source: "/api/compliance/:path*", destination: `${complianceOrigin}/:path*` },
     ];
   },
 };
