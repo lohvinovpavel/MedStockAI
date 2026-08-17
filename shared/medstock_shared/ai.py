@@ -60,7 +60,7 @@ class _Retryable(Exception):
     stop=stop_after_attempt(3),
     reraise=True,
 )
-def _generate_json(prompt: str) -> dict:
+def _generate_json(prompt: str, timeout_seconds: float | None = None) -> dict:
     try:
         response = _get_client().models.generate_content(
             model=settings.gemini_model,
@@ -68,7 +68,7 @@ def _generate_json(prompt: str) -> dict:
             config={
                 "response_mime_type": "application/json",
                 "http_options": {
-                    "timeout": int(settings.llm_timeout_seconds * 1000),
+                    "timeout": int((timeout_seconds or settings.llm_timeout_seconds) * 1000),
                     # SDK default is 3 attempts; stacking that on our 429
                     # retries (and on 503) blew past the Next.js 30s proxy.
                     "retry_options": {"attempts": 1},
@@ -132,7 +132,7 @@ def ask_ai(task_name: str, payload: dict) -> dict:
         return cached
 
     try:
-        result = _generate_json(task.prompt.format(**payload))
+        result = _generate_json(task.prompt.format(**payload), task.timeout_seconds)
         # Validate citations against the caller's source, not Gemini's echo.
         if isinstance(result, dict) and payload.get("source_text"):
             result = {**result, "source_text": payload["source_text"]}

@@ -84,6 +84,45 @@ spec:
               requests: { cpu: 50m, memory: 64Mi }
               limits: { memory: 256Mi }
 ---
+# PP-3: FDA label prose -> drug_risk_profile, for the drugs actually stocked.
+#
+# Driven by `--formulary`, so it follows operations rather than a hand-kept
+# list: add a drug to the formulary and it is covered on the next run. Weekly,
+# because labels change on the order of months and every run costs model calls.
+#
+# Writes `awaiting_approval` only. Nothing here can colour a screen until a
+# pharmacist accepts it (docs/prognosis-and-procurement.md §1.3).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-prognosis
+spec:
+  schedule: "0 6 * * 0"   # weekly, Sunday, after the reference feeds
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: prognosis
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.prognosis", "--formulary", "--limit", "50"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            # The only ingest job that needs a model key. Extraction is offline,
+            # so no request ever waits on it and no patient data is involved.
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: medstock-ai, key: gemini-api-key }
+            resources:
+              requests: { cpu: 50m, memory: 128Mi }
+              limits: { memory: 512Mi }
+---
 # COMP-1: FDA approval, listing dates and open recalls -> drug_certification.
 # Pages the NDC Directory in bulk (1 000 records/request, MAX_PAGES cap) rather
 # than querying per drug — see the budget note at the top of this file.

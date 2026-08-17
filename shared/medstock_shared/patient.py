@@ -201,6 +201,107 @@ AGE_INAPPROPRIATE = {"benzodiazepine", "nsaid"}
 OLDER_BANDS = {"75-89", "90+"}
 
 
+# --- PP-3 prognosis ----------------------------------------------------------
+# Ordered worst -> best, so "at_or_below" on kidney function means "this band or
+# worse" the way a clinician means it.
+AGE_ORDER = ("18-39", "40-64", "65-74", "75-89", "90+")
+_ORDERED: dict[str, tuple[str, ...]] = {"egfr_band": EGFR_ORDER, "age_band": AGE_ORDER}
+
+# A reaction the label calls fatal, with every stated risk factor present, is
+# worth more than a moderate one with half of them. Scaled by the fraction
+# matched, so partial evidence scores partially.
+PROGNOSIS_BASE = {"fatal": 40, "serious": 25, "moderate": 12}
+
+
+@dataclass(frozen=True)
+class RiskProfile:
+    """One approved row of `drug_risk_profile`. Extracted by a model from label
+    prose, checked against a closed vocabulary, approved by a pharmacist — and
+    applied here by arithmetic (docs/prognosis-and-procurement.md §1.4)."""
+
+    rxcui: str
+    reaction: str
+    seriousness: str
+    risk_factors: tuple[dict, ...]
+    citation: str = ""
+    section: str = ""
+
+
+def _factor_matches(vector: PatientVector, factor: dict) -> str | None:
+    """The patient's value if this risk factor applies, else `None`.
+
+    Returns the value rather than a bool so the finding can say *which*
+    characteristics matched — "eGFR 30-44, age 75-89" is reviewable, "3 factors"
+    is not.
+    """
+    feature, op, value = factor.get("feature"), factor.get("op"), factor.get("value")
+    actual = getattr(vector, feature, None)
+    if actual in (None, "unknown", ()):
+        return None  # unknown never counts as a match; it is reported separately
+
+    if op == "eq":
+        return str(actual) if actual == value else None
+
+    if op == "in":
+        allowed = [str(v) for v in (value if isinstance(value, list) else [value])]
+        if isinstance(actual, tuple):
+            # A collection field: "in" means any of these codes is present. The
+            # scalar reading (`actual in allowed`) can never be true for a tuple,
+            # so a real extraction like "renal artery stenosis, CKD, heart
+            # failure" would have silently matched nobody.
+            hit = [code for code in actual if str(code) in allowed]
+            return ", ".join(hit) if hit else None
+        return str(actual) if str(actual) in allowed else None
+
+    if op == "has":
+        # Collection fields: allergy_codes, condition_codes, active_rxcuis, …
+        return str(value) if isinstance(actual, tuple) and str(value) in actual else None
+
+    order = _ORDERED.get(feature)
+    if order is None or actual not in order or value not in order:
+        return None
+    if op == "at_or_below":
+        return str(actual) if order.index(actual) <= order.index(value) else None
+    if op == "at_or_above":
+        return str(actual) if order.index(actual) >= order.index(value) else None
+    return None
+
+
+def prognosis_findings(
+    vector: PatientVector, profiles: Sequence[RiskProfile]
+) -> list[Finding]:
+    """Label-derived risk that applies to *this* patient.
+
+    Raises a score; never blocks. A hard gate is an absolute, and a model must
+    not be able to create or clear one — see §1.5 of the design.
+    """
+    findings: list[Finding] = []
+    for profile in profiles:
+        factors = list(profile.risk_factors)
+        if not factors:
+            continue
+        matched = [m for f in factors if (m := _factor_matches(vector, f)) is not None]
+        if not matched:
+            continue
+
+        base = PROGNOSIS_BASE.get(profile.seriousness.lower(), PROGNOSIS_BASE["moderate"])
+        weight = round(base * len(matched) / len(factors))
+        findings.append(
+            Finding(
+                code="PROGNOSIS_RISK",
+                severity=Severity.HIGH if weight >= 25 else Severity.MODERATE,
+                weight=weight,
+                message=(
+                    f"{len(matched)} of {len(factors)} label risk factors present for "
+                    f"{profile.reaction} ({', '.join(matched)})"
+                ),
+                source=f"FDA label, {profile.section or 'unspecified section'}",
+                stage=7,
+            )
+        )
+    return findings
+
+
 def _class_of(rxcui: str) -> str | None:
     return DRUG_CLASS.get(str(rxcui))
 
@@ -290,7 +391,12 @@ def avoided_ingredient_warnings(
     return findings
 
 
-def assess(vector: PatientVector, rxcui: str, today=None) -> Assessment:
+def assess(
+    vector: PatientVector,
+    rxcui: str,
+    today=None,
+    risk_profiles: Sequence[RiskProfile] = (),
+) -> Assessment:
     """Run the deterministic stages for one candidate drug.
 
     Stage 4 short-circuits: a hard gate ends the pipeline and **no score is
@@ -379,7 +485,17 @@ def assess(vector: PatientVector, rxcui: str, today=None) -> Assessment:
                         "feature vector", 6)
             )
 
-    # --- stage 7/8 are offline tables; not seeded here ----------------------
+    # --- stage 7: label-derived prognosis (PP-3) ----------------------------
+    # Only profiles for this drug, and only ones a pharmacist has approved —
+    # the caller is responsible for that filter, but guard it here too, because
+    # an unapproved profile reaching a screen is the one failure this design
+    # cannot tolerate.
+    applicable = [p for p in risk_profiles if str(p.rxcui) == str(rxcui)]
+    if applicable:
+        stages.append(7)
+        findings.extend(prognosis_findings(vector, applicable))
+
+    # --- stage 8 (pharmacogenomics) is an offline table; not seeded here ----
 
     # --- stage 9: age ------------------------------------------------------
     stages.append(9)

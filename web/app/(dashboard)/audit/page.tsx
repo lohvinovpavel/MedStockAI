@@ -6,17 +6,11 @@ import { Bot, Download, ScrollText, Server, ShieldCheck, Stethoscope } from "luc
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
-import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType, type InventoryItem } from "@/lib/mock-data";
+import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType } from "@/lib/mock-data";
+import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
 import { cn } from "@/lib/utils";
-
-const CERT_TONE: Record<InventoryItem["certStatus"], StatusTone> = {
-  valid: "normal",
-  pending: "warning",
-  expired: "critical",
-};
 
 const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string }> = {
   clinician: { icon: Stethoscope, className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400" },
@@ -51,6 +45,7 @@ export default function AuditPage() {
   // Falls back to the first SKU when the selected one isn't stocked at the
   // facility you just switched to, rather than blowing up on a stale id.
   const item = items.find((i) => i.id === itemId) ?? items[0];
+  const certification = useCertificationStatuses(item.ndc ? [item.ndc] : []);
   const entries = useMemo(
     () => [...auditLogFor(item.id)].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1)),
     [item.id],
@@ -93,9 +88,10 @@ export default function AuditPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <StatusBadge tone={CERT_TONE[item.certStatus]} className="capitalize">
-              {item.certAuthority} · {item.certStatus}
-            </StatusBadge>
+            {/* Same COMP-1 source as the inventory shelf. Reading the row's
+                stored certStatus here instead would let this page and that one
+                show different colours for the same drug. */}
+            <CertificationBadge result={item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 }} />
             <Button
               variant="outline"
               size="sm"

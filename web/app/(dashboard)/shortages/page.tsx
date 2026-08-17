@@ -73,7 +73,10 @@ export default function ShortagesPage() {
     .filter((r) => !r.isCurrent && coverageTone(r) !== "critical" && coverageTone(r) !== "stockout")
     .sort((a, b) => b.daysOfSupply - a.daysOfSupply || a.awayKm - b.awayKm);
 
-  const sortRank: Record<StatusTone, number> = { surplus: 0, normal: 1, warning: 2, critical: 3, stockout: 4 };
+  // Best coverage first, worst last. `neutral` cannot come out of
+  // coverageTone() — the key exists only to satisfy the Record — so it sorts
+  // last rather than being given a coverage rank it has not earned.
+  const sortRank: Record<StatusTone, number> = { surplus: 0, normal: 1, warning: 2, critical: 3, stockout: 4, neutral: 5 };
   const networkRows = [...rows].sort((a, b) => {
     if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
     return sortRank[coverageTone(a)] - sortRank[coverageTone(b)];

@@ -16,12 +16,13 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import Patient
+from medstock_shared.models import DrugRiskProfile, Patient
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
     WEIGHTS,
     PatientVector,
+    RiskProfile,
     assess,
     avoided_ingredient_warnings,
     patient_row_to_vector,
@@ -31,6 +32,8 @@ from medstock_shared.patient import (
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
 app = FastAPI(title="patient-profiling")
 patients = APIRouter()
@@ -163,6 +166,43 @@ def get_ruleset(_: Principal = Depends(require("inventory:read"))) -> dict:
     }
 
 
+def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
+    """Label-derived risk profiles for these drugs — **approved ones only**.
+
+    The filter is the point. An extracted profile is a model's reading of a
+    label until a pharmacist accepts it, and an unapproved one reaching a screen
+    is the single failure this design cannot tolerate
+    (docs/prognosis-and-procurement.md §1.3).
+
+    A missing table means the prognosis migration has not run; that degrades to
+    "no profiles" rather than failing the assessment, because the deterministic
+    stages are still perfectly valid without it.
+    """
+    if not rxcuis:
+        return []
+    try:
+        with Session(engine) as session:
+            rows = session.execute(
+                select(DrugRiskProfile).where(
+                    DrugRiskProfile.rxcui.in_(rxcuis),
+                    DrugRiskProfile.status == "approved",
+                )
+            ).scalars().all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        RiskProfile(
+            rxcui=str(r.rxcui),
+            reaction=r.reaction,
+            seriousness=r.seriousness,
+            risk_factors=tuple(r.risk_factors or ()),
+            citation=r.citation or "",
+            section=r.section or "",
+        )
+        for r in rows
+    ]
+
+
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
@@ -179,10 +219,14 @@ def post_assess(
     if len(candidates) > MAX_CANDIDATES:
         raise HTTPException(status_code=400, detail=f"at most {MAX_CANDIDATES} candidates")
 
-    results = [assess(patient, rxcui).as_dict() for rxcui in candidates]
+    profiles = approved_profiles(candidates)
+    results = [assess(patient, rxcui, risk_profiles=profiles).as_dict() for rxcui in candidates]
     return {
         "ruleset_version": RULESET_VERSION,
         "patient_ref": patient.patient_ref,
+        # So a caller can tell "no label risk applies to this patient" apart from
+        # "nobody has approved a profile for this drug yet".
+        "risk_profiles_applied": len(profiles),
         "results": results,
     }
 

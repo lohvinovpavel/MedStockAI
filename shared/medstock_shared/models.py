@@ -259,6 +259,45 @@ class DrugCertification(Base):
     raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
 
 
+class DrugRiskProfile(Base):
+    """PP-3: which patient characteristics raise the risk of which reaction.
+
+    Reference class — the profile describes a *drug*, not a person, so there is
+    no `hospital_id` and no RLS. That is also why the extraction can use a model
+    at all: the input is a public label and no patient is ever involved
+    (docs/prognosis-and-procurement.md §0).
+
+    `status` gates everything. A profile is written `awaiting_approval` and can
+    colour nothing until a pharmacist accepts it — a model's reading of a label
+    is a proposal, not a clinical fact.
+    """
+
+    __tablename__ = "drug_risk_profile"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    reaction: Mapped[str] = mapped_column(Text, nullable=False)
+    seriousness: Mapped[str] = mapped_column(Text, nullable=False, server_default="moderate")
+    # [{"feature": "egfr_band", "op": "at_or_below", "value": "45-59"}, …]
+    # Validated against a closed vocabulary before it is written; see
+    # medstock_shared.ai_tasks._prognosis_is_applicable.
+    risk_factors: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # Verbatim from the label section named below — the reviewable basis the
+    # FDA CDS exemption turns on.
+    citation: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    section: Mapped[str | None] = mapped_column(Text)
+    spl_id: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="awaiting_approval")
+    approved_by: Mapped[str | None] = mapped_column(Text)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("rxcui", "reaction", name="uq_drug_risk_profile_natural"),
+    )
+
+
 class CertificationFinding(Base):
     """One reason behind a colour, with the source that produced it.
 

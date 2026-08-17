@@ -59,6 +59,12 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { StatTile } from "@/components/dashboard/StatTile";
+import {
+  CertificationBadge,
+  useCertificateDetail,
+  useCertificationStatuses,
+  type CertResult,
+} from "@/components/CertificationBadge";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory } from "@/lib/inventory-context";
@@ -81,12 +87,6 @@ function expiryTone(days: number): StatusTone {
   if (days <= 30) return "warning";
   return "normal";
 }
-
-const CERT_TONE: Record<InventoryItem["certStatus"], StatusTone> = {
-  valid: "normal",
-  pending: "warning",
-  expired: "critical",
-};
 
 const OTHER_SKU = "__other__";
 
@@ -226,6 +226,16 @@ function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: 
   );
 }
 
+const SEVERITY_TONE: Record<string, StatusTone> = {
+  red: "critical",
+  yellow: "warning",
+  info: "neutral",
+};
+
+// The evidence behind one colour (COMP-1), not a stand-in for a scanned PDF.
+// Every finding names the FDA dataset it came from and links to it, because the
+// answer to "why is my drug amber?" has to be checkable by the pharmacist who
+// disagrees with it — see docs/compliance-usecases.md §3.
 function CertificateDialog({
   item,
   open,
@@ -235,22 +245,122 @@ function CertificateDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // Only fetch while the dialog is actually open: on a miss this endpoint
+  // triggers COMP-2 exploration upstream, which spends real request budget.
+  const { detail, error, loading } = useCertificateDetail(open && item?.ndc ? item.ndc : null);
   if (!item) return null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{item.certAuthority} Certificate — {item.drugName}</DialogTitle>
-          <DialogDescription>Certificate #{item.certNumber}</DialogDescription>
+          <DialogTitle>Certification — {item.drugName}</DialogTitle>
+          <DialogDescription>
+            {item.ndc ? (
+              <>NDC <span className="font-mono">{item.ndc}</span></>
+            ) : (
+              "No NDC recorded for this batch — nothing to certify against."
+            )}
+          </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed p-8 text-center">
-          <FileText className="size-10 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">{item.certAuthority}-{item.certNumber}.pdf</p>
-            <p className="text-xs text-muted-foreground">Mock certificate preview — document viewer not wired in this demo.</p>
+
+        {!item.ndc && (
+          <div className="rounded-md border border-dashed p-6 text-center">
+            <FileText className="mx-auto size-8 text-muted-foreground" />
+            <p className="mt-2 text-xs text-muted-foreground">
+              This batch was received as free text. Record an NDC to have it certified.
+            </p>
           </div>
-          <StatusBadge tone={CERT_TONE[item.certStatus]}>{item.certStatus}</StatusBadge>
-        </div>
+        )}
+
+        {item.ndc && loading && <p className="text-xs text-muted-foreground">Checking FDA records…</p>}
+
+        {item.ndc && error && (
+          <div className="rounded-md border border-dashed p-6 text-center">
+            <p className="text-xs font-medium">Compliance service unreachable</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{error}</p>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Status not checked — this is not a clean bill of health.
+            </p>
+          </div>
+        )}
+
+        {detail && (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <CertificationBadge result={{ status: detail.status, reasons: detail.findings.length }} />
+              {detail.labeler && <span className="text-xs text-muted-foreground">{detail.labeler}</span>}
+              {detail.marketing_category && (
+                <span className="rounded border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {detail.marketing_category}
+                </span>
+              )}
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-3">
+              <div>
+                <dt className="text-muted-foreground">Listing expires</dt>
+                <dd className="font-mono">{detail.listing_expiration_date ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Marketing ends</dt>
+                <dd className="font-mono">{detail.marketing_end_date ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Checked</dt>
+                <dd className="font-mono">{detail.computed_at?.slice(0, 16).replace("T", " ") ?? "—"}</dd>
+              </div>
+            </dl>
+
+            {detail.findings.length === 0 ? (
+              <p className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
+                No open findings. Actively marketed, no recall on record.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {detail.findings.map((f, i) => (
+                  <li key={`${f.code}-${i}`} className="rounded-md border p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge tone={SEVERITY_TONE[f.severity] ?? "neutral"}>{f.code}</StatusBadge>
+                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {f.category}
+                      </span>
+                      {/* Standing vs transient is the distinction that keeps this
+                          list actionable: a recall will clear, a dead listing
+                          will not. */}
+                      <span className="text-[10px] text-muted-foreground">
+                        {f.transient ? "transient" : "standing"}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-xs">{f.message}</p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {f.source}
+                      {f.source_ref ? ` · ${f.source_ref}` : ""}
+                      {f.source_url && (
+                        <>
+                          {" · "}
+                          <a
+                            href={f.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline underline-offset-2"
+                          >
+                            source
+                          </a>
+                        </>
+                      )}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="text-[10px] text-muted-foreground">
+              Ruleset {detail.ruleset_version ?? "—"}
+              {detail.provenance ? ` · ${detail.provenance}` : ""}
+            </p>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -268,7 +378,19 @@ export default function InventoryPage() {
   const [certItem, setCertItem] = useState<InventoryItem | null>(null);
 
   const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
-  // criticalStock/expiringSoon/pendingCerts recomputed from `items` (the
+
+  // COMP-1: one batched call for the whole shelf, not one per row. Fetched
+  // separately from stock on purpose — compliance being down must never blank
+  // the inventory table (docs/compliance-usecases.md §2.2).
+  const certNdcs = useMemo(() => items.map((i) => i.ndc).filter(Boolean), [items]);
+  const certification = useCertificationStatuses(certNdcs);
+
+  // A row with no NDC is `unknown` (nothing to certify), not `unavailable`
+  // (we tried and could not reach the service). Those are different facts and
+  // the badge says so.
+  const certFor = (item: InventoryItem): CertResult | undefined =>
+    item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 };
+  // criticalStock/expiringSoon/certAlerts recomputed from `items` (the
   // received-batch overlay included) rather than read verbatim from
   // inventoryKpisFor, so topping up a critical SKU can move it out of that
   // count. totalSkus stays the network-wide catalogue figure — it was never
@@ -279,9 +401,17 @@ export default function InventoryPage() {
       totalSkus: catalogue.totalSkus,
       criticalStock: items.filter((i) => stockRisk(i) === "critical").length,
       expiringSoon: items.filter((i) => daysUntil(i.expiryDate) <= 30).length,
-      pendingCerts: items.filter((i) => i.certStatus !== "valid").length,
+      // Amber and red only. `unknown` and `unavailable` are deliberately not
+      // counted here — a drug nobody has a record for, or one we could not
+      // check because the service is down, is not the same alert as a live
+      // recall, and folding them together would make this number jump to the
+      // shelf size the moment compliance goes offline.
+      certAlerts: items.filter((i) => {
+        const s = i.ndc ? certification[i.ndc]?.status : undefined;
+        return s === "yellow" || s === "red";
+      }).length,
     };
-  }, [items, facilityId]);
+  }, [items, facilityId, certification]);
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
@@ -326,7 +456,7 @@ export default function InventoryPage() {
         <StatTile icon={Boxes} label="Catalogue SKUs" value={kpis.totalSkus.toLocaleString()} />
         <StatTile icon={AlertTriangle} label="Critical stock (<3d)" value={kpis.criticalStock} tone="critical" />
         <StatTile icon={Clock} label="Expiring soon (<30d)" value={kpis.expiringSoon} tone="warning" />
-        <StatTile icon={ShieldAlert} label="Pending certificates" value={kpis.pendingCerts} tone="warning" />
+        <StatTile icon={ShieldAlert} label="Certification alerts" value={kpis.certAlerts} tone="warning" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -454,9 +584,7 @@ export default function InventoryPage() {
                         </StatusBadge>
                       </TableCell>
                       <TableCell className="py-2">
-                        <StatusBadge tone={CERT_TONE[item.certStatus]} className="capitalize">
-                          {item.certAuthority} · {item.certStatus}
-                        </StatusBadge>
+                        <CertificationBadge result={certFor(item)} />
                       </TableCell>
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
