@@ -175,3 +175,22 @@ Web --> PhysicianOrPharmacist: list + rationale (user chooses)
 ### How to test
 
 Not implemented. When it is: same aspirin 325 path as UC-4, **Full (therapeutic)**. With Gemini up, expect a shorter list (about 3–7), each row still High/Normal/Low/Out of stock in that order, plus reason and a citation that appears in `source_text`. Empty indication vs e.g. `pain` may change which rows are kept; both stay closed-world. Kill Gemini or force a bad citation → full unfiltered list and “rationale unavailable”, not an empty table. **Ingredient** must not call Gemini.
+
+## UC-P — Physician appointment cart (demo)
+
+Capstone physician flow under **analogue → tab Призначення**. Search drugs, add them to a **browser-only** appointment cart, select (or create) a patient profile stored in Postgres, re-check contraindications on every cart change, show warnings, replace a line with an analogue that excludes the avoided ingredient, then Accept to show a prescription summary and clear the cart.
+
+The **Пошук аналогів** tab keeps UC-1..5 unchanged (no patient).
+
+**Demo PHI exception:** `patient` stores name / DOB / blood group for the UI. `/cart-check` maps the row to a de-identified `PatientVector` before `assess()` — the rules engine still never sees PHI. Not production BAA posture.
+
+### How to test
+
+1. Run `patient-profiling` on port 8003 (Next proxies `/api/patients`). Seed: `uv run python scripts/seed_patients.py --hospital-id <hospital uuid>`.
+2. Open http://127.0.0.1:3001/analogue?tab=pryznachennia as physician (`ben@stmarys.org` / `devpassword123`).
+3. Select **Elena Vasquez** (seeded with `avoid_caffeine`) or create a patient with that condition.
+4. Search `aspirin caffeine`, **Add** **aspirin 400 MG / caffeine 32 MG Oral Tablet** (RxCUI 198479) → warning badge.
+5. Open the warning → **Find analogues without this ingredient** → **Replace with analogue** (e.g. aspirin-only). When `GEMINI_API_KEY` is set, Full-mode analogues are AI-filtered (UC-5); otherwise the stock-ranked Full list with ingredient exclusion only.
+6. **Accept & generate prescription** → summary modal; cart clears for the next patient.
+
+UC-1..5 regression check: open **Пошук аналогів** (`/analogue`) — search, confirm, ingredient/full analogues, optional Gemini on Full — same as before; no patient UI on that tab.

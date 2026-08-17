@@ -2,6 +2,7 @@
 const authOrigin = process.env.AUTH_PROXY_ORIGIN ?? "http://127.0.0.1:8000";
 const inventoryOrigin = process.env.INVENTORY_PROXY_ORIGIN ?? "http://127.0.0.1:8001";
 const analogueOrigin = process.env.ANALOGUE_PROXY_ORIGIN ?? "http://127.0.0.1:8002";
+const patientsOrigin = process.env.PATIENTS_PROXY_ORIGIN ?? "http://127.0.0.1:8003";
 
 export default {
   // Required by the runtime stage of web/Dockerfile.
@@ -25,6 +26,7 @@ export default {
       { source: "/api/auth/:path*", destination: `${authOrigin}/:path*` },
       { source: "/api/inventory/:path*", destination: `${inventoryOrigin}/:path*` },
       { source: "/api/analogue/:path*", destination: `${analogueOrigin}/:path*` },
+      { source: "/api/patients/:path*", destination: `${patientsOrigin}/:path*` },
     ];
   },
 };

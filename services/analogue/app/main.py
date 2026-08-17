@@ -15,6 +15,7 @@ from medstock_shared.rxnorm import (
     RxNormError,
     apply_formulary,
     concept_properties,
+    ingredients_for_rxcui,
     ndcs_for_rxcui,
     related_scd_sbd,
     search_concepts,
@@ -248,11 +249,32 @@ def analogue_ai_status(
     return {"available": _ai_available()}
 
 
+def _contains_excluded_ingredient(candidate_rxcui: str, exclude: str) -> bool:
+    """True if candidate includes exclude (RxCUI or case-insensitive name)."""
+    needle = exclude.strip().lower()
+    if not needle:
+        return False
+    try:
+        ingredients = ingredients_for_rxcui(candidate_rxcui)
+    except RxNormError:
+        return False
+    for ing in ingredients:
+        if str(ing["rxcui"]) == exclude.strip():
+            return True
+        if needle in str(ing.get("name") or "").lower():
+            return True
+    return False
+
+
 @drugs.get("/analogues/{rxcui}")
 def get_analogues(
     rxcui: str,
     mode: AnalogueMode = Query("ingredient"),
     use_ai: bool | None = Query(None),
+    exclude_ingredient: str | None = Query(
+        None,
+        description="Drop candidates whose RxNorm IN list includes this RxCUI or name",
+    ),
     principal: Principal = Depends(require("drug:search")),
 ) -> dict:
     """UC-3/UC-4: analogue candidates ranked by hospital quantity.
@@ -262,6 +284,8 @@ def get_analogues(
     `use_ai`: UC-5 Gemini filter on Full only. Ingredient ignores a true value
     once AI is configured. Default is true when a Gemini key is set, false
     when it is not. Explicit true with no key is 409, not an unfiltered list.
+    `exclude_ingredient`: physician cart — hide candidates that still contain
+    the avoided ingredient (e.g. caffeine RxCUI 1886).
     `orange_book` and `class` are accepted but not implemented.
     Each item includes ``stock_status`` (none/low/normal/high). UC-4 is
     presentation of this ranking, not a different algorithm.
@@ -282,6 +306,20 @@ def get_analogues(
         else:
             candidates = related_scd_sbd(source)
         candidates = [row for row in candidates if row["rxcui"] != source]
+        if exclude_ingredient and exclude_ingredient.strip():
+            exclude = exclude_ingredient.strip()
+            workers = min(_NDC_WORKERS, len(candidates)) or 1
+            kept: list[dict] = []
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_contains_excluded_ingredient, row["rxcui"], exclude): row
+                    for row in candidates
+                }
+                for fut in as_completed(futures):
+                    row = futures[fut]
+                    if not fut.result():
+                        kept.append(row)
+            candidates = kept
     except RxNormError as exc:
         raise HTTPException(status_code=503, detail="rxnorm unavailable") from exc
 
@@ -315,13 +353,18 @@ def get_analogues(
     rationale_unavailable = False
     if use_ai and mode == "full" and items:
         items, rationale_unavailable = _filter_full_with_ai(source, items)
-    return {
+    body: dict = {
         "rxcui": source,
         "mode": mode,
         "use_ai": use_ai,
         "rationale_unavailable": rationale_unavailable,
         "items": items,
     }
+    # Only echo the filter when the caller asked for it — keeps UC-3/4/5
+    # response shape stable for clients/tests that assert exact keys.
+    if exclude_ingredient and exclude_ingredient.strip():
+        body["exclude_ingredient"] = exclude_ingredient.strip()
+    return body
 
 
 app.include_router(drugs)

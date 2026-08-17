@@ -134,6 +134,31 @@ def _ingredient_rxcuis(rxcui: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def ingredients_for_rxcui(rxcui: str) -> list[dict[str, str]]:
+    """Ingredient (IN) concepts for an SCD/SBD — rxcui + name. Empty on miss."""
+    rows: list[dict[str, str]] = []
+    for group in _related_groups(str(rxcui).strip(), "IN"):
+        for concept in group.get("conceptProperties") or []:
+            rid = concept.get("rxcui")
+            if not rid:
+                continue
+            rows.append(
+                {
+                    "rxcui": str(rid),
+                    "name": str(concept.get("name") or rid),
+                }
+            )
+    # Dedupe by rxcui, preserve order.
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if row["rxcui"] in seen:
+            continue
+        seen.add(row["rxcui"])
+        out.append(row)
+    return out
+
+
 def related_scd_sbd(rxcui: str, limit: int = ANALOGUE_CANDIDATE_LIMIT) -> list[dict]:
     """Same-ingredient SCD/SBD (including branded forms). Excludes `rxcui`.
 
