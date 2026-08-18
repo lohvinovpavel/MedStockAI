@@ -14,7 +14,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
+import { useFacility } from "@/lib/facility-context";
 import { cn } from "@/lib/utils";
+
+export type AnalogueAvailability = {
+  facility_id: number;
+  quantity: number;
+  unit: string;
+  nearest_with_stock: {
+    facility_id: number;
+    name: string;
+    quantity: number;
+    distance_km: number;
+  } | null;
+};
 
 export type AnalogueRow = {
   rxcui: string;
@@ -25,11 +38,14 @@ export type AnalogueRow = {
   stock_status: StockStatus;
   reason?: string;
   citation?: string;
+  availability?: AnalogueAvailability | null;
 };
 
 type AnalogueMode = "ingredient" | "full";
 
 export function AnaloguesList({ rxcui }: { rxcui: string }) {
+  const { facility } = useFacility();
+  const facilityPk = facility.id;
   const [mode, setMode] = useState<AnalogueMode>("ingredient");
   const [aiAvailable, setAiAvailable] = useState(false);
   const [aiStatusKnown, setAiStatusKnown] = useState(false);
@@ -37,7 +53,15 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
   const [items, setItems] = useState<AnalogueRow[] | null>(null);
   const [rationaleUnavailable, setRationaleUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stockDegraded, setStockDegraded] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setItems(null);
+    setError(null);
+    setRationaleUnavailable(false);
+    setStockDegraded(false);
+  }, [facilityPk]);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,10 +90,12 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
     setError(null);
     setItems(null);
     setRationaleUnavailable(false);
+    setStockDegraded(false);
     try {
       const params = new URLSearchParams({
         mode: nextMode,
         use_ai: nextUseAi ? "true" : "false",
+        facility_id: String(facilityPk),
       });
       const body = await apiFetch(
         "analogue",
@@ -77,6 +103,7 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
       );
       setItems(body.items as AnalogueRow[]);
       setRationaleUnavailable(Boolean(body.rationale_unavailable));
+      setStockDegraded(Boolean(body.stock_degraded));
     } catch (err) {
       setItems(null);
       setError(err instanceof Error ? err.message : "analogues failed");
@@ -148,6 +175,7 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         Ingredient: other strengths and brands of the same active ingredient. Full: a
         different ingredient in the same RxClass (ATC when available). Stock is attached
         automatically — in-stock first, each row with High / Normal / Low / Out of stock.
+        Local availability is an overlay for the selected site and does not change rank.
         Use AI works only in Full mode and keeps up to 5 substitutes with a
         reason; turn it off to see every candidate. Ingredient never calls AI.
       </p>
@@ -155,6 +183,12 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         {busy ? "Finding analogues…" : "Find analogues"}
       </Button>
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {stockDegraded ? (
+        <Callout tone="warning">
+          Shelf quantities are unavailable, so this list is ranked without local
+          availability. Try again after inventory is reachable.
+        </Callout>
+      ) : null}
       {rationaleUnavailable ? (
         <Callout tone="warning">
           Use AI could not filter this list, so this is every Full candidate — not
@@ -175,20 +209,25 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         ) : (
           <div className="overflow-hidden rounded-lg border bg-card">
             <p className="border-b px-3 py-2 text-[11px] text-muted-foreground">
-              {items.length} row{items.length === 1 ? "" : "s"}. In-stock first
-              (High → Normal → Low), then Out of stock. Quantity is packs on the
-              shelf. Nothing is selected automatically.
+              {items.length} row{items.length === 1 ? "" : "s"}. Rank is hospital
+              quantity (High → Normal → Low, then Out of stock). The Here column
+              is stock at {facility.name} and does not change that order.
             </p>
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Preparation</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead>Quantity</TableHead>
+                  <TableHead>Here</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((row) => (
+                {items.map((row) => {
+                  const here = row.availability;
+                  const nearest = here?.nearest_with_stock;
+                  const hereQty = here?.quantity ?? row.quantity;
+                  const notHere = here != null && here.quantity <= 0;
+                  return (
                   <TableRow key={row.rxcui}>
                     <TableCell>
                       <p className="flex flex-wrap items-center gap-2">
@@ -207,6 +246,11 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
                           Check inventory
                         </Link>
                       </p>
+                      {nearest ? (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Nearest with stock: {nearest.name} · {nearest.distance_km} km · {nearest.quantity} {here?.unit ?? "packs"}
+                        </p>
+                      ) : null}
                       {row.reason ? (
                         <p className="mt-1 text-[11px] text-muted-foreground">
                           {row.reason}
@@ -215,11 +259,16 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
                       ) : null}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.tty}</TableCell>
-                    <TableCell className={cn("tabular-nums", !row.in_stock && "text-muted-foreground")}>
-                      {row.quantity}
+                    <TableCell className={cn("tabular-nums", notHere && "text-muted-foreground")}>
+                      {here == null
+                        ? row.quantity
+                        : notHere
+                          ? "Not stocked here"
+                          : `${hereQty} ${here.unit} here`}
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

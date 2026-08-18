@@ -1,6 +1,6 @@
 # C5 — Local availability overlay on analogues
 
-**Service:** `analogue` · **Flow:** 7 · **Status:** ❌ · **Depends on:** B1, B2, C3, C4
+**Service:** `analogue` · **Flow:** 7 · **Status:** ✅ (wave 3) · **Depends on:** B1, B2, C3, C4
 
 ## Goal
 
@@ -61,11 +61,11 @@ caller breaks.
 
 ## Acceptance criteria
 
-- [ ] Without `facility_id` the response is byte-identical to today's.
-- [ ] Switching `facility_id` flips a candidate between stocked and not-stocked.
-- [ ] `nearest_with_stock` never names the requesting facility.
-- [ ] Candidate count N produces one stock query, not N.
-- [ ] With `stock_snapshot` unavailable, the endpoint still returns ranked analogues.
+- [x] Without `facility_id` the response is byte-identical to today's.
+- [x] Switching `facility_id` flips a candidate between stocked and not-stocked.
+- [x] `nearest_with_stock` never names the requesting facility.
+- [x] Candidate count N produces one stock query, not N.
+- [x] With `stock_snapshot` unavailable, the endpoint still returns ranked analogues.
 
 ## Out of scope
 

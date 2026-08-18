@@ -10,6 +10,11 @@ Wave 2: `quantity` / `lot` / `expiry_days` are the mock inventory row.
 critical story SKUs (ceftriaxone, norepinephrine, insulin, heparin) sit
 at or below reorder. Facility profiles copy `inventoryFor()` so switching
 site changes depth the same way the mock table did.
+
+Wave 3: `rxcui` is the clinical id B6 writes to `formulary_item` and B3
+joins through. Values come from mock analogue RxCUIs / the B6 spec
+example (norepinephrine 1049640). Demo NDCs often have no live RxNorm
+pack list, so resolvers union this map with `ndcs_for_rxcui`.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from .demo_tenant import FACILITIES, location_for
 DASHBOARD_SHELF: tuple[dict, ...] = (
     {
         "id": "inv-001",
+        "rxcui": "562508",
         "ndc": "62135009120",
         "name": "Amoxicillin/Clavulanate 875mg",
         "lot": "AMX-24118-B",
@@ -36,6 +42,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-002",
+        "rxcui": "203155",
         "ndc": "16714097720",
         "name": "Propofol 1% Emulsion",
         "lot": "PPF-24902-C",
@@ -50,6 +57,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-003",
+        "rxcui": "309090",
         "ndc": "82804006601",
         "name": "Ceftriaxone 1g",
         "lot": "CFX-25011-A",
@@ -64,6 +72,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-004",
+        "rxcui": "745679",
         "ndc": "00487990130",
         "name": "Salbutamol 100mcg Inhaler",
         "lot": "SLB-24775-D",
@@ -78,6 +87,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-005",
+        "rxcui": "1049640",
         "ndc": "00338011220",
         "name": "Norepinephrine 4mg/4mL",
         "lot": "NEP-25033-A",
@@ -92,6 +102,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-006",
+        "rxcui": "248656",
         "ndc": "00069406101",
         "name": "Azithromycin 250mg",
         "lot": "AZT-24610-B",
@@ -106,6 +117,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-007",
+        "rxcui": "1157459",
         "ndc": "00024586900",
         "name": "Insulin Glargine 100U/mL",
         "lot": "IGL-25102-A",
@@ -120,6 +132,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-008",
+        "rxcui": "311704",
         "ndc": "63323041125",
         "name": "Midazolam 5mg/mL",
         "lot": "MDZ-24988-C",
@@ -134,6 +147,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-009",
+        "rxcui": "198440",
         "ndc": "00143938610",
         "name": "Paracetamol 1g IV",
         "lot": "PCM-25064-B",
@@ -148,6 +162,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-010",
+        "rxcui": "1361574",
         "ndc": "00338043304",
         "name": "Heparin Sodium 5000IU/mL",
         "lot": "HEP-24855-A",
@@ -162,6 +177,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
     {
         "id": "inv-011",
+        "rxcui": "204541",
         "ndc": "76168080030",
         "name": "Carmellose Sodium 0.5% Eye Drops",
         "lot": "CMC-24310-A",
@@ -222,4 +238,122 @@ def shelf_stock_rows(hospital_id, fac_ids: dict[str, int]) -> list[dict]:
                     "shelf_id": item["id"],
                 }
             )
+    return rows
+
+
+# Mock shortageAlerts sa-01/02/03 (Norepinephrine, Ceftriaxone, Heparin).
+# Those SKUs sit at/below par from the B5 seed, so B3 `uncovered` is a real claim.
+# Identified by shelf `id` so the COMP-1 NDC regex still sees exactly 11 NDCs.
+DEMO_SHORTAGE_SPECS: tuple[dict, ...] = (
+    {
+        "id": "inv-005",
+        "source_id": "FDA-2026-0142",
+        "status": "Currently in Shortage",
+        "note": "Manufacturing delay, national backorder through Q4.",
+    },
+    {
+        "id": "inv-003",
+        "source_id": "EMA-2026-0091",
+        "status": "Currently in Shortage",
+        "note": "Reduced allocation, 2 of 3 suppliers affected.",
+    },
+    {
+        "id": "inv-010",
+        "source_id": "FDA-2026-0310",
+        "status": "Currently in Shortage",
+        "note": "Raw material shortage reported by manufacturer.",
+    },
+)
+
+
+def formulary_rxcuis() -> list[str]:
+    """Hospital formulary for a fresh demo — dashboard SKUs, unique, stable order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in DASHBOARD_SHELF:
+        rxcui = str(item.get("rxcui") or "")
+        if rxcui and rxcui not in seen:
+            seen.add(rxcui)
+            out.append(rxcui)
+    return out
+
+
+def demo_shortage_rows() -> list[dict]:
+    """`shortage_event` payloads aligned with mock shortage alerts."""
+    by_id = {item["id"]: item for item in DASHBOARD_SHELF}
+    rows: list[dict] = []
+    for spec in DEMO_SHORTAGE_SPECS:
+        item = by_id[spec["id"]]
+        rows.append(
+            {
+                "source_id": spec["source_id"],
+                "ndc": item["ndc"],
+                "status": spec["status"],
+                "raw": {
+                    "note": spec["note"],
+                    "name": item["name"],
+                    "source": "demo-wave3",
+                    "rxcui": item["rxcui"],
+                },
+            }
+        )
+    return rows
+
+
+# Mock shortageAlerts sa-01/02/03 (Norepinephrine, Ceftriaxone, Heparin).
+# Those SKUs sit at/below par from the B5 seed, so B3 `uncovered` is a real claim.
+# Identified by shelf `id` so the COMP-1 NDC regex still sees exactly 11 NDCs.
+DEMO_SHORTAGE_SPECS: tuple[dict, ...] = (
+    {
+        "id": "inv-005",
+        "source_id": "FDA-2026-0142",
+        "status": "Currently in Shortage",
+        "note": "Manufacturing delay, national backorder through Q4.",
+    },
+    {
+        "id": "inv-003",
+        "source_id": "EMA-2026-0091",
+        "status": "Currently in Shortage",
+        "note": "Reduced allocation, 2 of 3 suppliers affected.",
+    },
+    {
+        "id": "inv-010",
+        "source_id": "FDA-2026-0310",
+        "status": "Currently in Shortage",
+        "note": "Raw material shortage reported by manufacturer.",
+    },
+)
+
+
+def formulary_rxcuis() -> list[str]:
+    """Hospital formulary for a fresh demo — dashboard SKUs, unique, stable order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in DASHBOARD_SHELF:
+        rxcui = str(item.get("rxcui") or "")
+        if rxcui and rxcui not in seen:
+            seen.add(rxcui)
+            out.append(rxcui)
+    return out
+
+
+def demo_shortage_rows() -> list[dict]:
+    """`shortage_event` payloads aligned with mock shortage alerts."""
+    by_id = {item["id"]: item for item in DASHBOARD_SHELF}
+    rows: list[dict] = []
+    for spec in DEMO_SHORTAGE_SPECS:
+        item = by_id[spec["id"]]
+        rows.append(
+            {
+                "source_id": spec["source_id"],
+                "ndc": item["ndc"],
+                "status": spec["status"],
+                "raw": {
+                    "note": spec["note"],
+                    "name": item["name"],
+                    "source": "demo-wave3",
+                    "rxcui": item["rxcui"],
+                },
+            }
+        )
     return rows

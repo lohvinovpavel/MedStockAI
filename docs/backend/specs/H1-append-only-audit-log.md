@@ -4,7 +4,7 @@
 **Blocks:** B4, D3, F1, F3, G2 · **Scope:** `audit:read`
 
 > Implementation deviations: the trigger is attached to `review_decision` (wave 1)
-> plus `stock_batch` and `par_level` (wave 2). `purchase_order` and `transfer_request`
+> plus `stock_batch` and `par_level` (wave 2) and `formulary_item` (wave 3). `purchase_order` and `transfer_request`
 > do not exist yet. Seeds set `app.actor_system` so the CHECK does not abort them.
 > RLS FORCE on remaining tenant tables is A4 wave 2. `session_scope` SETs
 > `LOCAL ROLE app_role` because docker/CI connect as a superuser that would
@@ -69,9 +69,9 @@ CREATE TRIGGER audit_review_decision AFTER INSERT OR UPDATE ON review_decision
 ```
 
 Wave 1 attaches the trigger to `review_decision`. Wave 2 attaches it to `stock_batch`
-and `par_level` as well. Attach the same trigger to `purchase_order`, `transfer_request`,
-`formulary_item`, and `drug_certification` when those writers go through `session_scope`
-with an actor — seeds that write formulary/certification without one would abort on the CHECK.
+and `par_level` as well. Wave 3 attaches it to `formulary_item`. Attach the same trigger to `purchase_order`, `transfer_request`,
+and `drug_certification` when those writers go through `session_scope`
+with an actor — seeds that write certification without one would abort on the CHECK.
 
 ## Append-only is a grant
 

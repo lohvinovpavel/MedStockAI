@@ -260,7 +260,7 @@ class Membership(Base):
 
 class FormularyItem(Base):
     """Tenant formulary. Analogue reads `rxcui` to boost UC-1 search hits.
-    Inventory will own writes (`POST /formulary/import`). No application
+    Inventory owns writes (`POST /formulary/import`, wave 3). No application
     `WHERE hospital_id` — RLS + `session_scope` are the tenant filter.
     """
 
@@ -1017,9 +1017,10 @@ class StockDaily(Base):
 
 # --- Audit (docs/backend/specs/H1-append-only-audit-log.md): review_decision
 # is the F1 shape; the append-only log is written by a trigger, never by
-# application code. Wave 1 attaches the trigger only to review_decision —
-# formulary_item / drug_certification writers still use SessionLocal without
-# an actor, and those tables would fail the CHECK if the trigger fired.
+# application code. Wave 3 attaches the trigger to formulary_item (B6
+# writers go through session_scope with an actor). drug_certification is
+# still seed/ingest-written; attaching it would fail the CHECK unless the
+# seeder sets actor_system.
 
 
 class ReviewDecision(Base):

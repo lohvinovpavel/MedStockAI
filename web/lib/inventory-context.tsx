@@ -19,6 +19,7 @@ export type ShelfItem = {
   reorder_point: number | null;
   target_qty: number | null;
   suggested_qty: number | null;
+  in_formulary?: boolean;
 };
 
 export type ReceivedBatch = {

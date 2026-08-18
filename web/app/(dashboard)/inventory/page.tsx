@@ -59,6 +59,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { Badge } from "@/components/ui/badge";
 import { StatTile } from "@/components/dashboard/StatTile";
 import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import {
@@ -824,6 +825,11 @@ export default function InventoryPage() {
                           className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           {label}
+                          {item.in_formulary ? (
+                            <Badge variant="secondary" className="ml-1.5 text-[10px] font-normal">
+                              formulary
+                            </Badge>
+                          ) : null}
                           <span className="block font-mono text-[10px] font-normal text-muted-foreground">{item.ndc}</span>
                         </button>
                       </TableCell>

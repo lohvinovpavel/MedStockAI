@@ -258,7 +258,7 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 |---|---|---|---|---|
 | `auth` | Tymur | `/api/auth` | Authenticate and authorize users; issue and rotate tokens. Holds the **private** signing key; everyone else holds the public one. | `POST /login` · `POST /logout` · `GET /me` |
 | `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. | `GET /stock?rxcui=` · `GET /exposure` · `POST /formulary/import` (CSV) |
-| `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
+| `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. Local availability is an overlay on `?facility_id=`. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` |
 | `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /audit` · `GET /export/compliance.csv` (D3, not built) |
 | `patient-profiling` | Andrii | `/api/patients` | Substitution safety for one patient (contraindications, allergies, interactions, label-derived prognosis), cohort demand and the PP-4 forecast, the demo patient CRUD behind the prescription cart, and the PP-5 queue where a pharmacist rules on extracted risk profiles. | `POST /assess` · `POST /demand` · `POST /forecast` · `GET /ruleset` · `GET /risk-profiles` · `POST /risk-profiles/{id}/review` · `GET\|POST /patients` · `GET\|PATCH /patients/{id}` · `POST /cart-check` |
 | `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
@@ -299,11 +299,13 @@ to 20 (max 50).
 ```
 
 Sort: `in_formulary` desc, then RxNorm score. `in_formulary` is a left join to
-`formulary_item.rxcui` for this hospital; until that table has rows (or does not exist yet)
-every item is `false` and the JSON shape does not change.
+`formulary_item.rxcui` for this hospital (B6 import / demo seed).
 
 `GET /api/analogue/drugs/{rxcui}/packages` — `drug:search`. NDCs for the chosen concept
 (step 2 of identity).
+
+`GET /api/analogue/analogues/{rxcui}?facility_id=` — `drug:search` (+ `inventory:read` when
+`facility_id` is sent). Ranked candidates; local availability is an overlay (C5).
 
 `GET /api/inventory/stock?rxcui=&facility_id=` — `inventory:read`. Inventory asks the shared RxNorm client
 for those NDCs, then returns matching `stock_snapshot` rows for the hospital (and facility, when

@@ -1,17 +1,26 @@
 import os
 import uuid
-from datetime import date
+import math
+from datetime import UTC, date, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
+from medstock_shared.formulary import (
+    MAX_FORMULARY_BYTES,
+    parse_formulary_csv,
+    shelf_name_for_rxcui,
+    shelf_ndcs_for_rxcuis,
+)
 from medstock_shared.models import (
+    ConsumptionDaily,
     Drug,
     Facility,
     FormularyItem,
     ParLevel,
+    ShortageEvent,
     StockBatch,
     StockSnapshot,
 )
@@ -92,6 +101,69 @@ def _batch_dict(row: StockBatch, snapshot_qty: int | None = None) -> dict:
         "received_at": row.received_at.isoformat() if row.received_at else None,
         "snapshot_quantity": snapshot_qty,
     }
+
+
+_RESOLVED_SHORTAGE = {"resolved", "discontinued"}
+
+
+def _shortage_active(status: str | None) -> bool:
+    if status is None:
+        return True
+    return status.strip().lower() not in _RESOLVED_SHORTAGE
+
+
+def _local_ndcs_for_rxcuis(session, rxcuis: set[str]) -> dict[str, list[str]]:
+    """RxCUI → NDCs without a live NLM round-trip (demo shelf, Drug.raw, consumption)."""
+    out: dict[str, list[str]] = {r: [] for r in rxcuis}
+    for rxcui, ndcs in shelf_ndcs_for_rxcuis(rxcuis).items():
+        for ndc in ndcs:
+            if ndc not in out[rxcui]:
+                out[rxcui].append(ndc)
+    if not rxcuis:
+        return {k: v for k, v in out.items() if v}
+    for ndc, raw in session.execute(select(Drug.ndc, Drug.raw)).all():
+        rxcui = str((raw or {}).get("rxcui") or "")
+        if rxcui in out and ndc not in out[rxcui]:
+            out[rxcui].append(ndc)
+    for ndc, rxcui in session.execute(
+        select(ConsumptionDaily.ndc, ConsumptionDaily.rxcui)
+        .where(ConsumptionDaily.rxcui.in_(rxcuis))
+        .distinct()
+    ).all():
+        key = str(rxcui)
+        if key in out and ndc not in out[key]:
+            out[key].append(ndc)
+    return {k: v for k, v in out.items() if v}
+
+
+def _resolve_ndcs_for_rxcuis(session, rxcuis: set[str]) -> dict[str, list[str]]:
+    """B3: local Drug.raw / demo_shelf / consumption first, then RxNorm.
+
+    Import rule 5 forbids a live NLM fan-out on a hot path. Calling
+    ``ndcs_for_rxcui`` for every formulary row would be that fan-out
+    (100+ sequential REST calls per ``GET /exposure``). Unmatched RxCUIs
+    still go to the shared client so a real hospital formulary without a
+    local NDC map still joins.
+    """
+    out = _local_ndcs_for_rxcuis(session, rxcuis)
+    for rxcui in rxcuis:
+        if out.get(rxcui):
+            continue
+        try:
+            remote = ndcs_for_rxcui(rxcui)
+        except RxNormError:
+            remote = []
+        if remote:
+            out[rxcui] = list(dict.fromkeys(remote))
+    return out
+
+
+def _formulary_ndc_set(session) -> set[str]:
+    rxcuis = set(session.scalars(select(FormularyItem.rxcui)).all())
+    ndcs: set[str] = set()
+    for values in _local_ndcs_for_rxcuis(session, rxcuis).values():
+        ndcs.update(values)
+    return ndcs
 
 
 @api.get("/stock")
@@ -239,6 +311,7 @@ def list_items(
             )
 
         rows = session.execute(stmt).all()
+        formulary_ndcs = _formulary_ndc_set(session)
 
     payload: list[dict] = []
     for row in rows:
@@ -268,7 +341,7 @@ def list_items(
                 "reorder_point": row.reorder_point,
                 "target_qty": row.target_qty,
                 "suggested_qty": suggested,
-                "in_formulary": False,
+                "in_formulary": row.ndc in formulary_ndcs,
             }
         )
 
@@ -464,6 +537,277 @@ def delete_par_level(
         if row is None:
             raise HTTPException(status_code=404, detail="par level not found")
         session.delete(row)
+
+
+@api.post("/formulary/import")
+async def import_formulary(
+    file: UploadFile = File(...),
+    principal: Principal = Depends(require("formulary:write")),
+) -> dict:
+    """B6: additive CSV upsert of RxCUIs. Name is advisory and is not stored."""
+    header = (file.content_type or "").split(";")[0].strip().lower()
+    if header and header not in {"text/csv", "application/csv", "application/vnd.ms-excel", "text/plain"}:
+        raise HTTPException(status_code=422, detail="file must be text/csv")
+    raw = await file.read(MAX_FORMULARY_BYTES + 1)
+    if len(raw) > MAX_FORMULARY_BYTES:
+        raise HTTPException(status_code=422, detail="file_too_large")
+    try:
+        text_body = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="file must be utf-8 csv") from exc
+    try:
+        rxcuis, rejected = parse_formulary_csv(text_body)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "too_many_rows":
+            raise HTTPException(status_code=422, detail="too_many_rows") from exc
+        if code == "unrecognised_header":
+            raise HTTPException(status_code=422, detail="unrecognised_header") from exc
+        raise HTTPException(status_code=422, detail=code) from exc
+
+    hid = uuid.UUID(principal.hospital_id)
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        existing = set()
+        if rxcuis:
+            existing = set(
+                session.scalars(select(FormularyItem.rxcui).where(FormularyItem.rxcui.in_(rxcuis))).all()
+            )
+        inserted = 0
+        updated = 0
+        now = datetime.now(UTC)
+        for rxcui in rxcuis:
+            row = session.scalar(select(FormularyItem).where(FormularyItem.rxcui == rxcui))
+            if row is None:
+                session.add(FormularyItem(hospital_id=hid, rxcui=rxcui))
+                inserted += 1
+            else:
+                row.updated_at = now
+                updated += 1
+        session.flush()
+    return {
+        "received": len(rxcuis) + len(rejected),
+        "inserted": inserted,
+        "updated": updated,
+        "rejected": rejected,
+    }
+
+
+@api.get("/formulary")
+def list_formulary(
+    q: str | None = Query(None),
+    principal: Principal = Depends(require("inventory:read")),
+) -> dict:
+    needle = (q or "").strip().lower()
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        rows = session.scalars(select(FormularyItem).order_by(FormularyItem.rxcui.asc())).all()
+        items = []
+        for row in rows:
+            name = shelf_name_for_rxcui(row.rxcui)
+            if needle and needle not in row.rxcui.lower() and needle not in (name or "").lower():
+                continue
+            items.append(
+                {
+                    "rxcui": row.rxcui,
+                    "name": name,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+
+@api.delete("/formulary/{rxcui}", status_code=204)
+def delete_formulary_item(
+    rxcui: str,
+    principal: Principal = Depends(require("formulary:write")),
+) -> None:
+    code = rxcui.strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="rxcui must not be blank")
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        row = session.scalar(select(FormularyItem).where(FormularyItem.rxcui == code))
+        if row is None:
+            raise HTTPException(status_code=404, detail="formulary item not found")
+        session.delete(row)
+
+
+def _sql_str(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _map_values_sql(pairs: list[tuple[str, str | None]]) -> str:
+    if not pairs:
+        return "SELECT NULL::text AS rxcui, NULL::text AS ndc WHERE false"
+    parts = []
+    for rxcui, ndc in pairs:
+        ndc_sql = "NULL::text" if ndc is None else _sql_str(ndc)
+        parts.append(f"SELECT {_sql_str(rxcui)} AS rxcui, {ndc_sql} AS ndc")
+    return " UNION ALL ".join(parts)
+
+
+@api.get("/exposure")
+def get_exposure(
+    facility_id: int | None = Query(None),
+    principal: Principal = Depends(require("inventory:read")),
+) -> dict:
+    """B3: formulary × stock × shortage. Totals are computed in SQL."""
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        if facility_id is not None:
+            _facility(session, facility_id)
+
+        formulary_rxcuis = list(session.scalars(select(FormularyItem.rxcui)).all())
+        ndc_map = _resolve_ndcs_for_rxcuis(session, set(formulary_rxcuis))
+
+        pairs: list[tuple[str, str | None]] = []
+        for rxcui in formulary_rxcuis:
+            ndcs = ndc_map.get(rxcui) or [None]
+            for ndc in ndcs:
+                pairs.append((rxcui, ndc))
+
+        ndcs = [ndc for _, ndc in pairs if ndc]
+        stock_stmt = select(
+            StockSnapshot.ndc,
+            func.coalesce(func.sum(StockSnapshot.quantity), 0).label("quantity"),
+        ).group_by(StockSnapshot.ndc)
+        if facility_id is not None:
+            stock_stmt = stock_stmt.where(StockSnapshot.facility_id == facility_id)
+        if ndcs:
+            stock_stmt = stock_stmt.where(StockSnapshot.ndc.in_(ndcs))
+            stock = {row.ndc: int(row.quantity) for row in session.execute(stock_stmt)}
+        else:
+            stock = {}
+
+        shortage_rows = []
+        if ndcs:
+            shortage_rows = session.execute(
+                select(ShortageEvent.ndc, ShortageEvent.status, ShortageEvent.source_id)
+                .where(ShortageEvent.ndc.in_(ndcs))
+                .order_by(ShortageEvent.ndc, ShortageEvent.id.desc())
+            ).all()
+        shortages: dict[str, tuple[str | None, str]] = {}
+        for ndc, status, source_id in shortage_rows:
+            if not _shortage_active(status):
+                continue
+            if ndc not in shortages:
+                shortages[ndc] = (status, source_id)
+
+        names: dict[str, str] = {}
+        if ndcs:
+            names = dict(session.execute(select(Drug.ndc, Drug.name).where(Drug.ndc.in_(ndcs))).all())
+
+        trailing: dict[str, float] = {}
+        if ndcs:
+            cutoff = date.today() - timedelta(days=28)
+            tstmt = (
+                select(
+                    ConsumptionDaily.ndc,
+                    func.avg(ConsumptionDaily.qty_consumed),
+                )
+                .where(
+                    ConsumptionDaily.ndc.in_(ndcs),
+                    ConsumptionDaily.date >= cutoff,
+                    ConsumptionDaily.stockout.is_(False),
+                )
+                .group_by(ConsumptionDaily.ndc)
+            )
+            if facility_id is not None:
+                tstmt = tstmt.where(ConsumptionDaily.facility_id == facility_id)
+            for ndc, avg_qty in session.execute(tstmt):
+                if avg_qty is not None and float(avg_qty) > 0:
+                    trailing[ndc] = float(avg_qty)
+
+        map_sql = _map_values_sql(pairs)
+        totals_sql = text(
+            f"""
+            WITH map(rxcui, ndc) AS (
+              {map_sql}
+            ),
+            stock AS (
+              SELECT s.ndc, COALESCE(SUM(s.quantity), 0) AS quantity
+              FROM stock_snapshot s
+              WHERE (:facility_id IS NULL OR s.facility_id = :facility_id)
+              GROUP BY s.ndc
+            ),
+            par AS (
+              SELECT p.ndc, MIN(p.reorder_point) AS reorder_point
+              FROM par_level p
+              WHERE (:facility_id IS NULL OR p.facility_id = :facility_id)
+              GROUP BY p.ndc
+            ),
+            short AS (
+              SELECT se.ndc, se.status, se.source_id
+              FROM shortage_event se
+              WHERE se.status IS NULL
+                 OR lower(se.status) NOT IN ('resolved', 'discontinued')
+            ),
+            per_sku AS (
+              SELECT
+                f.rxcui,
+                BOOL_OR(
+                  s_short.source_id IS NOT NULL
+                  AND (s_short.status IS NULL
+                       OR lower(s_short.status) NOT IN ('resolved', 'discontinued'))
+                ) AS in_shortage,
+                BOOL_OR(
+                  s_short.source_id IS NOT NULL
+                  AND (s_short.status IS NULL
+                       OR lower(s_short.status) NOT IN ('resolved', 'discontinued'))
+                  AND (
+                    (par.reorder_point IS NOT NULL
+                     AND COALESCE(stock.quantity, 0) <= par.reorder_point)
+                    OR (par.reorder_point IS NULL AND COALESCE(stock.quantity, 0) = 0)
+                  )
+                ) AS uncovered
+              FROM formulary_item f
+              LEFT JOIN map ON map.rxcui = f.rxcui
+              LEFT JOIN stock ON stock.ndc = map.ndc
+              LEFT JOIN par ON par.ndc = map.ndc
+              LEFT JOIN short s_short ON s_short.ndc = map.ndc
+              GROUP BY f.rxcui
+            )
+            SELECT
+              (SELECT COUNT(*) FROM formulary_item)::int AS formulary_skus,
+              COUNT(*) FILTER (WHERE in_shortage)::int AS in_shortage,
+              COUNT(*) FILTER (WHERE uncovered)::int AS uncovered
+            FROM per_sku
+            """
+        )
+        totals_row = session.execute(totals_sql, {"facility_id": facility_id}).one()
+
+        items = []
+        for rxcui, ndc in pairs:
+            qty = int(stock.get(ndc, 0)) if ndc else 0
+            if ndc and ndc in shortages:
+                status, source_id = shortages[ndc]
+            else:
+                status, source_id = None, None
+            name = (names.get(ndc) if ndc else None) or shelf_name_for_rxcui(rxcui)
+            item = {
+                "rxcui": rxcui,
+                "ndc": ndc,
+                "name": name,
+                "quantity": qty,
+                "shortage_status": status,
+                "shortage_source_id": source_id,
+            }
+            mean = trailing.get(ndc) if ndc else None
+            if mean and mean > 0:
+                item["days_of_supply"] = float(math.ceil(qty / mean) if qty else 0)
+            else:
+                item["days_of_supply"] = None
+            items.append(item)
+
+        items.sort(key=lambda row: (row["rxcui"], row["ndc"] or ""))
+        return {
+            "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "uncovered_rule": "below_par",
+            "facility_id": facility_id,
+            "totals": {
+                "formulary_skus": int(totals_row[0] or 0),
+                "in_shortage": int(totals_row[1] or 0),
+                "uncovered": int(totals_row[2] or 0),
+            },
+            "items": items,
+        }
 
 
 app.include_router(api)

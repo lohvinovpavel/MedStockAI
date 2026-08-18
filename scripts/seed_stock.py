@@ -23,7 +23,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.demo_shelf import DASHBOARD_SHELF, shelf_stock_rows
+from medstock_shared.demo_shelf import DASHBOARD_SHELF, demo_shortage_rows, formulary_rxcuis, shelf_stock_rows
 from medstock_shared.demo_tenant import (
     FACILITIES,
     HOSPITAL_NAME,
@@ -32,7 +32,7 @@ from medstock_shared.demo_tenant import (
     location_for,
     upsert_registry,
 )
-from medstock_shared.models import Drug, FormularyItem, Hospital, ParLevel, StockBatch, StockSnapshot
+from medstock_shared.models import Drug, FormularyItem, Hospital, ParLevel, ShortageEvent, StockBatch, StockSnapshot
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
@@ -322,6 +322,8 @@ def main() -> int:
         )
         rows.extend(build_shelf_rows(hospital_id, fac_ids))
         formulary = [d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]]
+        formulary.extend(formulary_rxcuis())
+        formulary = list(dict.fromkeys(formulary))
         for item in DASHBOARD_SHELF:
             values = {
                 "ndc": item["ndc"],
@@ -330,7 +332,7 @@ def main() -> int:
                 "storage_min_c": item["storage_min_c"],
                 "storage_max_c": item["storage_max_c"],
                 "humidity_max_pct": item["humidity_max_pct"],
-                "raw": {"source": "demo-shelf"},
+                "raw": {"source": "demo-shelf", "rxcui": item["rxcui"]},
             }
             session.execute(
                 insert(Drug)
@@ -338,6 +340,15 @@ def main() -> int:
                 .on_conflict_do_update(index_elements=["ndc"], set_=values)
             )
         upsert(session, hospital_id, rows, formulary)
+        for row in demo_shortage_rows():
+            session.execute(
+                insert(ShortageEvent)
+                .values(**row)
+                .on_conflict_do_update(
+                    index_elements=["source_id"],
+                    set_={"ndc": row["ndc"], "status": row["status"], "raw": row["raw"]},
+                )
+            )
         session.commit()
     except Exception:
         session.rollback()
@@ -347,7 +358,8 @@ def main() -> int:
     print(
         f"upserted {len(rows)} stock line(s) "
         f"({len(DASHBOARD_SHELF)} of them the dashboard shelf), "
-        f"{len(formulary)} formulary rxcui(s) "
+        f"{len(formulary)} formulary rxcui(s), "
+        f"{len(demo_shortage_rows())} shortage event(s) "
         f"for hospital_id={hospital_id} facilities={','.join(OPERATED_CODES)}"
     )
     return 0

@@ -128,7 +128,9 @@ Order matters, because tenant data references real reference data:
 
 1. Run the real reference feeds first — `rxnorm`, `pricing`, `shortages`
 2. Create the demo hospital and its users, one per role
-3. Build a formulary from real NDCs actually present in `drug`
+3. Build a formulary from real NDCs actually present in `drug`, plus the
+   dashboard-page RxCUIs in `demo_shelf.py` (B6). `data/demo/formulary.csv` is
+   the same list the CSV import endpoint accepts.
 4. Load stock levels and **3 years of daily usage history** (`consumption_daily`) —
    `prediction` needs multi-winter history for annual seasonality to be learnable — plus
    90 days of hourly storage-condition telemetry (`location_condition`).
@@ -140,6 +142,8 @@ Order matters, because tenant data references real reference data:
    same-class donor so Warehouse charts are not empty for those SKUs.
    `scripts/seed_stock.py` upserts the same shelf (and UC-2 analogue NDCs)
    after clearing leftover lots, so a second run cannot stack quantities.
+   Wave 3 also plants `shortage_event` rows for Norepinephrine, Ceftriaxone
+   and Heparin (the mock shortage alerts) so B3 `uncovered` is a real claim.
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly

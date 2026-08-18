@@ -6,10 +6,11 @@ from importlib.metadata import version as pkg_version
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
-from medstock_shared.auth import Principal, require
+from medstock_shared.auth import PERMS, Principal, require
 from medstock_shared.config import settings
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import FormularyItem, StockSnapshot
+from medstock_shared.formulary import shelf_ndcs_for_rxcuis
+from medstock_shared.models import Facility, FormularyItem, StockSnapshot
 from medstock_shared.rxnorm import (
     ANALOGUE_CANDIDATE_LIMIT,
     RxNormError,
@@ -25,6 +26,7 @@ from medstock_shared.stock import stock_fields
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
+from app.availability import overlay_availability
 from app.copilot import copilot
 
 app = FastAPI(title="analogue")
@@ -107,6 +109,40 @@ def stock_totals_by_ndc(principal: Principal, ndcs: list[str]) -> dict[str, int]
             return {str(ndc): int(qty or 0) for ndc, qty in rows}
     except SQLAlchemyError:
         return {}
+
+
+def stock_qty_by_facility_ndc(principal: Principal, ndcs: list[str]) -> dict[tuple[int, str], int]:
+    """One grouped query for C5 — all candidate NDCs, all facilities."""
+    unique = list(dict.fromkeys(ndcs))
+    if not unique:
+        return {}
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        rows = session.execute(
+            select(
+                StockSnapshot.facility_id,
+                StockSnapshot.ndc,
+                func.coalesce(func.sum(StockSnapshot.quantity), 0),
+            )
+            .where(StockSnapshot.ndc.in_(unique), StockSnapshot.facility_id.isnot(None))
+            .group_by(StockSnapshot.facility_id, StockSnapshot.ndc)
+        ).all()
+        return {(int(fid), str(ndc)): int(qty or 0) for fid, ndc, qty in rows}
+
+
+def load_facilities(principal: Principal) -> list:
+    from types import SimpleNamespace
+
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        return [
+            SimpleNamespace(
+                id=row.id,
+                name=row.name,
+                lat=row.lat,
+                lon=row.lon,
+                operated=row.operated,
+            )
+            for row in session.scalars(select(Facility))
+        ]
 
 
 @drugs.get("/drugs/search")
@@ -279,6 +315,8 @@ def get_analogues(
         None,
         description="Drop candidates whose RxNorm IN list includes this RxCUI or name",
     ),
+    facility_id: int | None = Query(None),
+    operated_only: bool = Query(False),
     principal: Principal = Depends(require("drug:search")),
 ) -> dict:
     """UC-3/UC-4: analogue candidates ranked by hospital quantity.
@@ -368,6 +406,32 @@ def get_analogues(
     # response shape stable for clients/tests that assert exact keys.
     if exclude_ingredient and exclude_ingredient.strip():
         body["exclude_ingredient"] = exclude_ingredient.strip()
+    if facility_id is not None:
+        if "inventory:read" not in PERMS.get(principal.role, set()):
+            raise HTTPException(status_code=403, detail="forbidden")
+        overlay_map = {}
+        for row in items:
+            extra = shelf_ndcs_for_rxcuis([row["rxcui"]]).get(row["rxcui"], [])
+            overlay_map[row["rxcui"]] = list(
+                dict.fromkeys([*(ndc_map.get(row["rxcui"]) or []), *extra])
+            )
+        try:
+            facilities = load_facilities(principal)
+            origin = next((f for f in facilities if int(f.id) == int(facility_id)), None)
+            if origin is None:
+                raise HTTPException(status_code=404, detail="facility not found")
+            qty = stock_qty_by_facility_ndc(
+                principal,
+                [ndc for ndcs in overlay_map.values() for ndc in ndcs],
+            )
+            body["items"] = overlay_availability(
+                items, overlay_map, qty, facilities, origin, operated_only
+            )
+        except HTTPException:
+            raise
+        except SQLAlchemyError:
+            body["items"] = [{**row, "availability": None} for row in items]
+            body["stock_degraded"] = True
     return body
 
 

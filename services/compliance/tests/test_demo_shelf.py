@@ -123,6 +123,16 @@ def test_facility_profile_matches_mock_inventory_for():
     assert lot_for({"lot": "AMX-24118-B"}, "riverside") == "AMX-24118-B-DE"
 
 
+def test_dashboard_shelf_has_wave3_rxcuis_and_shortage_specs():
+    from medstock_shared.demo_shelf import DASHBOARD_SHELF, DEMO_SHORTAGE_SPECS, formulary_rxcuis
+
+    assert all(item.get("rxcui") for item in DASHBOARD_SHELF)
+    assert len(formulary_rxcuis()) == len(DASHBOARD_SHELF)
+    ids = {item["id"] for item in DASHBOARD_SHELF}
+    assert {s["id"] for s in DEMO_SHORTAGE_SPECS} == {"inv-003", "inv-005", "inv-010"}
+    assert all(s["id"] in ids for s in DEMO_SHORTAGE_SPECS)
+
+
 def test_the_seed_targets_a_constraint_that_still_exists():
     """`seed_stock.py` names a constraint in its ON CONFLICT clause, and a
     migration renamed it out from under the script.

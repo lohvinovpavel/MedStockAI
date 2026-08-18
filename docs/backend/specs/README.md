@@ -22,15 +22,15 @@ and what not to change, rather than restating shipped code.
 | [A4](A4-scope-enforcement-rls.md) | Scope enforcement and RLS | all seven | ✅ |
 | [B1](B1-facility-registry.md) | Facility registry | `warehouse` | ✅ |
 | [B2](B2-facility-scoped-stock.md) | Facility-scoped stock read | `inventory` | ✅ |
-| [B3](B3-exposure-query.md) | Exposure query | `inventory` | ❌ |
+| [B3](B3-exposure-query.md) | Exposure query | `inventory` | ✅ |
 | [B4](B4-batch-lot-receiving.md) | Batch / lot receiving and FEFO | `inventory` | ✅ |
 | [B5](B5-par-levels.md) | Par level / reorder point | `inventory` | ✅ |
-| [B6](B6-formulary-import.md) | Formulary import | `inventory` | ❌ |
+| [B6](B6-formulary-import.md) | Formulary import | `inventory` | ✅ |
 | [C1](C1-drug-search.md) | Drug search (UC-1) | `analogue` | ✅ |
 | [C2](C2-package-lookup.md) | Package lookup | `analogue` | ✅ |
 | [C3](C3-analogue-candidate-graph.md) | Analogue candidate graph | `analogue` | ✅ |
 | [C4](C4-ai-analogue-ranking.md) | AI analogue ranking | `analogue` | ✅ |
-| [C5](C5-local-availability-overlay.md) | Local availability overlay | `analogue` | ❌ |
+| [C5](C5-local-availability-overlay.md) | Local availability overlay | `analogue` | ✅ |
 | [C6](C6-substitution-safety.md) | Substitution safety check | `patient-profiling` | ✅ |
 | [D1](D1-certificate-status.md) | Certificate status | `compliance` | ✅ |
 | [D2](D2-on-demand-exploration.md) | On-demand exploration | `compliance` | ✅ |
@@ -59,7 +59,7 @@ previous wave lands.
 | 0 | `hospital_id` uuid migration (A4) | ✅ landed (`20260818_hospital_uuid`) |
 | 1 | B1 UI cutover, **H1** | ✅ landed. Sidebar reads `GET /warehouse/facilities`; audit trigger on `review_decision` |
 | 2 | A4 policies, **B2** `/items`, **B4**, **B5** | ✅ landed (`20260818_wave2_stock`). Inventory table is live; remaining mock is orders/shortages/copilot |
-| 3 | B3, B6, C5 | Reads on top of real stock. E1 already ships; shortage still mocks days-of-supply |
+| 3 | B3, B6, C5 | ✅ landed (`20260818_wave3`). Formulary CSV, exposure KPIs, analogue overlay on live `stock_snapshot`. Remaining mock is orders/shortages/copilot |
 | 4 | **F2**, G1 | Pricing and shortage matrix. E2/E3 live on `/forecasts` |
 | 5 | **F1**, **F3**, F4, G2 | The order pipeline, end to end |
 | 6 | D3, H2, I1, I2 | Export, provenance, copilot |

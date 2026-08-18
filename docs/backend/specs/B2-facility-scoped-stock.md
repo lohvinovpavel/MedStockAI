@@ -39,8 +39,8 @@ ATC code. `status` is derived per B5, never stored: `stockout | critical | norma
 3. The RxNorm lookup is a live NLM call **from the service**, never from the browser. On
    upstream failure, degrade to matching `stock_snapshot.ndc` directly and set
    `rxnorm_degraded: true` — a stock read must not 500 because NLM is down.
-4. `in_formulary` is a LEFT JOIN to `formulary_item`. Until B6 populates it every item is
-   `false`, and the response shape does not change.
+4. `in_formulary` is a LEFT JOIN to `formulary_item` (B6). Dashboard SKUs resolve via the
+   `demo_shelf` RxCUI map so live RxNorm is not required for the inventory badge.
 5. Default sort is status severity descending, then name. The client should not have to
    re-sort to show the worst first.
 6. `status` carries `par_defined: false` when no par row exists (B5) rather than guessing.

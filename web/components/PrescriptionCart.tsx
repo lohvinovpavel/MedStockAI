@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { StockBand } from "@/components/StockBand";
 import { apiFetch } from "@/lib/api";
+import { useFacility } from "@/lib/facility-context";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -77,6 +78,11 @@ type AnalogueHit = {
   stock_status?: string;
   reason?: string;
   citation?: string;
+  availability?: {
+    quantity: number;
+    unit: string;
+    nearest_with_stock: { name: string; quantity: number; distance_km: number } | null;
+  } | null;
 };
 
 type CartState = {
@@ -129,6 +135,7 @@ function inputToCodes(raw: string) {
 
 export function PrescriptionCart() {
   const { user } = useSession();
+  const { facility } = useFacility();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<DrugHit[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
@@ -368,7 +375,7 @@ export function PrescriptionCart() {
       }
       const data = await apiFetch(
         "analogue",
-        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}&exclude_ingredient=${encodeURIComponent(exclude)}`,
+        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}&exclude_ingredient=${encodeURIComponent(exclude)}&facility_id=${facility.id}`,
       );
       setAnalogues(data.items ?? []);
       setAnalogueUsedAi(Boolean(data.use_ai));
@@ -738,6 +745,16 @@ export function PrescriptionCart() {
                                   </span>
                                 </p>
                                 <p className="font-mono text-[11px] text-muted-foreground">RxCUI {a.rxcui}</p>
+                                {a.availability ? (
+                                  <p className="text-[11px] text-muted-foreground">
+                                    {a.availability.quantity > 0
+                                      ? `${a.availability.quantity} ${a.availability.unit} here`
+                                      : "Not stocked here"}
+                                    {a.availability.nearest_with_stock
+                                      ? ` · nearest ${a.availability.nearest_with_stock.name} (${a.availability.nearest_with_stock.distance_km} km)`
+                                      : ""}
+                                  </p>
+                                ) : null}
                                 {a.reason && <p className="text-xs">{a.reason}</p>}
                                 {a.citation && (
                                   <p className="text-[11px] text-muted-foreground">cite: {a.citation}</p>

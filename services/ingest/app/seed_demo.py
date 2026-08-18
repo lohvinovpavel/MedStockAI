@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from medstock_shared import engine
-from medstock_shared.demo_shelf import DASHBOARD_SHELF, shelf_stock_rows
+from medstock_shared.demo_shelf import DASHBOARD_SHELF, demo_shortage_rows, shelf_stock_rows
 from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
@@ -262,7 +262,8 @@ def _seed_forecast(
 
 def _seed_shortages(s: Session, drugs: list[dict]) -> int:
     """Plant an active shortage_event on the stockout-prone drugs so the
-    at-risk list's in_shortage flag has something true to say (issue #7).
+    at-risk list's in_shortage flag has something true to say (issue #7),
+    plus the three mock shortage-alert SKUs so B3 uncovered is a real claim.
     shortage_event is a global reference table; the ENVIRONMENT=demo gate in
     run() is what keeps this out of real databases."""
     planted = 0
@@ -280,6 +281,16 @@ def _seed_shortages(s: Session, drugs: list[dict]) -> int:
             .on_conflict_do_update(
                 index_elements=["source_id"],
                 set_={"ndc": drug["ndc"], "status": "Current"},
+            )
+        )
+        planted += 1
+    for row in demo_shortage_rows():
+        s.execute(
+            insert(ShortageEvent)
+            .values(**row)
+            .on_conflict_do_update(
+                index_elements=["source_id"],
+                set_={"ndc": row["ndc"], "status": row["status"], "raw": row["raw"]},
             )
         )
         planted += 1
@@ -326,17 +337,16 @@ def _overlay_dashboard_shelf(
             "storage_min_c": item["storage_min_c"],
             "storage_max_c": item["storage_max_c"],
             "humidity_max_pct": item["humidity_max_pct"],
-            "raw": {"source": "demo-shelf"},
+            "raw": {"source": "demo-shelf", "rxcui": item["rxcui"]},
         }
         s.execute(
             insert(Drug)
             .values(**drug_values)
             .on_conflict_do_update(index_elements=["ndc"], set_=drug_values)
         )
-        rxcui = donor["rxcui"]
         s.execute(
             insert(FormularyItem)
-            .values(hospital_id=hospital_id, rxcui=rxcui)
+            .values(hospital_id=hospital_id, rxcui=item["rxcui"])
             .on_conflict_do_nothing(index_elements=["hospital_id", "rxcui"])
         )
 
@@ -352,7 +362,7 @@ def _overlay_dashboard_shelf(
         donor = donor_by_class.get(item["storage_class"])
         if donor is None:
             continue
-        rxcui = donor["rxcui"]
+        rxcui = item["rxcui"]
         fac_code = id_by_fac[row["facility_id"]]
         qty = int(row["quantity"])
         for cons in cons_by_ndc[donor["ndc"]]:

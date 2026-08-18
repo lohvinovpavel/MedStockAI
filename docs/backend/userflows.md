@@ -53,20 +53,21 @@ split is:
 | Screen | Source of truth |
 |---|---|
 | Login, session, nav gating | Postgres via `auth` |
-| Analogues, Prescribe | Postgres + RxNorm (+ Gemini on Full) via `analogue` / `patients` |
+| Analogues, Prescribe | Postgres + RxNorm (+ Gemini on Full) via `analogue` / `patients`. Analogue list overlay is live `stock_snapshot` when `facility_id` is sent |
 | Warehouse | Postgres via `warehouse` |
 | Restock & Forecasts | Postgres via `prediction` |
 | Prognosis Review | Postgres via `patients` |
 | Certificate badges (any page that has an NDC) | Postgres via `compliance` |
 | Sidebar facility switcher | Postgres via `warehouse` (`GET /facilities?operated=true`; `code` is the client key) |
-| Inventory & Batches | Postgres via `inventory` (`GET /items`, `POST /batches`). Status is B5-derived; lot/expiry from B4 |
+| Inventory & Batches | Postgres via `inventory` (`GET /items`, `POST /batches`, `GET /exposure`). Status is B5-derived; lot/expiry from B4; `in_formulary` from B6 |
 | Purchase & Orders | `web/lib/mock-data.ts` + `OrdersProvider` memory; receiving-site picker is the live operated list |
 | Shortage Matrix | `web/lib/mock-data.ts` (keys aligned to B1 codes; distances still mock-from-Central until G1) |
 | Audit Log | Postgres via `compliance` `GET /audit` (certificate badge and DecisionTrail are also live). Empty until a `review_decision` is written. Export is still a toast (D3) |
 | Copilot cards | canned / `mock-data.ts` (certificate lookup is live) |
 
-Waves 3–5 in [specs/README.md](specs/README.md) are the remaining cutover. Do not delete
+Waves 4–5 in [specs/README.md](specs/README.md) are the remaining cutover. Do not delete
 `mock-data.ts` until orders, shortages and copilot have live APIs. Inventory already reads B4.
+Wave 3 cut over formulary, exposure, and the analogue availability overlay.
 
 ## Known gaps
 
