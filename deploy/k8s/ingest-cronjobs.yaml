@@ -254,7 +254,8 @@ spec:
 # Tier 3: CPIC gene-drug guidelines -> pgx_guideline.
 # Weekly. CPIC publishes on a slow cadence and the API is keyless, so this is
 # cheap; it runs before the prognosis job so both reference feeds are current
-# before anything reads them.
+# before anything reads them. Unlike faers below it does not depend on the
+# formulary, so it works on a brand-new environment before anything is stocked.
 #
 # Without this job pgx_guideline stays empty and stage 8 silently never runs —
 # the tier would be built, tested and permanently invisible.
@@ -275,7 +276,11 @@ spec:
           containers:
           - name: cpic
             image: ghcr.io/medstockai/ingest:latest
-            command: ["python", "-m", "app.cpic", "--formulary"]
+            # Deliberately NOT --formulary. The whole CPIC set is ~250 rows
+            # across ~40 drugs, so filtering saves nothing and silently empties
+            # the tier whenever the formulary has not been seeded yet or simply
+            # does not overlap CPIC's coverage.
+            command: ["python", "-m", "app.cpic"]
             env:
             - name: DATABASE_URL
               valueFrom:
@@ -290,8 +295,9 @@ spec:
 # plus two fixed, so --limit keeps a formulary sweep from eating the budget the
 # daily certification pass depends on.
 #
-# Same point as ingest-cpic: without this, adr_signal stays empty and stage 7a
-# never fires.
+# Unlike cpic this one *does* depend on the formulary — it costs a call per
+# drug, so it needs a drug list rather than "everything". Run seed-stock (or a
+# real formulary load) before it, or it has nothing to ask about.
 apiVersion: batch/v1
 kind: CronJob
 metadata:

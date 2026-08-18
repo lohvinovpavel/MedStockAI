@@ -27,6 +27,14 @@ Run the feeds once, by hand, after migrating.
 | `adr_signal` (Tier 1) | `ingest-faers` | Sundays 07:00 | — |
 | `drug_risk_profile` (PP-3) | `ingest-prognosis` | Sundays 06:00 | **`GEMINI_API_KEY`** |
 | `assessment_log` | written by `/assess` and `/cart-check` | on use | — |
+| `patient` (demo) | `seed-patients-job.yaml` | one-off | — |
+
+`ingest-faers` depends on the formulary — it costs one openFDA call per drug, so
+it needs a drug list rather than "everything". Seed stock before it or it has
+nothing to ask about. `ingest-cpic` deliberately does **not** filter by
+formulary: the whole CPIC set is ~250 rows, so filtering saves nothing and would
+silently empty Tier 3 on an environment whose shelf does not happen to overlap
+CPIC's ~40 covered drugs.
 
 Only the prognosis feed needs a model. Everything else is keyless: openFDA,
 CPIC, accessdata.fda.gov and a news index.
@@ -41,6 +49,10 @@ kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
 
 kubectl -n medstock apply -f deploy/k8s/seed-stock-job.yaml
 kubectl -n medstock wait --for=condition=complete job/seed-stock --timeout=300s
+
+# Demo patients for the prescribe cart. Invented people — see §6.
+kubectl -n medstock apply -f deploy/k8s/seed-patients-job.yaml
+kubectl -n medstock wait --for=condition=complete job/seed-patients --timeout=300s
 
 for feed in certification cpic faers import-alerts warning-letters news prognosis; do
   kubectl -n medstock create job "now-$feed" --from="cronjob/ingest-$feed"
@@ -95,7 +107,7 @@ export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medsto
 uv run alembic upgrade head
 
 cd services/ingest
-uv run python -m app.cpic --formulary
+uv run python -m app.cpic
 uv run python -m app.faers --formulary --limit 25
 uv run python -m app.import_alerts
 uv run python -m app.warning_letters
@@ -111,3 +123,35 @@ rather than as an empty table nobody questions.
 `settings.gemini_api_key` explicitly, so a key under the other spelling leaves
 it empty and every `ask_ai()` call fails with no useful message. See
 `.env.example`.
+
+
+---
+
+## 6. The demo patients, and the line they sit on
+
+`patient` is the one table in this system that stores a name and a date of
+birth — the documented PHI exception for the prescribe cart
+([phi-readiness.md](phi-readiness.md)). Everything downstream of it is fed a
+de-identified vector built at `/cart-check` time, and that boundary is the whole
+PHI argument.
+
+**So the seed is invented people and must stay invented.** Do not load real
+patients into a demo environment to make a screen look fuller. If a real
+integration is ever needed, the vector contract is the thing to implement, not
+this table.
+
+The two seeded patients carry deliberately contrasting genotypes, because that
+contrast *is* the Tier 3 demonstration:
+
+| Patient | Phenotype | Citalopram in the cart |
+|---|---|---|
+| Elena Vasquez | `CYP2C19:Poor Metabolizer` | **amber**, score 40, CPIC level A recommendation quoted |
+| Marcus Chen | `CYP2C19:Normal Metabolizer` | **green**, score 0, "CPIC advises standard dosing" |
+
+Marcus getting an explicit *standard dosing* line rather than silence is the
+point: it is how a reader tells "we checked the genotype and it is ordinary"
+from "nobody looked".
+
+Re-running the seed is safe. It skips patients that already exist and backfills
+a genotype onto any seeded before `pgx_phenotypes` existed, so an environment
+stood up earlier upgrades rather than staying half-configured.

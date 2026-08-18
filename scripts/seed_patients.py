@@ -22,6 +22,14 @@ from sqlalchemy import select
 
 DEFAULT_HOSPITAL_ID = "00000000-0000-0000-0000-000000000001"
 
+# Invented people. Nothing here belongs to anyone — the `patient` table is the
+# documented PHI exception for the prescribe demo (docs/phi-readiness.md), and
+# it stays populated by generated data only. Never load real patients here.
+#
+# `pgx_phenotypes` is what makes Tier 3 reachable in the demo. Without a
+# genotype on someone, stage 8 has nothing to match and the pharmacogenomic
+# tier is built, correct and invisible — which is exactly how PP-3 shipped.
+# The values are CPIC's own vocabulary; see PatientVector.pgx_phenotypes.
 DEMO_PATIENTS = (
     {
         "full_name": "Elena Vasquez",
@@ -29,6 +37,10 @@ DEMO_PATIENTS = (
         "blood_group": "A+",
         "allergy_codes": [],
         "condition_codes": ["avoid_caffeine"],
+        # A CYP2C19 poor metaboliser. Prescribe her an SSRI and CPIC's level A
+        # recommendation fires with a verbatim quote — the shortest path to
+        # seeing Tier 3 do something.
+        "pgx_phenotypes": ["CYP2C19:Poor Metabolizer"],
     },
     {
         "full_name": "Marcus Chen",
@@ -36,6 +48,11 @@ DEMO_PATIENTS = (
         "blood_group": "O-",
         "allergy_codes": ["penicillin"],
         "condition_codes": [],
+        # Normal metaboliser on the same gene, deliberately. The contrast is the
+        # demonstration: same drug, two patients, two different answers, and his
+        # comes back "standard dosing" rather than silence — which is how a
+        # reader tells "checked and fine" from "never looked".
+        "pgx_phenotypes": ["CYP2C19:Normal Metabolizer"],
     },
 )
 
@@ -48,6 +65,7 @@ def main() -> int:
 
     session = SessionLocal()
     created = 0
+    backfilled = 0
     try:
         for spec in DEMO_PATIENTS:
             existing = session.execute(
@@ -58,6 +76,12 @@ def main() -> int:
                 )
             ).scalar_one_or_none()
             if existing:
+                # Backfill a genotype onto a patient seeded before the column
+                # existed, so re-running this upgrades an environment instead of
+                # skipping it and leaving Tier 3 with nothing to match.
+                if not existing.pgx_phenotypes and spec.get("pgx_phenotypes"):
+                    existing.pgx_phenotypes = list(spec["pgx_phenotypes"])
+                    backfilled += 1
                 continue
             session.add(
                 Patient(
@@ -67,6 +91,7 @@ def main() -> int:
                     blood_group=spec["blood_group"],
                     allergy_codes=list(spec["allergy_codes"]),
                     condition_codes=list(spec["condition_codes"]),
+                    pgx_phenotypes=list(spec.get("pgx_phenotypes", [])),
                 )
             )
             created += 1
@@ -77,7 +102,7 @@ def main() -> int:
     finally:
         session.close()
 
-    print(f"seeded {created} patient(s) for hospital_id={hospital_id}")
+    print(f"seeded {created} patient(s), backfilled {backfilled}, hospital_id={hospital_id}")
     return 0
 
 
