@@ -9,8 +9,12 @@ This is the pattern every future AI feature in the system should copy, and it is
 why it is correct:
 
 - The model is a **closed-world filter**, not a generator. It receives candidates produced by
-  RxNorm graph traversal and keeps about five. Any rxcui it returns that is not already in
+  RxNorm graph traversal and keeps at most five. Any rxcui it returns that is not already in
   `by_rxcui` is discarded — it cannot invent a drug.
+- The analogue prompt must **not** ask Gemini to echo `source_text` into the JSON. `ask_ai`
+  injects the caller's `source_text` before `validate()`. Echoing a long assembled paragraph
+  produced invalid JSON, `AIError`, and a silent fallback to the unfiltered Full list — which
+  looks like Use AI did nothing.
 - `_citation_must_be_verbatim` in `shared/medstock_shared/ai_tasks.py` **strips** a hallucinated
   quote rather than rejecting the whole answer. Raising would fail `ask_ai`, drop back to the
   unfiltered list, and look like the AI did nothing; stripping keeps the filter and loses only

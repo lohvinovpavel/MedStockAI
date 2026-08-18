@@ -20,8 +20,8 @@ and what not to change, rather than restating shipped code.
 | [A2](A2-mfa-otp.md) | MFA / OTP step | `auth` | ❌ |
 | [A3](A3-session-identity.md) | Session identity | `auth` | ✅ |
 | [A4](A4-scope-enforcement-rls.md) | Scope enforcement and RLS | all seven | ⚠️ |
-| [B1](B1-facility-registry.md) | Facility registry | `warehouse` | ❌ |
-| [B2](B2-facility-scoped-stock.md) | Facility-scoped stock read | `inventory` | ⚠️ |
+| [B1](B1-facility-registry.md) | Facility registry | `warehouse` | ✅ |
+| [B2](B2-facility-scoped-stock.md) | Facility-scoped stock read | `inventory` | ⚠️ `/stock?rxcui=` only; no `/items` |
 | [B3](B3-exposure-query.md) | Exposure query | `inventory` | ❌ |
 | [B4](B4-batch-lot-receiving.md) | Batch / lot receiving and FEFO | `inventory` | ❌ |
 | [B5](B5-par-levels.md) | Par level / reorder point | `inventory` | ❌ |
@@ -35,16 +35,16 @@ and what not to change, rather than restating shipped code.
 | [D1](D1-certificate-status.md) | Certificate status | `compliance` | ✅ |
 | [D2](D2-on-demand-exploration.md) | On-demand exploration | `compliance` | ✅ |
 | [D3](D3-compliance-export.md) | Compliance export | `compliance` | ❌ |
-| [E1](E1-demand-forecast.md) | Demand forecast | `prediction` | ❌ |
-| [E2](E2-days-of-supply-at-risk.md) | Days of supply / at-risk | `prediction` | ❌ |
-| [E3](E3-surge-scenario.md) | Surge scenario | `prediction` | ❌ |
+| [E1](E1-demand-forecast.md) | Demand forecast | `prediction` | ✅ |
+| [E2](E2-days-of-supply-at-risk.md) | Days of supply / at-risk | `prediction` | ✅ |
+| [E3](E3-surge-scenario.md) | Surge scenario | `prediction` | ✅ |
 | [F1](F1-restock-recommendation.md) | Restock recommendation | `prediction` + `inventory` | ❌ |
 | [F2](F2-supplier-catalog.md) | Supplier and catalog | `warehouse` | ❌ |
 | [F3](F3-purchase-order-lifecycle.md) | Purchase order lifecycle | `inventory` | ❌ |
 | [F4](F4-order-history.md) | Order history query | `inventory` | ❌ |
 | [G1](G1-shortage-matrix.md) | Shortage matrix | `inventory` | ❌ |
 | [G2](G2-inter-facility-transfer.md) | Inter-facility transfer | `warehouse` | ❌ |
-| [H1](H1-append-only-audit-log.md) | Append-only audit log | Postgres trigger | ❌ |
+| [H1](H1-append-only-audit-log.md) | Append-only audit log | Postgres trigger | ✅ |
 | [H2](H2-ai-decision-provenance.md) | AI decision provenance | `shared/ai.py` | ❌ |
 | [I1](I1-copilot-tool-calling.md) | Copilot chat with tool calling | copilot gateway | ❌ |
 | [I2](I2-copilot-persistence.md) | Copilot conversation persistence | copilot gateway | ❌ |
@@ -56,11 +56,11 @@ previous wave lands.
 
 | Wave | Specs | Why here |
 |---|---|---|
-| 0 | `hospital_id` uuid migration (A4) | Ten new tables would inherit the wrong type |
-| 1 | **B1**, **H1** | Facility identity and the audit trigger block almost everything else |
-| 2 | A4 policies, **B2**, **B4**, **B5** | Real stock, real thresholds, tenant isolation |
-| 3 | B3, B6, C5, **E1** | Reads and forecasts on top of real stock |
-| 4 | E2, E3, **F2**, G1 | Metrics and pricing |
+| 0 | `hospital_id` uuid migration (A4) | ✅ landed (`20260818_hospital_uuid`). RLS policies still open |
+| 1 | B1 UI cutover, **H1** | ✅ landed. Sidebar reads `GET /warehouse/facilities`; audit trigger on `review_decision` |
+| 2 | A4 policies, **B2** `/items`, **B4**, **B5** | Real stock table, real thresholds, tenant isolation |
+| 3 | B3, B6, C5 | Reads on top of real stock. E1 already ships; inventory still mocks days-of-supply |
+| 4 | **F2**, G1 | Pricing and shortage matrix. E2/E3 live on `/forecasts` |
 | 5 | **F1**, **F3**, F4, G2 | The order pipeline, end to end |
 | 6 | D3, H2, I1, I2 | Export, provenance, copilot |
 

@@ -1,18 +1,20 @@
 # E1 — Demand forecast
 
-**Service:** `prediction` · **Flows:** 9, 12 · **Status:** ❌ — the service has only `/healthz`, `/readyz`, `/version`
+**Service:** `prediction` · **Flows:** 9, 12 · **Status:** ✅ issue #7 — `GET /forecast/{rxcui}` reads stored `forecast_point`; `POST /forecast/runs` writes a run (CronJob can wrap the same module later)
 **Depends on:** B1, B2, B4 · **Scope:** `forecast:read`
 
 ## Goal
 
-The forecast page advertises "Prophet v1.2", "XGBoost v0.9" and 94.2% confidence. None of it
-exists: `services/prediction/app/main.py` is three health endpoints, and the mock's confidence
-band is literally `forecast ± (3 + day * 0.6)`. Build the real thing — per facility and NDC,
-with honest quantile bands.
+The forecast page used to advertise "Prophet v1.2", "XGBoost v0.9" and 94.2% confidence.
+That is gone. `/forecasts` reads stored quantile rows from `forecast_point`.
 
 **This is not an LLM feature.** The `# prediction — Mykhailo` slot in
 `shared/medstock_shared/ai_tasks.py` is not where this goes. A language model cannot produce a
 reproducible p10/p90, and E3 and H2 both depend on reproducibility.
+
+> Implementation deviation: a GKE CronJob is still the target writer, but today
+> `POST /api/prediction/forecast/runs` runs the engine synchronously for the caller's
+> hospital. The GET path never fits a model (rule 5).
 
 ## Architecture
 

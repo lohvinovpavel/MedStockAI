@@ -19,8 +19,8 @@ from medstock_shared.certification import (
     ruleset,
     signal,
 )
-from medstock_shared.db import engine
-from medstock_shared.models import CertificationFinding, DrugCertification
+from medstock_shared.db import engine, session_scope
+from medstock_shared.models import AuditLogEntry, CertificationFinding, DrugCertification
 from sqlalchemy import case, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
@@ -283,3 +283,50 @@ def get_certificate(
             for f in findings
         ],
     }
+
+
+@app.get("/audit")
+def get_audit(
+    entity: str | None = Query(None),
+    entity_id: str | None = Query(None),
+    principal: Principal = Depends(require("audit:read")),
+) -> dict:
+    """H1 read path. Rows are inserted by `write_audit_entry()`, never here.
+
+    SET LOCAL ROLE app_role is load-bearing: docker/CI connect as a superuser
+    (`medstock`), and a superuser bypasses FORCE RLS. Switching role makes the
+    tenant policy the filter — no application `WHERE hospital_id`.
+    """
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        try:
+            session.execute(text("SET LOCAL ROLE app_role"))
+        except ProgrammingError as exc:
+            session.rollback()
+            raise HTTPException(status_code=503, detail="app_role is not configured") from exc
+        stmt = select(AuditLogEntry).order_by(AuditLogEntry.occurred_at.desc()).limit(200)
+        if entity:
+            stmt = stmt.where(AuditLogEntry.entity_type == entity)
+        if entity_id:
+            stmt = stmt.where(AuditLogEntry.entity_id == entity_id)
+        try:
+            rows = session.scalars(stmt).all()
+        except ProgrammingError as exc:
+            session.rollback()
+            raise HTTPException(status_code=503, detail="audit tables are not migrated") from exc
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "entity_type": row.entity_type,
+                    "entity_id": row.entity_id,
+                    "action": row.action,
+                    "actor_id": str(row.actor_id) if row.actor_id else None,
+                    "actor_system": row.actor_system,
+                    "before": row.before,
+                    "after": row.after,
+                    "ai_dedupe_key": row.ai_dedupe_key,
+                    "occurred_at": row.occurred_at.isoformat() if row.occurred_at else None,
+                }
+                for row in rows
+            ]
+        }

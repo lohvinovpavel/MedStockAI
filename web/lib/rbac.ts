@@ -24,10 +24,9 @@ export const ROLE_LABEL: Record<Role, string> = {
   physician: "Doctor",
 };
 
-// Page path -> roles allowed to land on it. Pages backed by a real service
-// (inventory, analogue, warehouse) mirror that service's PERMS grant;
-// orders/forecasts/shortages/audit have no backend yet, so this is the
-// product call from docs/rbac-matrix.md.
+// Pages backed by a real service (inventory, analogue, warehouse, audit)
+// mirror that service's PERMS grant; orders/shortages still have no backend,
+// so those rows are the product call from docs/rbac-matrix.md.
 const PAGE_ROLES: Record<string, Role[]> = {
   "/inventory": ["pharmacist", "physician", "director", "admin"],
   "/analogue": ["pharmacist", "physician", "director", "admin"],

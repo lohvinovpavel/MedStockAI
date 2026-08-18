@@ -22,14 +22,16 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
+from medstock_shared.demo_shelf import DASHBOARD_SHELF
 from medstock_shared.demo_tenant import (
     FACILITIES,
     HOSPITAL_NAME,
     LOCATIONS,
     OPERATED_CODES,
+    location_for,
     upsert_registry,
 )
-from medstock_shared.models import FormularyItem, Hospital, StockSnapshot
+from medstock_shared.models import Drug, FormularyItem, Hospital, StockSnapshot
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
@@ -60,34 +62,9 @@ DRUGS: tuple[dict, ...] = (
     {"rxcui": "200801", "name": "furosemide 20 MG Oral Tablet [Lasix]", "in_formulary": False},
 )
 
-# The SKUs the dashboard shelf shows (web/lib/mock-data.ts), pinned to this
-# list by services/compliance/tests/test_demo_shelf.py.
-#
-# Seeded by NDC rather than resolved through RxNorm like DRUGS above, because
-# these were chosen *as* NDCs: each is a real, currently-listed product picked so
-# COMP-1 has something genuine to say about it. Going back through an RxCUI would
-# hand back a different pack and lose exactly that.
-#
-# They belong in stock_snapshot because that is what `shelf_ndcs()` reads, and
-# the ingest-certification CronJob certifies the shelf. Without these rows the
-# daily job certifies drugs nobody can see and every badge on the dashboard sits
-# at "unknown".
-DASHBOARD_SHELF: tuple[dict, ...] = (
-    {"ndc": "62135009120", "name": "Amoxicillin/Clavulanate 875mg", "quantity": 900},
-    {"ndc": "16714097720", "name": "Propofol 1% Emulsion", "quantity": 250},
-    {"ndc": "82804006601", "name": "Ceftriaxone 1g", "quantity": 9},
-    {"ndc": "00487990130", "name": "Salbutamol 100mcg Inhaler", "quantity": 140},
-    {"ndc": "00338011220", "name": "Norepinephrine 4mg/4mL", "quantity": 60},
-    {"ndc": "00069406101", "name": "Azithromycin 250mg", "quantity": 420},
-    {"ndc": "00024586900", "name": "Insulin Glargine 100U/mL", "quantity": 75},
-    {"ndc": "63323041125", "name": "Midazolam 5mg/mL", "quantity": 180},
-    {"ndc": "00143938610", "name": "Paracetamol 1g IV", "quantity": 300},
-    {"ndc": "00338043304", "name": "Heparin Sodium 5000IU/mL", "quantity": 95},
-    # Obsolete in RxNorm, so the certification traffic light has a red to show.
-    # The two rows above were picked for open Class I recalls and both closed --
-    # the feed working, not failing, but it left the shelf with no red on it.
-    {"ndc": "76168080030", "name": "Carmellose Sodium 0.5% Eye Drops", "quantity": 62},
-)
+# The SKUs the dashboard shelf shows (web/lib/mock-data.ts). The NDC list is
+# pinned by services/compliance/tests/test_demo_shelf.py against demo_shelf.py
+# (imported above) so seed_demo can plant the same rows with consumption.
 
 # Optional `quantity` (all sites) and `sites` freeze demo stock; otherwise random
 # operated shelves from demo_tenant. 197603 is on live GET /analogues/212033
@@ -186,18 +163,19 @@ def build_shelf_rows(hospital_id: uuid.UUID, fac_ids: dict[str, int]) -> list[di
     CronJob certifies is exactly what the screen shows.
     """
     facility_id = fac_ids[SHELF_FACILITY]
-    rows = [
-        {
-            "hospital_id": hospital_id,
-            "ndc": drug["ndc"],
-            "facility_id": facility_id,
-            "location_id": SHELF_LOCATION,
-            "quantity": int(drug["quantity"]),
-        }
-        for drug in DASHBOARD_SHELF
-    ]
+    rows = []
     for drug in DASHBOARD_SHELF:
-        print(f"{drug['ndc']} {drug['name']}")
+        location_id = location_for(SHELF_FACILITY, drug["storage_class"]) or SHELF_LOCATION
+        rows.append(
+            {
+                "hospital_id": hospital_id,
+                "ndc": drug["ndc"],
+                "facility_id": facility_id,
+                "location_id": location_id,
+                "quantity": int(drug["quantity"]),
+            }
+        )
+        print(f"{drug['ndc']} {drug['name']} → {SHELF_FACILITY}/{location_id}")
     return rows
 
 
@@ -266,6 +244,21 @@ def main() -> int:
         rows.extend(build_stock_rows(hospital_id, ANALOGUE_DRUGS, rng, fac_ids, demo_edges=False))
         rows.extend(build_shelf_rows(hospital_id, fac_ids))
         formulary = [d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]]
+        for item in DASHBOARD_SHELF:
+            values = {
+                "ndc": item["ndc"],
+                "name": item["name"],
+                "storage_class": item["storage_class"],
+                "storage_min_c": item["storage_min_c"],
+                "storage_max_c": item["storage_max_c"],
+                "humidity_max_pct": item["humidity_max_pct"],
+                "raw": {"source": "demo-shelf"},
+            }
+            session.execute(
+                insert(Drug)
+                .values(**values)
+                .on_conflict_do_update(index_elements=["ndc"], set_=values)
+            )
         upsert(session, hospital_id, rows, formulary)
         session.commit()
     except Exception:

@@ -36,16 +36,17 @@ export interface Facility {
   operated: boolean; // true = we hold stock here and can switch to it
 }
 
-// Single source of truth for facility names across the app. Sites we
-// operate can be selected in the sidebar switcher; partner sites are
-// visible in the shortage matrix and analogue lookups but not operable.
+// Single source of truth for mock inventory/orders/shortage keys. Ids are
+// B1 `facility.code` values so the sidebar (live warehouse API) and these
+// mock screens share a key without a translation table. The switcher itself
+// does not read this list.
 export const facilities: Facility[] = [
-  { id: "fac-central", name: "Central Hospital", type: "Hospital", distanceKm: 0, operated: true },
-  { id: "fac-riverside", name: "Riverside Outpatient", type: "Clinic", distanceKm: 19, operated: true },
-  { id: "fac-westend", name: "West End Community", type: "Clinic", distanceKm: 41, operated: true },
-  { id: "fac-warehouse-n", name: "Regional Warehouse North", type: "Warehouse", distanceKm: 34, operated: true },
-  { id: "fac-stluke", name: "St. Luke Hospital", type: "Hospital", distanceKm: 12, operated: false },
-  { id: "fac-mercy", name: "Mercy Pharmacy Network", type: "Pharmacy", distanceKm: 27, operated: false },
+  { id: "central", name: "Central Hospital", type: "Hospital", distanceKm: 0, operated: true },
+  { id: "riverside", name: "Riverside Outpatient", type: "Clinic", distanceKm: 19, operated: true },
+  { id: "westend", name: "West End Community", type: "Clinic", distanceKm: 41, operated: true },
+  { id: "warehouse-north", name: "Regional Warehouse North", type: "Warehouse", distanceKm: 34, operated: true },
+  { id: "st-luke", name: "St. Luke Hospital", type: "Hospital", distanceKm: 12, operated: false },
+  { id: "mercy", name: "Mercy Pharmacy Network", type: "Pharmacy", distanceKm: 27, operated: false },
 ];
 
 export const operatedFacilities = facilities.filter((f) => f.operated);
@@ -122,7 +123,7 @@ export { daysOfSupply };
 export const inventory: InventoryItem[] = [
   {
     id: "inv-001",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Amoxicillin/Clavulanate 875mg",
     form: "Film-coated tablet",
     inn: "Amoxicillin, Clavulanic acid",
@@ -137,15 +138,15 @@ export const inventory: InventoryItem[] = [
     certAuthority: "FDA",
     certNumber: "NDA-050760-A2",
     analogues: [
-      { id: "an-01", drugName: "Co-Amoxiclav 875/125mg", inn: "Amoxicillin, Clavulanic acid", unit: "boxes", rxcui: "562251", matchScore: 98, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 340, "fac-riverside": 0, "fac-westend": 48, "fac-warehouse-n": 1200, "fac-stluke": 210, "fac-mercy": 64 } },
-      { id: "an-02", drugName: "Augmentin 875mg", inn: "Amoxicillin, Clavulanic acid", unit: "boxes", rxcui: "562508", matchScore: 96, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 96, "fac-riverside": 30, "fac-westend": 0, "fac-warehouse-n": 640, "fac-stluke": 0, "fac-mercy": 120 } },
-      { id: "an-03", drugName: "Amoxicillin 875mg (no clavulanate)", inn: "Amoxicillin", unit: "boxes", rxcui: "308191", matchScore: 74, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 220, "fac-riverside": 85, "fac-westend": 60, "fac-warehouse-n": 900, "fac-stluke": 40, "fac-mercy": 0 } },
-      { id: "an-04", drugName: "Cefuroxime 500mg", inn: "Cefuroxime axetil", unit: "boxes", rxcui: "309089", matchScore: 61, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 25, "fac-warehouse-n": 310, "fac-stluke": 90, "fac-mercy": 44 } },
+      { id: "an-01", drugName: "Co-Amoxiclav 875/125mg", inn: "Amoxicillin, Clavulanic acid", unit: "boxes", rxcui: "562251", matchScore: 98, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 340, "riverside": 0, "westend": 48, "warehouse-north": 1200, "st-luke": 210, "mercy": 64 } },
+      { id: "an-02", drugName: "Augmentin 875mg", inn: "Amoxicillin, Clavulanic acid", unit: "boxes", rxcui: "562508", matchScore: 96, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 96, "riverside": 30, "westend": 0, "warehouse-north": 640, "st-luke": 0, "mercy": 120 } },
+      { id: "an-03", drugName: "Amoxicillin 875mg (no clavulanate)", inn: "Amoxicillin", unit: "boxes", rxcui: "308191", matchScore: 74, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "central": 220, "riverside": 85, "westend": 60, "warehouse-north": 900, "st-luke": 40, "mercy": 0 } },
+      { id: "an-04", drugName: "Cefuroxime 500mg", inn: "Cefuroxime axetil", unit: "boxes", rxcui: "309089", matchScore: 61, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "central": 0, "riverside": 0, "westend": 25, "warehouse-north": 310, "st-luke": 90, "mercy": 44 } },
     ],
   },
   {
     id: "inv-002",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Propofol 1% Emulsion",
     form: "IV emulsion, 20mL ampoule",
     inn: "Propofol",
@@ -160,14 +161,14 @@ export const inventory: InventoryItem[] = [
     certAuthority: "EMA",
     certNumber: "EU/1/19/1156",
     analogues: [
-      { id: "an-05", drugName: "Diprivan 1%", inn: "Propofol", unit: "ampoules", rxcui: "203155", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 60, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 480, "fac-stluke": 120, "fac-mercy": 0 } },
-      { id: "an-06", drugName: "Propofol-Lipuro 1%", inn: "Propofol", unit: "ampoules", rxcui: "1010600", matchScore: 94, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 260, "fac-stluke": 75, "fac-mercy": 0 } },
-      { id: "an-07", drugName: "Etomidate 2mg/mL", inn: "Etomidate", unit: "ampoules", rxcui: "310798", matchScore: 58, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "fac-central": 40, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 150, "fac-stluke": 30, "fac-mercy": 0 } },
+      { id: "an-05", drugName: "Diprivan 1%", inn: "Propofol", unit: "ampoules", rxcui: "203155", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 60, "riverside": 0, "westend": 0, "warehouse-north": 480, "st-luke": 120, "mercy": 0 } },
+      { id: "an-06", drugName: "Propofol-Lipuro 1%", inn: "Propofol", unit: "ampoules", rxcui: "1010600", matchScore: 94, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "central": 0, "riverside": 0, "westend": 0, "warehouse-north": 260, "st-luke": 75, "mercy": 0 } },
+      { id: "an-07", drugName: "Etomidate 2mg/mL", inn: "Etomidate", unit: "ampoules", rxcui: "310798", matchScore: 58, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "central": 40, "riverside": 0, "westend": 0, "warehouse-north": 150, "st-luke": 30, "mercy": 0 } },
     ],
   },
   {
     id: "inv-003",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Ceftriaxone 1g",
     form: "Powder for injection, vial",
     inn: "Ceftriaxone sodium",
@@ -182,15 +183,15 @@ export const inventory: InventoryItem[] = [
     certAuthority: "FDA",
     certNumber: "ANDA-065432 (renewal filed)",
     analogues: [
-      { id: "an-08", drugName: "Rocephin 1g", inn: "Ceftriaxone sodium", unit: "vials", rxcui: "309090", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 4, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 180, "fac-stluke": 210, "fac-mercy": 35 } },
-      { id: "an-09", drugName: "Ceftriaxone 1g (generic)", inn: "Ceftriaxone sodium", unit: "vials", rxcui: "1665088", matchScore: 97, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "fac-central": 0, "fac-riverside": 22, "fac-westend": 0, "fac-warehouse-n": 540, "fac-stluke": 160, "fac-mercy": 90 } },
-      { id: "an-10", drugName: "Cefotaxime 1g", inn: "Cefotaxime sodium", unit: "vials", rxcui: "309073", matchScore: 82, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 65, "fac-riverside": 0, "fac-westend": 18, "fac-warehouse-n": 300, "fac-stluke": 0, "fac-mercy": 0 } },
-      { id: "an-11", drugName: "Cefepime 1g", inn: "Cefepime hydrochloride", unit: "vials", rxcui: "309062", matchScore: 68, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 120, "fac-stluke": 55, "fac-mercy": 0 } },
+      { id: "an-08", drugName: "Rocephin 1g", inn: "Ceftriaxone sodium", unit: "vials", rxcui: "309090", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 4, "riverside": 0, "westend": 0, "warehouse-north": 180, "st-luke": 210, "mercy": 35 } },
+      { id: "an-09", drugName: "Ceftriaxone 1g (generic)", inn: "Ceftriaxone sodium", unit: "vials", rxcui: "1665088", matchScore: 97, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "central": 0, "riverside": 22, "westend": 0, "warehouse-north": 540, "st-luke": 160, "mercy": 90 } },
+      { id: "an-10", drugName: "Cefotaxime 1g", inn: "Cefotaxime sodium", unit: "vials", rxcui: "309073", matchScore: 82, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "central": 65, "riverside": 0, "westend": 18, "warehouse-north": 300, "st-luke": 0, "mercy": 0 } },
+      { id: "an-11", drugName: "Cefepime 1g", inn: "Cefepime hydrochloride", unit: "vials", rxcui: "309062", matchScore: 68, equivalence: "same-class", source: "ATC/WHO", stockByFacility: { "central": 0, "riverside": 0, "westend": 0, "warehouse-north": 120, "st-luke": 55, "mercy": 0 } },
     ],
   },
   {
     id: "inv-004",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Salbutamol 100mcg Inhaler",
     form: "Pressurized MDI",
     inn: "Salbutamol sulfate",
@@ -208,7 +209,7 @@ export const inventory: InventoryItem[] = [
   },
   {
     id: "inv-005",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Norepinephrine 4mg/4mL",
     form: "IV concentrate, ampoule",
     inn: "Norepinephrine bitartrate",
@@ -223,14 +224,14 @@ export const inventory: InventoryItem[] = [
     certAuthority: "EMA",
     certNumber: "EU/1/17/0442",
     analogues: [
-      { id: "an-12", drugName: "Levophed 4mg/4mL", inn: "Norepinephrine bitartrate", unit: "ampoules", rxcui: "242969", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 48, "fac-stluke": 0, "fac-mercy": 0 } },
-      { id: "an-13", drugName: "Phenylephrine 10mg/mL", inn: "Phenylephrine hydrochloride", unit: "ampoules", rxcui: "1114874", matchScore: 71, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 90, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 320, "fac-stluke": 60, "fac-mercy": 0 } },
-      { id: "an-14", drugName: "Vasopressin 20U/mL", inn: "Vasopressin", unit: "ampoules", rxcui: "1546028", matchScore: 64, equivalence: "same-class", source: "OpenFDA", stockByFacility: { "fac-central": 24, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 110, "fac-stluke": 40, "fac-mercy": 0 } },
+      { id: "an-12", drugName: "Levophed 4mg/4mL", inn: "Norepinephrine bitartrate", unit: "ampoules", rxcui: "242969", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 0, "riverside": 0, "westend": 0, "warehouse-north": 48, "st-luke": 0, "mercy": 0 } },
+      { id: "an-13", drugName: "Phenylephrine 10mg/mL", inn: "Phenylephrine hydrochloride", unit: "ampoules", rxcui: "1114874", matchScore: 71, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "central": 90, "riverside": 0, "westend": 0, "warehouse-north": 320, "st-luke": 60, "mercy": 0 } },
+      { id: "an-14", drugName: "Vasopressin 20U/mL", inn: "Vasopressin", unit: "ampoules", rxcui: "1546028", matchScore: 64, equivalence: "same-class", source: "OpenFDA", stockByFacility: { "central": 24, "riverside": 0, "westend": 0, "warehouse-north": 110, "st-luke": 40, "mercy": 0 } },
     ],
   },
   {
     id: "inv-006",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Azithromycin 250mg",
     form: "Film-coated tablet",
     inn: "Azithromycin",
@@ -248,7 +249,7 @@ export const inventory: InventoryItem[] = [
   },
   {
     id: "inv-007",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Insulin Glargine 100U/mL",
     form: "Prefilled pen, 3mL",
     inn: "Insulin glargine",
@@ -263,14 +264,14 @@ export const inventory: InventoryItem[] = [
     certAuthority: "EMA",
     certNumber: "EU/1/00/134 (lapsed)",
     analogues: [
-      { id: "an-15", drugName: "Lantus SoloStar", inn: "Insulin glargine", unit: "pens", rxcui: "1157459", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 55, "fac-riverside": 40, "fac-westend": 12, "fac-warehouse-n": 380, "fac-stluke": 70, "fac-mercy": 150 } },
-      { id: "an-16", drugName: "Toujeo 300U/mL", inn: "Insulin glargine", unit: "pens", rxcui: "1605101", matchScore: 88, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "fac-central": 0, "fac-riverside": 18, "fac-westend": 0, "fac-warehouse-n": 140, "fac-stluke": 0, "fac-mercy": 60 } },
-      { id: "an-17", drugName: "Insulin Detemir 100U/mL", inn: "Insulin detemir", unit: "pens", rxcui: "285018", matchScore: 76, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 30, "fac-riverside": 0, "fac-westend": 8, "fac-warehouse-n": 90, "fac-stluke": 25, "fac-mercy": 0 } },
+      { id: "an-15", drugName: "Lantus SoloStar", inn: "Insulin glargine", unit: "pens", rxcui: "1157459", matchScore: 99, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 55, "riverside": 40, "westend": 12, "warehouse-north": 380, "st-luke": 70, "mercy": 150 } },
+      { id: "an-16", drugName: "Toujeo 300U/mL", inn: "Insulin glargine", unit: "pens", rxcui: "1605101", matchScore: 88, equivalence: "bioequivalent", source: "OpenFDA", stockByFacility: { "central": 0, "riverside": 18, "westend": 0, "warehouse-north": 140, "st-luke": 0, "mercy": 60 } },
+      { id: "an-17", drugName: "Insulin Detemir 100U/mL", inn: "Insulin detemir", unit: "pens", rxcui: "285018", matchScore: 76, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "central": 30, "riverside": 0, "westend": 8, "warehouse-north": 90, "st-luke": 25, "mercy": 0 } },
     ],
   },
   {
     id: "inv-008",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Midazolam 5mg/mL",
     form: "Injection, 3mL ampoule",
     inn: "Midazolam",
@@ -288,7 +289,7 @@ export const inventory: InventoryItem[] = [
   },
   {
     id: "inv-009",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Paracetamol 1g IV",
     form: "Infusion bag, 100mL",
     inn: "Paracetamol",
@@ -307,7 +308,7 @@ export const inventory: InventoryItem[] = [
   },
   {
     id: "inv-010",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Heparin Sodium 5000IU/mL",
     form: "Injection, 5mL vial",
     inn: "Heparin sodium",
@@ -323,9 +324,9 @@ export const inventory: InventoryItem[] = [
     certAuthority: "EMA",
     certNumber: "EU/1/12/778 (renewal filed)",
     analogues: [
-      { id: "an-18", drugName: "Heparin Sodium (generic) 5000IU/mL", inn: "Heparin sodium", unit: "vials", rxcui: "1361574", matchScore: 98, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "fac-central": 22, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 260, "fac-stluke": 12, "fac-mercy": 64 } },
-      { id: "an-19", drugName: "Enoxaparin 40mg/0.4mL", inn: "Enoxaparin sodium", unit: "syringes", rxcui: "854235", matchScore: 79, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 140, "fac-riverside": 55, "fac-westend": 30, "fac-warehouse-n": 700, "fac-stluke": 95, "fac-mercy": 210 } },
-      { id: "an-20", drugName: "Fondaparinux 2.5mg", inn: "Fondaparinux sodium", unit: "syringes", rxcui: "321208", matchScore: 63, equivalence: "same-class", source: "OpenFDA", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 85, "fac-stluke": 20, "fac-mercy": 0 } },
+      { id: "an-18", drugName: "Heparin Sodium (generic) 5000IU/mL", inn: "Heparin sodium", unit: "vials", rxcui: "1361574", matchScore: 98, equivalence: "bioequivalent", source: "RxNorm", stockByFacility: { "central": 22, "riverside": 0, "westend": 0, "warehouse-north": 260, "st-luke": 12, "mercy": 64 } },
+      { id: "an-19", drugName: "Enoxaparin 40mg/0.4mL", inn: "Enoxaparin sodium", unit: "syringes", rxcui: "854235", matchScore: 79, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "central": 140, "riverside": 55, "westend": 30, "warehouse-north": 700, "st-luke": 95, "mercy": 210 } },
+      { id: "an-20", drugName: "Fondaparinux 2.5mg", inn: "Fondaparinux sodium", unit: "syringes", rxcui: "321208", matchScore: 63, equivalence: "same-class", source: "OpenFDA", stockByFacility: { "central": 0, "riverside": 0, "westend": 0, "warehouse-north": 85, "st-luke": 20, "mercy": 0 } },
     ],
   },
   {
@@ -339,7 +340,7 @@ export const inventory: InventoryItem[] = [
     // obsolete NDC stays obsolete, so this row is a good deal more stable than
     // a recall, which closes.
     id: "inv-011",
-    facilityId: "fac-central",
+    facilityId: "central",
     drugName: "Carmellose Sodium 0.5% Eye Drops",
     form: "Ophthalmic solution, 10mL",
     inn: "Carmellose sodium",
@@ -362,14 +363,14 @@ export const inventory: InventoryItem[] = [
 // holds bulk with a slow burn. Derived from the canonical list above so the
 // deliberate "story" rows (pending certs, shortages) survive at Central.
 const FACILITY_PROFILE: Record<string, { stockFactor: number; burnFactor: number; skuFactor: number; absent: string[] }> = {
-  "fac-central": { stockFactor: 1, burnFactor: 1, skuFactor: 1, absent: [] },
-  "fac-riverside": { stockFactor: 0.35, burnFactor: 0.4, skuFactor: 0.38, absent: ["inv-002", "inv-005"] },
-  "fac-westend": { stockFactor: 0.22, burnFactor: 0.3, skuFactor: 0.26, absent: ["inv-002", "inv-005", "inv-008"] },
-  "fac-warehouse-n": { stockFactor: 7, burnFactor: 0.15, skuFactor: 1.6, absent: ["inv-007"] },
+  "central": { stockFactor: 1, burnFactor: 1, skuFactor: 1, absent: [] },
+  "riverside": { stockFactor: 0.35, burnFactor: 0.4, skuFactor: 0.38, absent: ["inv-002", "inv-005"] },
+  "westend": { stockFactor: 0.22, burnFactor: 0.3, skuFactor: 0.26, absent: ["inv-002", "inv-005", "inv-008"] },
+  "warehouse-north": { stockFactor: 7, burnFactor: 0.15, skuFactor: 1.6, absent: ["inv-007"] },
 };
 
 export function inventoryFor(facilityId: string): InventoryItem[] {
-  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["fac-central"];
+  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["central"];
   const suffix = facilityId.slice(-2).toUpperCase();
   return inventory
     .filter((item) => !profile.absent.includes(item.id))
@@ -378,7 +379,7 @@ export function inventoryFor(facilityId: string): InventoryItem[] {
       facilityId,
       currentStock: Math.max(0, Math.round(item.currentStock * profile.stockFactor)),
       dailyBurnRate: Math.max(1, Math.round(item.dailyBurnRate * profile.burnFactor)),
-      batchNumber: facilityId === "fac-central" ? item.batchNumber : `${item.batchNumber}-${suffix}`,
+      batchNumber: facilityId === "central" ? item.batchNumber : `${item.batchNumber}-${suffix}`,
     }));
 }
 
@@ -393,7 +394,7 @@ export interface InventoryKpis {
 // tiles actually change when you switch site instead of lying.
 export function inventoryKpisFor(facilityId: string): InventoryKpis {
   const items = inventoryFor(facilityId);
-  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["fac-central"];
+  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["central"];
   return {
     totalSkus: Math.round(1240 * profile.skuFactor),
     criticalStock: items.filter((i) => stockRisk(i) === "critical").length,
@@ -632,7 +633,7 @@ export function forecastFor(facilityId: string, itemId: string): ScaledForecast 
   const meta = forecastModels.find((m) => m.itemId === itemId);
   if (!item || !meta) return null;
 
-  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["fac-central"];
+  const profile = FACILITY_PROFILE[facilityId] ?? FACILITY_PROFILE["central"];
   const scale = (n: number | null) => (n == null ? null : Math.round(n * profile.burnFactor));
   const series = meta.series.map((p) => ({
     date: p.date,
@@ -681,15 +682,15 @@ export interface FacilityStockRow {
 // site for that alert, not that they hold zero stock.
 const PARTNER_SHORTAGE_STOCK: Record<string, Record<string, { units: number; daysOfSupply: number }>> = {
   "sa-01": {
-    "fac-stluke": { units: 0, daysOfSupply: 0 },
-    "fac-mercy": { units: 0, daysOfSupply: 0 },
+    "st-luke": { units: 0, daysOfSupply: 0 },
+    "mercy": { units: 0, daysOfSupply: 0 },
   },
   "sa-02": {
-    "fac-stluke": { units: 210, daysOfSupply: 70 },
+    "st-luke": { units: 210, daysOfSupply: 70 },
   },
   "sa-03": {
-    "fac-stluke": { units: 12, daysOfSupply: 8 },
-    "fac-mercy": { units: 64, daysOfSupply: 61 },
+    "st-luke": { units: 12, daysOfSupply: 8 },
+    "mercy": { units: 64, daysOfSupply: 61 },
   },
 };
 
@@ -809,12 +810,12 @@ export function orderTotal(order: Pick<PurchaseOrder, "quantity" | "unitCost" | 
 // first load; new orders from the forecast page and the order form are
 // prepended to this in OrdersProvider.
 export const seedOrders: PurchaseOrder[] = [
-  { id: "PO-2026-0148", facilityId: "fac-central", supplierId: "sup-europharm", drugId: "inv-005", drugName: "Norepinephrine 4mg/4mL", quantity: 120, unit: "ampoules", unitCost: 24.8, shipping: 210, status: "in_transit", source: "ai_suggestion", createdAt: iso(addDays(today, -2)), expectedDelivery: iso(addDays(today, 1)), note: "Expedited against FDA national backorder." },
-  { id: "PO-2026-0147", facilityId: "fac-central", supplierId: "sup-pharmasource", drugId: "inv-003", drugName: "Ceftriaxone 1g", quantity: 300, unit: "vials", unitCost: 8.9, shipping: 120, status: "in_transit", source: "manual", createdAt: iso(addDays(today, -3)), expectedDelivery: iso(addDays(today, 2)) },
-  { id: "PO-2026-0146", facilityId: "fac-riverside", supplierId: "sup-meditech", drugId: "inv-001", drugName: "Amoxicillin/Clavulanate 875mg", quantity: 220, unit: "boxes", unitCost: 11.8, shipping: 80, status: "placed", source: "manual", createdAt: iso(addDays(today, -4)), expectedDelivery: iso(addDays(today, 3)) },
-  { id: "PO-2026-0145", facilityId: "fac-central", supplierId: "sup-pharmasource", drugId: "inv-010", drugName: "Heparin Sodium 5000IU/mL", quantity: 180, unit: "vials", unitCost: 9.75, shipping: 120, status: "delivered", source: "ai_suggestion", createdAt: iso(addDays(today, -12)), expectedDelivery: iso(addDays(today, -6)), note: "Generated from 91.5% confidence forecast." },
-  { id: "PO-2026-0144", facilityId: "fac-warehouse-n", supplierId: "sup-nordic", drugId: "inv-006", drugName: "Azithromycin 250mg", quantity: 1400, unit: "boxes", unitCost: 5.7, shipping: 45, status: "delivered", source: "manual", createdAt: iso(addDays(today, -16)), expectedDelivery: iso(addDays(today, -4)) },
-  { id: "PO-2026-0143", facilityId: "fac-westend", supplierId: "sup-meditech", drugId: "inv-004", drugName: "Salbutamol 100mcg Inhaler", quantity: 90, unit: "inhalers", unitCost: 15.1, shipping: 80, status: "delivered", source: "manual", createdAt: iso(addDays(today, -21)), expectedDelivery: iso(addDays(today, -13)) },
-  { id: "PO-2026-0142", facilityId: "fac-central", supplierId: "sup-europharm", drugId: "inv-007", drugName: "Insulin Glargine 100U/mL", quantity: 60, unit: "pens", unitCost: 39.2, shipping: 210, status: "cancelled", source: "manual", createdAt: iso(addDays(today, -24)), expectedDelivery: iso(addDays(today, -20)), note: "Cancelled — EMA certificate lapsed before dispatch." },
-  { id: "PO-2026-0141", facilityId: "fac-riverside", supplierId: "sup-pharmasource", drugId: "inv-009", drugName: "Paracetamol 1g IV", quantity: 500, unit: "bags", unitCost: 3.2, shipping: 120, status: "delivered", source: "ai_suggestion", createdAt: iso(addDays(today, -29)), expectedDelivery: iso(addDays(today, -23)) },
+  { id: "PO-2026-0148", facilityId: "central", supplierId: "sup-europharm", drugId: "inv-005", drugName: "Norepinephrine 4mg/4mL", quantity: 120, unit: "ampoules", unitCost: 24.8, shipping: 210, status: "in_transit", source: "ai_suggestion", createdAt: iso(addDays(today, -2)), expectedDelivery: iso(addDays(today, 1)), note: "Expedited against FDA national backorder." },
+  { id: "PO-2026-0147", facilityId: "central", supplierId: "sup-pharmasource", drugId: "inv-003", drugName: "Ceftriaxone 1g", quantity: 300, unit: "vials", unitCost: 8.9, shipping: 120, status: "in_transit", source: "manual", createdAt: iso(addDays(today, -3)), expectedDelivery: iso(addDays(today, 2)) },
+  { id: "PO-2026-0146", facilityId: "riverside", supplierId: "sup-meditech", drugId: "inv-001", drugName: "Amoxicillin/Clavulanate 875mg", quantity: 220, unit: "boxes", unitCost: 11.8, shipping: 80, status: "placed", source: "manual", createdAt: iso(addDays(today, -4)), expectedDelivery: iso(addDays(today, 3)) },
+  { id: "PO-2026-0145", facilityId: "central", supplierId: "sup-pharmasource", drugId: "inv-010", drugName: "Heparin Sodium 5000IU/mL", quantity: 180, unit: "vials", unitCost: 9.75, shipping: 120, status: "delivered", source: "ai_suggestion", createdAt: iso(addDays(today, -12)), expectedDelivery: iso(addDays(today, -6)), note: "Generated from 91.5% confidence forecast." },
+  { id: "PO-2026-0144", facilityId: "warehouse-north", supplierId: "sup-nordic", drugId: "inv-006", drugName: "Azithromycin 250mg", quantity: 1400, unit: "boxes", unitCost: 5.7, shipping: 45, status: "delivered", source: "manual", createdAt: iso(addDays(today, -16)), expectedDelivery: iso(addDays(today, -4)) },
+  { id: "PO-2026-0143", facilityId: "westend", supplierId: "sup-meditech", drugId: "inv-004", drugName: "Salbutamol 100mcg Inhaler", quantity: 90, unit: "inhalers", unitCost: 15.1, shipping: 80, status: "delivered", source: "manual", createdAt: iso(addDays(today, -21)), expectedDelivery: iso(addDays(today, -13)) },
+  { id: "PO-2026-0142", facilityId: "central", supplierId: "sup-europharm", drugId: "inv-007", drugName: "Insulin Glargine 100U/mL", quantity: 60, unit: "pens", unitCost: 39.2, shipping: 210, status: "cancelled", source: "manual", createdAt: iso(addDays(today, -24)), expectedDelivery: iso(addDays(today, -20)), note: "Cancelled — EMA certificate lapsed before dispatch." },
+  { id: "PO-2026-0141", facilityId: "riverside", supplierId: "sup-pharmasource", drugId: "inv-009", drugName: "Paracetamol 1g IV", quantity: 500, unit: "bags", unitCost: 3.2, shipping: 120, status: "delivered", source: "ai_suggestion", createdAt: iso(addDays(today, -29)), expectedDelivery: iso(addDays(today, -23)) },
 ];

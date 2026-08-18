@@ -80,6 +80,9 @@ PERMS: dict[str, set[str]] = {
         # is held by the same people who read forecasts: the pharmacist at the
         # keyboard is the one who notices the data has outrun the run.
         "forecast:run",
+        # PAGE_ROLES and the rbac matrix give the pharmacist the audit page;
+        # without this grant GET /audit 403s a role that can already open it.
+        "audit:read",
     },
     "physician": {
         "alert:read",

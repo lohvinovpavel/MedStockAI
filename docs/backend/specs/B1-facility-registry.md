@@ -10,7 +10,9 @@
 > with the stock natural key widened to `(hospital_id, ndc, facility_id, location_id)`.
 > A `storage_location` table backs `GET /locations`, with `kind` driving condition
 > monitoring (see backend-features B7). Cross-tenant 404 awaits the repo-wide RLS
-> policies (A4).
+> policies (A4). Wave 1: the sidebar switcher reads `GET /facilities?operated=true`
+> and sends `code`; mock inventory/orders/shortage keys were renamed to those codes.
+> The inventory table itself stays mock until B2 `/items` and B4.
 
 ## Goal
 

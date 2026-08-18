@@ -17,7 +17,7 @@ services and tables that have to exist behind them.
 | 2 | Demo role sign-in | Pharmacist / Procurement / Clinical Director | `/login` | Click "Demo Login as {role}" | Toast with role → `/inventory` (role is cosmetic — no gating) |
 | 3 | Switch facility | Any | Sidebar bottom dropdown | Open dropdown → pick one of 4 `operated` facilities | `FacilityProvider` updates → inventory list, KPIs, analogue availability, shortage "this facility", audit SKU picker all re-derive |
 | 4 | Triage inventory | Pharmacist | `/inventory` | Search by SKU/INN/ATC → filter status → filter expiry date range → click row | Row selected, Copilot focus set to that SKU |
-| 5 | Receive a batch | Pharmacist | `/inventory` → **Receive Batch** | Dialog → drug, batch no., qty → Save | Toast "Batch received" (mock — list not mutated) |
+| 5 | Receive a batch | Pharmacist | `/inventory` → **Receive Batch** | Dialog → drug, batch no., qty → Save | Toast "Batch received"; session overlay on `mock-data.ts` mutates the table (not Postgres) |
 | 6 | Verify certificate | Compliance | Row `⋯` → **View certificate** | Dialog → authority, number, status, expiry | Dialog closed; no state change |
 | 7 | Find analogues | Pharmacist | Row `⋯` → **Find analogues** | Dialog → list sorted `matchScore` desc → per row: equivalence + source badge, "N units here" vs "Not stocked here" → nearest facility that stocks it | Substitution decision made; feeds flow 17 if only elsewhere has it |
 | 8 | Read SKU history | Compliance | Row `⋯` → **Audit Log** | `router.push('/audit?sku=<id>')` → trail preselected to that SKU | Lands in flow 18 |
@@ -45,10 +45,33 @@ services and tables that have to exist behind them.
 
 ---
 
-## Known gaps in the current mock
+## Data source per screen
 
-- Role selected in flow 2 gates nothing — `PERMS` exists in `shared/medstock_shared/auth.py` but the UI never reads it.
-- Flow 5 does not mutate inventory; the dialog input is discarded (`docs/specs/UX-08`).
-- Flows 13/15 have no path to `in_transit` / `delivered` — those statuses appear only in seeded rows.
+User-facing screens must not mix `mock-data.ts` with a live API on the same table. Today the
+split is:
+
+| Screen | Source of truth |
+|---|---|
+| Login, session, nav gating | Postgres via `auth` |
+| Analogues, Prescribe | Postgres + RxNorm (+ Gemini on Full) via `analogue` / `patients` |
+| Warehouse | Postgres via `warehouse` |
+| Restock & Forecasts | Postgres via `prediction` |
+| Prognosis Review | Postgres via `patients` |
+| Certificate badges (any page that has an NDC) | Postgres via `compliance` |
+| Sidebar facility switcher | Postgres via `warehouse` (`GET /facilities?operated=true`; `code` is the client key) |
+| Inventory & Batches | `web/lib/mock-data.ts` (+ session overlay in `InventoryProvider`); keys are B1 codes |
+| Purchase & Orders | `web/lib/mock-data.ts` + `OrdersProvider` memory; receiving-site picker is the live operated list |
+| Shortage Matrix | `web/lib/mock-data.ts` (keys aligned to B1 codes; distances still mock-from-Central until G1) |
+| Audit Log | Postgres via `compliance` `GET /audit` (certificate badge and DecisionTrail are also live). Empty until a `review_decision` is written. Export is still a toast (D3) |
+| Copilot cards | canned / `mock-data.ts` (certificate lookup is live) |
+
+Waves 1–5 in [specs/README.md](specs/README.md) are the cutover. Do not delete `mock-data.ts`
+until the inventory table has `stock_batch` (B4). The sidebar already reads B1.
+
+## Known gaps
+
+- Flow 2 demo login is real auth (`ann@stmarys.org` etc.); OTP (A2) is still UI-only and unused.
+- Flow 5 still does not write Postgres — only the in-tab overlay.
+- Flows 13/15 have no path to `in_transit` / `delivered` — those statuses appear only in seeded mock rows.
 - Flow 17's transfer never becomes an order and never moves stock.
-- Flow 10's surge multiplier is client-side arithmetic and does not drive flow 12's suggested quantity (`docs/specs/UX-04`).
+- Flow 12's AI restock card is still mock; E3 surge does not drive it (`docs/specs/UX-04`).

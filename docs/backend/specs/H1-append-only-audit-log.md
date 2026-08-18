@@ -1,18 +1,24 @@
 # H1 — Append-only audit log
 
-**Owner:** Postgres itself — read through `compliance` · **Flows:** 8, 18 · **Status:** ❌
+**Owner:** Postgres itself — read through `compliance` · **Flows:** 8, 18 · **Status:** ✅ (wave 1, migration `20260818_h1_audit`)
 **Blocks:** B4, D3, F1, F3, G2 · **Scope:** `audit:read`
+
+> Implementation deviations: the trigger is attached **only** to `review_decision`.
+> `purchase_order`, `stock_batch`, `transfer_request`, and `par_level` do not exist
+> yet; `formulary_item` and `drug_certification` are written by seeds/`SessionLocal`
+> without an actor, so the CHECK would abort those jobs. RLS FORCE is on these two
+> tables only (the rest of A4 is wave 2). `GET /audit` SETs `LOCAL ROLE app_role`
+> because docker/CI connect as a superuser that would otherwise bypass FORCE RLS.
+> F1 writers are still open — the table exists so the trigger has a subject; the
+> `/audit` timeline is empty until a recommendation is stored. Pharmacist holds
+> `audit:read` to match `PAGE_ROLES` and the rbac matrix (D3 export stays director).
 
 ## Goal
 
-`docs/services.md` §1.3 builds the entire compliance story on a trigger that writes to
-`audit_log_entry`, and on `review_decision` as the table it fires from. **Neither table exists
-in `shared/medstock_shared/models.py`.** Every "Dr. Smirnov confirmed the switch", "ML pipeline
-updated the forecast", "certificate verified by OCR" line in flow 18 is currently fabricated,
-and the ISO-13485 footer claims a guarantee the schema cannot make.
-
-This is the highest-leverage missing table in the system. Build it before the features that
-depend on being audited.
+`docs/services.md` §1.3 builds the compliance story on a trigger that writes to
+`audit_log_entry` whenever `review_decision` changes. Append-only is a grant
+(`REVOKE UPDATE, DELETE FROM app_role`), not an application `audit()` call.
+Flow 18's timeline is served from this table.
 
 ## Data model
 

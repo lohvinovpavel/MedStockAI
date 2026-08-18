@@ -1,13 +1,13 @@
 # B2 — Facility-scoped stock read
 
 **Service:** `inventory` · **Flows:** 3, 4, 7, 14 · **Depends on:** B1
-**Status:** ⚠️ specified in `docs/services.md` §3; the service serves only `/healthz`, `/readyz`, `/version`
+**Status:** ⚠️ `GET /stock?rxcui=` reads `stock_snapshot`. No `facility_id` filter, no `/items`. The inventory page still uses `web/lib/mock-data.ts`.
 
 ## Goal
 
 The one read the whole dashboard sits on: given a clinical RxCUI — or nothing at all — return
-the shelf rows for one facility. `services/inventory/app/main.py` has three health endpoints
-and no domain code.
+the shelf rows for one facility. `GET /stock?rxcui=` exists and joins RxNorm NDCs to
+`stock_snapshot`. `GET /items` (the inventory table) and `facility_id` scoping are still open.
 
 ## API
 

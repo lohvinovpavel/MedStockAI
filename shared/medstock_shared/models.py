@@ -888,3 +888,81 @@ class StockDaily(Base):
         ),
         Index("ix_stock_daily_series", "facility_id", "ndc", "date"),
     )
+
+
+# --- Audit (docs/backend/specs/H1-append-only-audit-log.md): review_decision
+# is the F1 shape; the append-only log is written by a trigger, never by
+# application code. Wave 1 attaches the trigger only to review_decision —
+# formulary_item / drug_certification writers still use SessionLocal without
+# an actor, and those tables would fail the CHECK if the trigger fired.
+
+
+class ReviewDecision(Base):
+    """Human accept/reject of a restock recommendation or analogue switch.
+
+    F1 writers are still open; the table exists so H1 has something to
+    audit. `payload` is the recommendation exactly as shown, not a live join.
+    """
+
+    __tablename__ = "review_decision"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('restock_recommendation','analogue_substitution')",
+            name="ck_review_decision_entity_type",
+        ),
+        CheckConstraint(
+            "decision IN ('pending','approved','rejected')",
+            name="ck_review_decision_decision",
+        ),
+    )
+
+
+class AuditLogEntry(Base):
+    """Append-only trail. Inserts come from `write_audit_entry()`; the app
+    role cannot UPDATE or DELETE. At least one of actor_id / actor_system
+    must be set — an unattributable change must not commit.
+    """
+
+    __tablename__ = "audit_log_entry"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    actor_system: Mapped[str | None] = mapped_column(Text)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[dict | None] = mapped_column(JSONB)
+    after: Mapped[dict | None] = mapped_column(JSONB)
+    ai_dedupe_key: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "actor_id IS NOT NULL OR actor_system IS NOT NULL",
+            name="ck_audit_log_entry_actor",
+        ),
+        Index("ix_audit_entity", "hospital_id", "entity_type", "entity_id", "occurred_at"),
+        Index("ix_audit_time", "hospital_id", "occurred_at"),
+    )

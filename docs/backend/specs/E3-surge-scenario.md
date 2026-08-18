@@ -1,14 +1,14 @@
 # E3 — Surge scenario
 
-**Service:** `prediction` · **Flows:** 10, 11 · **Status:** ❌ — client-side arithmetic today
+**Service:** `prediction` · **Flows:** 10, 11 · **Status:** ✅ `surge_pct` on `GET /forecast/{rxcui}` — `/forecasts` slider sends it
 **Depends on:** E1, E2 · **Scope:** `forecast:read`
 
 ## Goal
 
-Flow 10's slider (Standard 100% → Epidemic Surge 300%) recalculates the chart in the browser
-and moves the depletion line from 14 days to 3. The number is real arithmetic but it exists
-only in React state: it cannot be cited in a purchase order, reproduced from a screenshot, or
-audited. Move the multiplier server-side so the scenario is an answer the system stands behind.
+Flow 10's slider (Standard 100% → Epidemic Surge 300%) used to recalculate the chart in the
+browser. The number was real arithmetic but existed only in React state: it could not be cited
+in a purchase order, reproduced from a screenshot, or audited. The multiplier now lives on
+`GET /forecast/{rxcui}?surge_pct=` so the scenario is an answer the system stands behind.
 
 Also closes `docs/specs/UX-04` — the simulator currently does not drive the PO suggestion.
 

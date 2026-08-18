@@ -30,7 +30,6 @@ import {
   facilityById,
   inventoryFor,
   isoPlusDays,
-  operatedFacilities,
   orderTotal,
   supplierById,
   suppliers,
@@ -78,7 +77,7 @@ function sortValue(o: PurchaseOrder, key: SortKey): string | number {
 export default function OrdersPage() {
   const { user } = useSession();
   const canPlace = can(user?.role, "placeOrder");
-  const { facilityId, facility } = useFacility();
+  const { facilityId, facility, operatedFacilities } = useFacility();
   const { orders, addOrder, updateOrderStatus } = useOrders();
 
   // Order form — follows the facility you're currently operating as.
@@ -213,7 +212,7 @@ export default function OrdersPage() {
                   <SelectContent>
                     <SelectGroup>
                       {operatedFacilities.map((f) => (
-                        <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                        <SelectItem key={f.code} value={f.code}>{f.name}</SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>

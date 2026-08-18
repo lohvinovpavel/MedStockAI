@@ -2,9 +2,9 @@
 
 COMP-1 only reaches the screen if all three agree on the key:
 
-    web/lib/mock-data.ts   the NDC the badge asks about
-    scripts/seed_stock.py  the NDC that lands in stock_snapshot
-    shelf_ndcs()           what the ingest-certification CronJob certifies
+    web/lib/mock-data.ts                    the NDC the badge asks about
+    shared/medstock_shared/demo_shelf.py    the NDC that lands in stock_snapshot
+    shelf_ndcs()                            what the ingest-certification CronJob certifies
 
 Drift between the first two is silent and total: the daily job certifies drugs
 nobody can see, every badge on the dashboard reads "unknown", and nothing
@@ -19,12 +19,12 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[3]
 _MOCK_DATA = _ROOT / "web" / "lib" / "mock-data.ts"
-_SEED = _ROOT / "scripts" / "seed_stock.py"
+_SEED = _ROOT / "shared" / "medstock_shared" / "demo_shelf.py"
 
 # `ndc:` at the inventory-row indent, so an NDC appearing in some other
 # structure later cannot quietly satisfy this.
 _UI_NDC = re.compile(r'^    ndc: "(\d{11})"', re.MULTILINE)
-_SEED_NDC = re.compile(r'\{"ndc": "(\d{11})"')
+_SEED_NDC = re.compile(r'"ndc": "(\d{11})"')
 
 
 def _ui_ndcs() -> list[str]:
@@ -87,7 +87,7 @@ def test_the_seed_targets_a_constraint_that_still_exists():
 
     from medstock_shared.models import FormularyItem, StockSnapshot
 
-    named = re.findall(r'constraint="([^"]+)"', _SEED.read_text(encoding="utf-8"))
+    named = re.findall(r'constraint="([^"]+)"', (_ROOT / "scripts" / "seed_stock.py").read_text(encoding="utf-8"))
     assert named, "seed_stock.py should pin its upserts to named constraints"
 
     # The script writes both tables, so check the names against both rather than

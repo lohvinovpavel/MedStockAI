@@ -41,9 +41,14 @@ boundary is real, the data boundary is not). This is the schema behind the featu
 | `purchase_order` | tenant | `inventory` | ❌ F3 |
 | `purchase_order_line` | tenant | `inventory` | ❌ F3 |
 | `transfer_request` | tenant | `warehouse` | ❌ G2 |
-| `review_decision` | tenant | `inventory` | ❌ F1 |
-| `forecast_point` | tenant | `prediction` | ❌ E1 |
-| `audit_log_entry` | tenant, append-only | Postgres trigger; read by `compliance` | ❌ H1 |
+| `review_decision` | tenant | `inventory` | ✅ H1 table; F1 writers still open |
+| `forecast_point` | tenant | `prediction` | ✅ E1 |
+| `forecast_point` | tenant | `prediction` | ✅ E1 |
+| `stock_daily` | tenant | `prediction` | ✅ issue #7 — on-hand history for the stock chart |
+| `patient` | tenant | `patient-profiling` | ✅ |
+| `assessment_log` | tenant | `patient-profiling` | ✅ |
+| `drug_risk_profile` | reference | `patient-profiling` | ✅ |
+| `audit_log_entry` | tenant, append-only | Postgres trigger; read by `compliance` | ✅ H1 |
 | `copilot_message` | tenant | copilot gateway | ❌ I2 |
 | `ai_cache` | neither — global cache | `shared/ai.py` | ✅ |
 
@@ -396,11 +401,12 @@ The proposed tables have a dependency order; taking them out of order means rewr
    `location_condition`, storage-requirement columns on `drug`, and
    `stock_snapshot.facility_id` — the stock natural key is now
    `(hospital_id, ndc, facility_id, location_id)`, NULLS NOT DISTINCT).
-3. `audit_log_entry` + `review_decision` + the trigger — H1. Every "AI suggested / pharmacist
-   approved" claim in the UI is unbacked until these exist.
+3. `audit_log_entry` + `review_decision` + the trigger — H1. ✅ wave 1
+   (`20260818_h1_audit`). Trigger on `review_decision` only; F1 writers still
+   open so the live `/audit` trail is empty until a recommendation is stored.
 4. `stock_batch` + `par_level` — B4/B5, which make "critical" and "expiring" objective.
 5. `supplier` → `supplier_catalog` → `purchase_order` → `purchase_order_line` — F2/F3.
-6. `forecast_point` — E1, written by a CronJob, not in-request.
+6. `forecast_point` — E1. ✅ table exists; writer today is `POST /forecast/runs`, not a CronJob.
 7. `transfer_request`, `otp_challenge`, `copilot_message` — leaf tables, any order.
 
 Alembic autogenerate reads `Base.metadata`, so every table above must be imported into

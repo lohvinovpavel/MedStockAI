@@ -27,15 +27,21 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 @contextmanager
-def session_scope(hospital_id: str, actor_id: str):
+def session_scope(hospital_id: str, actor_id: str, actor_system: str = ""):
     """Transaction-scoped tenant context. SET LOCAL dies with the transaction,
-    so nothing leaks across pooled connections."""
+    so nothing leaks across pooled connections.
+
+    `actor_system` is how a CronJob attributes a write (H1): pass the pipeline
+    name and leave `actor_id` empty. A write with neither set fails the
+    `audit_log_entry` CHECK and rolls back the business transaction.
+    """
     session: Session = SessionLocal()
     try:
         session.execute(
             text("SELECT set_config('app.hospital_id', :h, true), "
-                 "set_config('app.actor_id', :a, true)"),
-            {"h": hospital_id, "a": actor_id},
+                 "set_config('app.actor_id', :a, true), "
+                 "set_config('app.actor_system', :s, true)"),
+            {"h": hospital_id, "a": actor_id or "", "s": actor_system or ""},
         )
         yield session
         session.commit()

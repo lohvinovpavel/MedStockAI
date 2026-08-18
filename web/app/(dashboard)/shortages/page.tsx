@@ -58,12 +58,13 @@ export default function ShortagesPage() {
   // currently selected in the sidebar.
   // distanceKm is measured from Central, so offset against the active site
   // rather than reporting Central as "0km away" from a clinic.
+  const origin = facilityById(facilityId);
   const rows = shortageRowsFor(alertId).map((r) => {
     const f = facilityById(r.facilityId);
     return {
       ...r,
       facility: f,
-      awayKm: Math.abs(f.distanceKm - facility.distanceKm),
+      awayKm: Math.abs(f.distanceKm - origin.distanceKm),
       isCurrent: r.facilityId === facilityId,
     };
   });

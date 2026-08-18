@@ -17,9 +17,11 @@ import gzip
 import os
 import sys
 import uuid
+from collections import defaultdict
 from pathlib import Path
 
 from medstock_shared import engine
+from medstock_shared.demo_shelf import DASHBOARD_SHELF
 from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
@@ -37,7 +39,9 @@ from sqlalchemy.orm import Session
 
 from .demo_layout import (
     END_DATE,
+    FACILITIES,
     data_dir,
+    location_for,
     resolve_or_create_hospital,
     upsert_registry,
 )
@@ -195,6 +199,137 @@ def _seed_shortages(s: Session, drugs: list[dict]) -> int:
     return planted
 
 
+def _overlay_dashboard_shelf(
+    s: Session,
+    drugs: list[dict],
+    consumption: list[dict],
+    stock_history: list[dict],
+    fac_ids: dict[str, int],
+    hospital_id: uuid.UUID,
+) -> int:
+    """Plant the inventory-page NDCs so Warehouse charts aren't empty for them.
+
+    gen_demo's 100-drug panel doesn't include the dashboard shelf (different
+    NDCs, chosen for COMP-1). Without this overlay the warehouse picker either
+    omits those SKUs or shows them with no consumption/conditions join.
+    Consumption shape is cloned from a same-class donor already in the artifact.
+    """
+    donor_by_class: dict[str, dict] = {}
+    for drug in drugs:
+        if drug["stockout_prone"] == "True":
+            continue
+        donor_by_class.setdefault(drug["storage_class"], drug)
+
+    cons_by_ndc: dict[str, list[dict]] = defaultdict(list)
+    for row in consumption:
+        cons_by_ndc[row["ndc"]].append(row)
+    hist_by_ndc: dict[str, list[dict]] = defaultdict(list)
+    for row in stock_history:
+        hist_by_ndc[row["ndc"]].append(row)
+
+    extra_stock: list[dict] = []
+    extra_cons: list[dict] = []
+    extra_hist: list[dict] = []
+
+    for item in DASHBOARD_SHELF:
+        cls = item["storage_class"]
+        donor = donor_by_class.get(cls)
+        if donor is None:
+            continue
+        drug_values = {
+            "ndc": item["ndc"],
+            "name": item["name"],
+            "storage_class": cls,
+            "storage_min_c": item["storage_min_c"],
+            "storage_max_c": item["storage_max_c"],
+            "humidity_max_pct": item["humidity_max_pct"],
+            "raw": {"source": "demo-shelf"},
+        }
+        s.execute(
+            insert(Drug)
+            .values(**drug_values)
+            .on_conflict_do_update(index_elements=["ndc"], set_=drug_values)
+        )
+        rxcui = donor["rxcui"]
+        s.execute(
+            insert(FormularyItem)
+            .values(hospital_id=hospital_id, rxcui=rxcui)
+            .on_conflict_do_nothing(index_elements=["hospital_id", "rxcui"])
+        )
+        for fac in FACILITIES:
+            if not fac["operated"]:
+                continue
+            loc = location_for(fac["code"], cls)
+            if loc is None:
+                continue
+            scale = float(fac["scale"] or 1.0)
+            qty = max(0, round(int(item["quantity"]) * scale))
+            extra_stock.append(
+                {
+                    "hospital_id": hospital_id,
+                    "ndc": item["ndc"],
+                    "facility_id": fac_ids[fac["code"]],
+                    "location_id": loc,
+                    "quantity": qty,
+                }
+            )
+            for row in cons_by_ndc[donor["ndc"]]:
+                if row["facility"] != fac["code"]:
+                    continue
+                extra_cons.append(
+                    {
+                        "hospital_id": hospital_id,
+                        "facility_id": fac_ids[fac["code"]],
+                        "ndc": item["ndc"],
+                        "rxcui": rxcui,
+                        "date": row["date"],
+                        "qty_consumed": int(row["qty"]),
+                        "stockout": row["stockout"] == "1",
+                    }
+                )
+            donor_hist = [r for r in hist_by_ndc[donor["ndc"]] if r["facility"] == fac["code"]]
+            donor_last = int(donor_hist[-1]["qty"]) if donor_hist else 0
+            factor = (qty / donor_last) if donor_last else 1.0
+            for i, row in enumerate(donor_hist):
+                extra_hist.append(
+                    {
+                        "hospital_id": hospital_id,
+                        "facility_id": fac_ids[fac["code"]],
+                        "ndc": item["ndc"],
+                        "date": row["date"],
+                        "qty_on_hand": qty if i == len(donor_hist) - 1 else max(0, round(int(row["qty"]) * factor)),
+                    }
+                )
+
+    if extra_stock:
+        for i in range(0, len(extra_stock), BATCH):
+            stmt = insert(StockSnapshot).values(extra_stock[i : i + BATCH])
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_stock_hospital_ndc_fac_loc",
+                set_={"quantity": stmt.excluded.quantity},
+            )
+            s.execute(stmt)
+    if extra_cons:
+        s.execute(
+            delete(ConsumptionDaily).where(
+                ConsumptionDaily.hospital_id == hospital_id,
+                ConsumptionDaily.ndc.in_([d["ndc"] for d in DASHBOARD_SHELF]),
+            )
+        )
+        for i in range(0, len(extra_cons), BATCH):
+            s.execute(insert(ConsumptionDaily), extra_cons[i : i + BATCH])
+    if extra_hist:
+        s.execute(
+            delete(StockDaily).where(
+                StockDaily.hospital_id == hospital_id,
+                StockDaily.ndc.in_([d["ndc"] for d in DASHBOARD_SHELF]),
+            )
+        )
+        for i in range(0, len(extra_hist), BATCH):
+            s.execute(insert(StockDaily), extra_hist[i : i + BATCH])
+    return len(extra_stock)
+
+
 def _seed_conditions(
     s: Session, rows: list[dict], loc_ids: dict[tuple[str, str], int]
 ) -> None:
@@ -235,6 +370,7 @@ def run() -> dict[str, int]:
         _seed_conditions(s, conditions, loc_ids)
         _seed_forecast(s, forecast, fac_ids, hospital_id)
         _seed_stock_history(s, stock_history, fac_ids, hospital_id)
+        shelf = _overlay_dashboard_shelf(s, drugs, consumption, stock_history, fac_ids, hospital_id)
         shortages = _seed_shortages(s, drugs)
         s.commit()
 
@@ -247,6 +383,7 @@ def run() -> dict[str, int]:
         "conditions": len(conditions),
         "forecast": len(forecast),
         "stock_history": len(stock_history),
+        "dashboard_shelf": shelf,
         "shortages": shortages,
     }
 
