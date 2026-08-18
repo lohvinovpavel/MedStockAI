@@ -398,6 +398,33 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
 
 
+def test_list_storage_excursions_caps_and_passes_facility_through(monkeypatch):
+    from contextlib import contextmanager
+
+    from medstock_shared.ai.tools.pharmacy import StorageExcursionArgs, list_storage_excursions
+
+    rows = [{"ndc": f"n{i}", "hours": 100 - i} for i in range(40)]
+    captured = {}
+
+    def fake_excursions(session, facility_id):
+        captured["facility_id"] = facility_id
+        return list(rows)
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.excursions", fake_excursions)
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        yield MagicMock()
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = list_storage_excursions(StorageExcursionArgs(facility_id=3), PHARMACIST)
+    assert captured["facility_id"] == 3
+    assert result["checked"] == 40
+    assert len(result["excursions"]) == 30
+    assert result["truncated"] is True
+
+
 def test_explore_ndc_passes_the_ndc_through_to_the_promoted_explore(monkeypatch):
     from medstock_shared.ai.tools.pharmacy import ExploreNdcArgs, explore_ndc
 
@@ -463,6 +490,7 @@ def test_declarations_are_scoped_to_the_caller_role():
         "check_stock_by_ndc",
         "sweep_shelf_certificates",
         "explore_ndc",
+        "list_storage_excursions",
     }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
@@ -481,6 +509,7 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
         "sweep_shelf_certificates",
         "explore_ndc",
         "get_patient_regimen",
+        "list_storage_excursions",
     }
 
 
@@ -513,4 +542,5 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
         "check_stock_by_ndc",
         "sweep_shelf_certificates",
         "get_patient_regimen",
+        "list_storage_excursions",
     }

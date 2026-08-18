@@ -25,6 +25,7 @@ from ...models import CertificationFinding, DrugCertification, Patient, StockSna
 from ...patient import age_band_from_dob
 from ...rxnorm import RxNormError, ndcs_for_rxcui, related_scd_sbd, therapeutic_scd_sbd
 from ...stock import stock_fields
+from ...warehouse import excursions
 from .registry import tool
 
 _KEEP_LIMIT = 5
@@ -251,6 +252,34 @@ def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
     detail["status"] = record.status
     detail["ruleset_version"] = record.ruleset_version
     return {"ndc": args.ndc, **detail}
+
+
+class StorageExcursionArgs(BaseModel):
+    facility_id: int | None = Field(None, description="Limit to one facility; omit for all")
+
+
+# The model narrates a breach; it does not get to decide the stock is
+# unusable off the back of it -- ranked worst first so trimming to this many
+# keeps the ones that actually matter.
+_EXCURSION_LIMIT = 30
+
+
+@tool(
+    permission="facility:read",
+    description=(
+        "Report storage-condition violations -- a drug held outside its "
+        "required temperature or humidity range, based on sensor telemetry. "
+        "Use when the user asks about cold-chain problems, fridge/freezer "
+        "excursions, or storage compliance. This reports the breach; it "
+        "does not conclude the stock is unusable -- that is a human call."
+    ),
+    args=StorageExcursionArgs,
+)
+def list_storage_excursions(args: StorageExcursionArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        # Already worst-first -- excursions() orders by breach duration.
+        rows = excursions(session, args.facility_id)
+    return {"checked": len(rows), "excursions": rows[:_EXCURSION_LIMIT], "truncated": len(rows) > _EXCURSION_LIMIT}
 
 
 class ExploreNdcArgs(BaseModel):
