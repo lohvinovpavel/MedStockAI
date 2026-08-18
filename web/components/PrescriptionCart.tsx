@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Search, TriangleAlert } from "lucide-react";
 import { Callout } from "@/components/dashboard/Callout";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { PatientPicker } from "@/components/dashboard/PatientPicker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -90,7 +91,6 @@ type PrescriptionSnapshot = {
 };
 
 const STORAGE_KEY = "medstock-prescribe-cart";
-const NO_PATIENT = "__none__";
 
 function newItemId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -136,8 +136,9 @@ export function PrescriptionCart() {
   const [cart, setCart] = useState<CartState>({ patientId: null, items: [] });
   const [hydrated, setHydrated] = useState(false);
 
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [patientsError, setPatientsError] = useState<string | null>(null);
+  const [patientListKey, setPatientListKey] = useState(0);
   const [showPatientForm, setShowPatientForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
@@ -172,30 +173,38 @@ export function PrescriptionCart() {
     saveCart(cart);
   }, [cart, hydrated]);
 
-  const selectedPatient = useMemo(
-    () => patients.find((p) => p.id === cart.patientId) ?? null,
-    [patients, cart.patientId],
-  );
-
   const resultsByRxcui = useMemo(() => {
     const map = new Map<string, CartLineResult>();
     for (const row of checkResults) map.set(row.rxcui, row);
     return map;
   }, [checkResults]);
 
-  const refreshPatients = useCallback(async () => {
-    setPatientsError(null);
-    try {
-      const data = await apiFetch("patients", "/patients");
-      setPatients(data.items ?? []);
-    } catch (err) {
-      setPatientsError(err instanceof Error ? err.message : "failed to load patients");
-    }
-  }, []);
-
+  // The cart is restored from localStorage as a bare patient id, so on mount
+  // there is a selection with no record behind it. Fetch that one patient
+  // rather than the population it belongs to — the picker searches on demand,
+  // and pulling every row to find one was what made a thousand patients
+  // unusable.
   useEffect(() => {
-    if (user) void refreshPatients();
-  }, [user, refreshPatients]);
+    if (!user || !cart.patientId) return;
+    if (selectedPatient?.id === cart.patientId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiFetch("patients", `/patients/${cart.patientId}`);
+        if (!cancelled) setSelectedPatient(data);
+      } catch (err) {
+        if (cancelled) return;
+        // A stored id can outlive the row — a rebuilt demo environment reseeds
+        // with new uuids. Drop the selection instead of leaving the cart
+        // pointing at a patient that no longer exists.
+        setCart((prev) => ({ ...prev, patientId: null }));
+        setPatientsError(err instanceof Error ? err.message : "failed to load patient");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, cart.patientId, selectedPatient?.id]);
 
   useEffect(() => {
     if (!cart.patientId || cart.items.length === 0) {
@@ -320,7 +329,8 @@ export function PrescriptionCart() {
             method: "POST",
             body: JSON.stringify(payload),
           });
-      await refreshPatients();
+      setSelectedPatient(saved);
+      setPatientListKey((k) => k + 1);
       setCart((prev) => ({ ...prev, patientId: saved.id }));
       setShowPatientForm(false);
     } catch (err) {
@@ -460,29 +470,17 @@ export function PrescriptionCart() {
                 <Label htmlFor="patient-select" className="mb-1.5 text-xs text-muted-foreground">
                   Profile
                 </Label>
-                <Select
-                  value={cart.patientId ?? NO_PATIENT}
-                  onValueChange={(value) =>
-                    setCart((prev) => ({
-                      ...prev,
-                      patientId: value === NO_PATIENT ? null : value,
-                    }))
-                  }
-                >
-                  <SelectTrigger id="patient-select" size="sm" className="h-8 w-full text-xs">
-                    <SelectValue placeholder="Select patient…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={NO_PATIENT}>Select patient…</SelectItem>
-                      {patients.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.full_name} ({p.date_of_birth})
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <PatientPicker
+                  selected={selectedPatient}
+                  refreshKey={patientListKey}
+                  onError={setPatientsError}
+                  onSelect={(picked) => {
+                    // The picker returns the row it listed, which is the whole
+                    // patient — no second fetch to show allergies below.
+                    setSelectedPatient(picked);
+                    setCart((prev) => ({ ...prev, patientId: picked?.id ?? null }));
+                  }}
+                />
               </div>
               <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={startCreatePatient}>
                 New

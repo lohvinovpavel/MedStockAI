@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import UTC, datetime
 
 import httpx
 from medstock_shared.db import SessionLocal
@@ -134,6 +135,10 @@ def signals_for(rxcui: str, reaction_totals: dict[str, int], grand_total: int) -
                 "ror": round(ror, 3),
                 "n_reports": a,
                 "n_drug_reports": n_drug,
+                # Explicit: the upsert below means onupdate never fires, and a
+                # ratio that silently keeps its first-ever timestamp cannot be
+                # told apart from a feed that stopped running.
+                "computed_at": datetime.now(tz=UTC),
             }
         )
     return rows

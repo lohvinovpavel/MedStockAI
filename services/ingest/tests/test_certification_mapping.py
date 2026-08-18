@@ -164,3 +164,18 @@ def test_distinct_unnumbered_recalls_are_not_collapsed():
 def test_malformed_packaging_entry_is_ignored():
     product = {"product_ndc": "0002-1433", "packaging": ["not-a-dict", {"no_ndc": 1}]}
     assert _product_ndcs(product) == ["0002-1433"]
+
+
+def test_every_row_carries_its_own_freshness_stamp():
+    """`computed_at` is set here rather than left to the column default.
+
+    `write()` upserts, and `onupdate=func.now()` does not fire on
+    `INSERT .. ON CONFLICT DO UPDATE` — Core sees an insert. So a daily job that
+    re-certifies the same shelf would leave every row reporting the date it was
+    first written, and a frozen timestamp cannot be told apart from a feed that
+    quietly stopped running. That is the one thing this field exists to reveal.
+    """
+    rows = only(DIFLUNISAL)
+    for certification, _ in rows:
+        assert "computed_at" in certification
+        assert certification["computed_at"].tzinfo is not None, "must be timezone-aware"

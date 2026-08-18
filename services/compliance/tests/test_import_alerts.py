@@ -10,13 +10,14 @@ whole design here and neither is a preference:
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from medstock_shared.certification import (
     AlertListing,
     NewsItem,
     Severity,
     Status,
+    WarningAction,
     evaluate,
     firm_key,
     status_for,
@@ -168,3 +169,72 @@ def test_the_article_is_attached_so_it_can_be_judged():
     assert finding.source_url == "https://example.test/story"
     assert "cardiovascularbusiness.com" in finding.message
     assert "2026-08-12" in finding.message
+
+
+# --- warning letters: what the feed can and cannot say -----------------------
+
+
+def letter(**kw) -> WarningAction:
+    base = {
+        "company_name": "Vital Laboratories Pvt Ltd",
+        "issue_date": date(2026, 4, 9),
+        "issuing_office": "Center for Drug Evaluation and Research | CDER",
+        "subject": "CGMP/Finished Pharmaceuticals/Adulterated",
+        "source_url": "https://www.fda.gov/warning-letters",
+    }
+    return WarningAction(**{**base, **kw})
+
+
+def only_letters(findings):
+    return [f for f in findings if f.code == "WARNING_LETTER"]
+
+
+def test_a_recent_letter_raises_yellow():
+    found = only_letters(evaluate(warning_letters=[letter()], today=date(2026, 8, 18)))
+    assert len(found) == 1
+    assert found[0].severity is Severity.YELLOW
+
+
+def test_the_finding_never_claims_the_action_is_open():
+    """The load-bearing one. FDA publishes a Closeout Letter column and leaves
+    it empty on every exported row, so closure is simply not in the data. A
+    finding that said "open investigation" would be asserting something the
+    source cannot support."""
+    message = only_letters(evaluate(warning_letters=[letter()], today=date(2026, 8, 18)))[0].message
+    assert "closeout status is not published" in message.lower()
+    for forbidden in ("open investigation", "still open", "ongoing investigation"):
+        assert forbidden not in message.lower()
+
+
+def test_the_finding_names_the_firm_the_date_and_the_subject():
+    message = only_letters(evaluate(warning_letters=[letter()], today=date(2026, 8, 18)))[0].message
+    assert "Vital Laboratories Pvt Ltd" in message
+    assert "2026-04-09" in message
+    assert "CGMP" in message
+
+
+def test_an_old_letter_is_history_not_a_signal():
+    """A letter from six years ago says nothing about today's supply."""
+    old = letter(issue_date=date(2019, 1, 1))
+    assert only_letters(evaluate(warning_letters=[old], today=date(2026, 8, 18))) == []
+
+
+def test_the_recency_window_has_an_edge_not_a_cliff():
+    from medstock_shared.certification import WARNING_LETTER_WINDOW_DAYS
+
+    today = date(2026, 8, 18)
+    inside = today - timedelta(days=WARNING_LETTER_WINDOW_DAYS - 1)
+    outside = today - timedelta(days=WARNING_LETTER_WINDOW_DAYS + 1)
+    assert only_letters(evaluate(warning_letters=[letter(issue_date=inside)], today=today))
+    assert not only_letters(evaluate(warning_letters=[letter(issue_date=outside)], today=today))
+
+
+def test_a_letter_with_no_date_is_still_reported():
+    """An undated letter cannot be aged out, and dropping it would silently
+    lose an enforcement action for a formatting reason."""
+    assert only_letters(evaluate(warning_letters=[letter(issue_date=None)], today=date(2026, 8, 18)))
+
+
+def test_a_letter_cannot_turn_a_badge_red():
+    findings = evaluate(warning_letters=[letter() for _ in range(10)], today=date(2026, 8, 18))
+    assert status_for(findings) is Status.YELLOW

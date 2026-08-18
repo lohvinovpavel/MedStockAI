@@ -119,12 +119,23 @@ def _norm_blood(value: str | None) -> str | None:
         return None
     bg = value.strip().upper().replace(" ", "")
     # Accept "A positive"-style loosely by normalizing common forms.
-    aliases = {"A+": "A+", "A-": "A-", "B+": "B+", "B-": "B-", "AB+": "AB+", "AB-": "AB-",
-               "O+": "O+", "O-": "O-", "UNKNOWN": "unknown"}
+    aliases = {
+        "A+": "A+",
+        "A-": "A-",
+        "B+": "B+",
+        "B-": "B-",
+        "AB+": "AB+",
+        "AB-": "AB-",
+        "O+": "O+",
+        "O-": "O-",
+        "UNKNOWN": "unknown",
+    }
     if bg not in aliases and bg.lower() == "unknown":
         return "unknown"
     if bg not in BLOOD_GROUPS and bg not in aliases:
-        raise HTTPException(status_code=422, detail=f"blood_group must be one of {sorted(BLOOD_GROUPS)}")
+        raise HTTPException(
+            status_code=422, detail=f"blood_group must be one of {sorted(BLOOD_GROUPS)}"
+        )
     return aliases.get(bg, bg)
 
 
@@ -215,12 +226,16 @@ def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
         return []
     try:
         with Session(engine) as session:
-            rows = session.execute(
-                select(DrugRiskProfile).where(
-                    DrugRiskProfile.rxcui.in_(rxcuis),
-                    DrugRiskProfile.status == "approved",
+            rows = (
+                session.execute(
+                    select(DrugRiskProfile).where(
+                        DrugRiskProfile.rxcui.in_(rxcuis),
+                        DrugRiskProfile.status == "approved",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
     except (ProgrammingError, SQLAlchemyError):
         return []
     return [
@@ -239,6 +254,10 @@ def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
 REVIEW_ACTIONS = {"approve": "approved", "reject": "rejected"}
 PROFILE_STATUSES = ("awaiting_approval", "approved", "rejected")
 MAX_QUEUE = 200
+# A ceiling on /patients, not a page size. The picker asks for far fewer;
+# this is what stops `?limit=100000` turning the demo PHI table into a bulk
+# export with one query parameter.
+MAX_PATIENT_PAGE = 200
 
 
 class ReviewBody(BaseModel):
@@ -392,9 +411,7 @@ def review_risk_profile(
     return {"previous_status": previous, "profile": profile}
 
 
-def record_assessment(
-    principal: Principal, vector: PatientVector, results: list[dict]
-) -> str:
+def record_assessment(principal: Principal, vector: PatientVector, results: list[dict]) -> str:
     """Write the decision trail row, and return the request id.
 
     **Fails the request if it cannot write.** An assessment that reaches a
@@ -462,9 +479,7 @@ def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
         return []
     try:
         with Session(engine) as session:
-            rows = session.scalars(
-                select(PgxGuideline).where(PgxGuideline.rxcui.in_(rxcuis))
-            ).all()
+            rows = session.scalars(select(PgxGuideline).where(PgxGuideline.rxcui.in_(rxcuis))).all()
     except (ProgrammingError, SQLAlchemyError):
         return []
     return [
@@ -698,9 +713,7 @@ def explain(
                         # Of the points that were scored, how much came from
                         # here. Zero-weight findings are informational and say so
                         # rather than dividing by a total they never joined.
-                        "share": (
-                            round(int(f.get("weight") or 0) / total, 3) if total else None
-                        ),
+                        "share": (round(int(f.get("weight") or 0) / total, 3) if total else None),
                     }
                     for f in sorted(findings, key=lambda x: -int(x.get("weight") or 0))
                 ],
@@ -734,7 +747,10 @@ def explain(
         "assessments": explained,
         # So a reader can check a weight against the published table rather than
         # taking these numbers on trust.
-        "ruleset": {"weights": WEIGHTS, "bands": [{"from_score": t, "verdict": str(v)} for t, v in BANDS]},
+        "ruleset": {
+            "weights": WEIGHTS,
+            "bands": [{"from_score": t, "verdict": str(v)} for t, v in BANDS],
+        },
     }
 
 
@@ -911,14 +927,43 @@ def forecast(
 
 
 @patients.get("/patients")
-def list_patients(principal: Principal = Depends(require("patient:read"))) -> dict:
+def list_patients(
+    q: str | None = None,
+    limit: int = 50,
+    principal: Principal = Depends(require("patient:read")),
+) -> dict:
+    """Patients for the prescribe picker — searched and bounded, never the lot.
+
+    This used to return every patient, which was fine while a demo environment
+    held eight of them. A seeded cohort is a thousand, and an unbounded list is
+    then wrong twice over: it ships a thousand names and dates of birth to a
+    browser that will show one, and it hands the physician a dropdown they
+    cannot get to the bottom of.
+
+    `total` is reported separately from `items` so the caller can say "12 of
+    1008" rather than silently showing a truncated list as if it were the whole
+    population — a cut-off list that looks complete is how someone concludes a
+    patient is not in the system.
+    """
+    limit = max(1, min(int(limit), MAX_PATIENT_PAGE))
+    term = (q or "").strip()
+
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        rows = session.scalars(
-            select(Patient)
-            .where(Patient.hospital_id == principal.hospital_id)
-            .order_by(Patient.full_name)
-        ).all()
-        return {"items": [_patient_dict(r) for r in rows]}
+        stmt = select(Patient).where(Patient.hospital_id == principal.hospital_id)
+        if term:
+            # Substring, case-insensitive, on the name only. Matching on date of
+            # birth as free text would let "1978" enumerate a birth year, which
+            # is a re-identification handle we have no reason to hand out.
+            stmt = stmt.where(Patient.full_name.ilike(f"%{term}%"))
+
+        total = session.scalar(select(func.count()).select_from(stmt.subquery()))
+        rows = session.scalars(stmt.order_by(Patient.full_name).limit(limit)).all()
+        return {
+            "items": [_patient_dict(r) for r in rows],
+            "total": int(total or 0),
+            "limit": limit,
+            "q": term,
+        }
 
 
 @patients.post("/patients", status_code=201)

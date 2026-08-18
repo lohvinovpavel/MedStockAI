@@ -293,7 +293,8 @@ export const inventory: InventoryItem[] = [
     form: "Infusion bag, 100mL",
     inn: "Paracetamol",
     atcCode: "N02BE01",
-    ndc: "00143938610", // Hikma — CLASS I recall ongoing, label mix-up
+    ndc: "00143938610", // Hikma. Colour comes from live FDA data and drifts —
+                        // this one was a Class I recall when it was picked.
     batchNumber: "PCM-25064-B",
     currentStock: 410,
     unit: "bags",
@@ -311,7 +312,8 @@ export const inventory: InventoryItem[] = [
     form: "Injection, 5mL vial",
     inn: "Heparin sodium",
     atcCode: "B01AB01",
-    ndc: "00338043304", // Baxter — CLASS I recall (microbial) + current shortage
+    ndc: "00338043304", // Baxter. Was a Class I recall + shortage when picked;
+                        // currently amber on an import alert against the labeler.
     batchNumber: "HEP-24855-A",
     currentStock: 5,
     unit: "vials",
@@ -325,6 +327,33 @@ export const inventory: InventoryItem[] = [
       { id: "an-19", drugName: "Enoxaparin 40mg/0.4mL", inn: "Enoxaparin sodium", unit: "syringes", rxcui: "854235", matchScore: 79, equivalence: "therapeutic", source: "ATC/WHO", stockByFacility: { "fac-central": 140, "fac-riverside": 55, "fac-westend": 30, "fac-warehouse-n": 700, "fac-stluke": 95, "fac-mercy": 210 } },
       { id: "an-20", drugName: "Fondaparinux 2.5mg", inn: "Fondaparinux sodium", unit: "syringes", rxcui: "321208", matchScore: 63, equivalence: "same-class", source: "OpenFDA", stockByFacility: { "fac-central": 0, "fac-riverside": 0, "fac-westend": 0, "fac-warehouse-n": 85, "fac-stluke": 20, "fac-mercy": 0 } },
     ],
+  },
+  {
+    // Here to give the certification traffic light a red to show. The two rows
+    // above were picked for open Class I recalls and both have since closed --
+    // which is the feed working, not failing, but it left the shelf with no red
+    // on it and no way to see what a red explains.
+    //
+    // This NDC is obsolete in RxNorm. The ruleset classes every lifecycle rule
+    // as transient -- a labeler can re-register a listing -- but in practice an
+    // obsolete NDC stays obsolete, so this row is a good deal more stable than
+    // a recall, which closes.
+    id: "inv-011",
+    facilityId: "fac-central",
+    drugName: "Carmellose Sodium 0.5% Eye Drops",
+    form: "Ophthalmic solution, 10mL",
+    inn: "Carmellose sodium",
+    atcCode: "S01KA01",
+    ndc: "76168080030", // Kilitch Healthcare India — RxNorm status OBSOLETE
+    batchNumber: "CMC-24310-A",
+    currentStock: 62,
+    unit: "bottles",
+    dailyBurnRate: 3,
+    expiryDate: iso(addDays(today, 180)),
+    certStatus: "valid",
+    certAuthority: "FDA",
+    certNumber: "ANDA-091234",
+    analogues: [],
   },
 ];
 

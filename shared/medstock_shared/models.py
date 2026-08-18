@@ -273,8 +273,13 @@ class DrugCertification(Base):
     # export that cannot say where a colour came from is not evidence.
     provenance: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
     ruleset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # No `onupdate`: every writer of this table upserts, and onupdate does not
+    # fire on INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert and the
+    # conflict branch is the database's business. Leaving it on reads as a
+    # guarantee that this stamp maintains itself, and it does not, so the
+    # writer sets it explicitly. Same trap as DrugRiskProfile.extracted_at.
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     # Only on_demand rows carry a TTL — nothing refreshes them on a schedule.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -333,6 +338,11 @@ class DrugRiskProfile(Base):
             "status IN ('awaiting_approval', 'approved', 'rejected')",
             name="ck_drug_risk_profile_status",
         ),
+        # Declared here because 20260817_profile_review created it. The review
+        # queue reads WHERE status = .. ORDER BY extracted_at, which is what the
+        # composite serves; leaving it out of the metadata does not remove the
+        # index, it just hides it from alembic.
+        Index("ix_drug_risk_profile_status", "status", "extracted_at"),
     )
 
 
@@ -427,6 +437,46 @@ class Patient(Base):
     )
 
 
+class WarningLetter(Base):
+    """An FDA warning letter naming a firm — an enforcement action, not a defect.
+
+    Reference class. docs/compliance-usecases.md §4.1 lists this as "open
+    enforcement action against a labeler".
+
+    **This table cannot tell you whether the action is still open**, and that is
+    a property of the source rather than a shortcut taken here. FDA's export
+    carries a `Closeout Letter` column and it is empty on every one of the
+    1 000 rows it returns, while `Response Letter` is populated on 128 of them —
+    so the closeout hyperlink simply does not survive the export. Any finding
+    built on this therefore says a letter *was issued* and says plainly that
+    closeout status is not published, rather than claiming an investigation is
+    open when the data cannot support it.
+    """
+
+    __tablename__ = "warning_letter"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    company_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Normalised for the labeler match — see certification.firm_key.
+    firm_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    issue_date: Mapped[date | None] = mapped_column(Date)
+    posted_date: Mapped[date | None] = mapped_column(Date)
+    # "Center for Drug Evaluation and Research | CDER" and friends. Kept because
+    # a tobacco letter and a drug letter are very different conversations.
+    issuing_office: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(Text)
+    # Whether the firm has responded. Present in the export, unlike closeout.
+    has_response: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("company_name", "issue_date", "subject", name="uq_warning_letter"),
+    )
+
+
 class ImportAlert(Base):
     """A foreign establishment on an FDA Import Alert Red List.
 
@@ -443,8 +493,13 @@ class ImportAlert(Base):
     __tablename__ = "import_alert"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    # "66-40" (GMP failure) or "66-41" (unapproved drugs).
-    alert_number: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # "66-40" (GMP failure) or "66-41" (unapproved drugs). Indexed in
+    # __table_args__ rather than with index=True, because the migration named it
+    # `ix_import_alert_number` and index=True autogenerates
+    # `ix_import_alert_alert_number` — a name-only disagreement that makes
+    # `alembic check` fail and, worse, makes the next --autogenerate emit a drop
+    # and recreate of a live index.
+    alert_number: Mapped[str] = mapped_column(Text, nullable=False)
     firm_name: Mapped[str] = mapped_column(Text, nullable=False)
     # Normalised for matching — see medstock_shared.certification.firm_key.
     # Stored rather than computed on read so the match is indexable and so the
@@ -460,6 +515,10 @@ class ImportAlert(Base):
 
     __table_args__ = (
         UniqueConstraint("alert_number", "firm_name", name="uq_import_alert_natural"),
+        # Name taken from 20260817_import_news, not from index=True — see the
+        # note on alert_number above. (`firm_key` keeps index=True because its
+        # autogenerated name already matches what the migration created.)
+        Index("ix_import_alert_number", "alert_number"),
     )
 
 
@@ -524,8 +583,13 @@ class AdrSignal(Base):
     n_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # a+b — all reports naming this drug, so the ratio can be re-derived.
     n_drug_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # No `onupdate`: every writer of this table upserts, and onupdate does not
+    # fire on INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert and the
+    # conflict branch is the database's business. Leaving it on reads as a
+    # guarantee that this stamp maintains itself, and it does not, so the
+    # writer sets it explicitly. Same trap as DrugRiskProfile.extracted_at.
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (UniqueConstraint("rxcui", "reaction", name="uq_adr_signal_natural"),)

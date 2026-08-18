@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { cn } from "@/lib/utils";
 
 /**
  * COMP-1 traffic light.
@@ -70,17 +71,112 @@ const TONE = CERT_TONE;
 // compliance caps a batch at 100; one page of stock is well inside that.
 const MAX_BATCH = 100;
 
-export function CertificationBadge({ result }: { result?: CertResult }) {
+/**
+ * The traffic light itself.
+ *
+ * Pass `onClick` and it becomes a button: the colour is a verdict, and a
+ * verdict you cannot interrogate is one a pharmacist is right to distrust. The
+ * evidence used to live behind a kebab menu, which is a strange place to hide
+ * the answer to the question the badge itself provokes.
+ *
+ * `label` names the drug in the accessible name, so a screen reader hears
+ * "Certification for Amoxicillin: Certified, 0 reasons. Show why." rather than
+ * a row of identical buttons. Colour alone never carries the meaning — the text
+ * is always there next to the dot, for a red/green reader as much as anyone.
+ */
+export function CertificationBadge({
+  result,
+  onClick,
+  label,
+}: {
+  result?: CertResult;
+  onClick?: () => void;
+  /** Drug name, for the accessible name only. */
+  label?: string;
+}) {
   const status = result?.status ?? "unavailable";
   const reasons = result?.reasons ?? 0;
-  return (
-    <StatusBadge tone={TONE[status]} className="normal-case">
-      <span title={TITLES[status]}>
-        {LABELS[status]}
-        {reasons > 0 ? ` · ${reasons}` : ""}
-      </span>
+
+  const badge = (
+    <StatusBadge
+      tone={TONE[status]}
+      className={cn("normal-case", onClick && "transition-colors group-hover:brightness-95")}
+    >
+      {LABELS[status]}
+      {reasons > 0 ? ` · ${reasons}` : ""}
     </StatusBadge>
   );
+
+  if (!onClick) return <span title={TITLES[status]}>{badge}</span>;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${TITLES[status]} — click for the reasoning`}
+      aria-label={`Certification${label ? ` for ${label}` : ""}: ${LABELS[status]}, ${
+        reasons === 1 ? "1 reason" : `${reasons} reasons`
+      }. Show why.`}
+      className="group cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+    >
+      {badge}
+    </button>
+  );
+}
+
+/**
+ * `GET /ruleset` — every rule that can produce a colour, and the thresholds
+ * behind them.
+ *
+ * Fetched so a green badge can say *what was checked* rather than asserting
+ * that nothing was wrong. Cached at module scope: the ruleset changes when the
+ * service is redeployed, not while someone is reading a stock table, and every
+ * row on the page would otherwise ask for the same document.
+ */
+/** `GET /ruleset`. Mirrors medstock_shared.certification.ruleset(). */
+export type Ruleset = {
+  version: string;
+  marketing_end_window_days: number;
+  rules: Record<
+    string,
+    { severity: "red" | "yellow" | "info"; category: string; transient: boolean; explains: string }
+  >;
+  sources: Record<string, string>;
+  notes: string[];
+};
+
+let rulesetCache: Promise<Ruleset | null> | null = null;
+
+export function useRuleset() {
+  const [ruleset, setRuleset] = useState<Ruleset | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    rulesetCache ??= apiFetch("compliance", "/ruleset")
+      .then((body) => body as Ruleset)
+      .catch(() => {
+        // Cache successes, never failures. Holding on to a rejected fetch means
+        // one blip while compliance restarts costs every green badge its "N
+        // rules evaluated" line for the rest of the session -- and the dialog
+        // would quietly fall back to the weaker wording with nothing on screen
+        // to say why. Clearing it lets the next dialog try again.
+        rulesetCache = null;
+        // Null rather than a throw: the explanation degrades to the wording
+        // that does not depend on the ruleset, and the dialog still opens.
+        return null;
+      });
+
+    rulesetCache.then((body) => {
+      if (!cancelled) setRuleset(body);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return ruleset;
 }
 
 /**
@@ -172,6 +268,9 @@ export function useCertificateDetail(ndc: string | null) {
   const [detail, setDetail] = useState<CertDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Bumped by reload(). Not folded into `ndc`, because a re-check keeps looking
+  // at the same drug and the effect has to re-run anyway.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!ndc) {
@@ -198,7 +297,32 @@ export function useCertificateDetail(ndc: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [ndc]);
+  }, [ndc, nonce]);
 
-  return { detail, error, loading };
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  return { detail, error, loading, reload };
+}
+
+/**
+ * Re-run the gates against freshly fetched upstream data (COMP-2), for one drug.
+ *
+ * `POST /explore` re-fetches and upserts unconditionally — unlike opening the
+ * dialog, which only explores on a miss or an expired row. That is the whole
+ * point of the button: a pharmacist who has just read a recall notice should
+ * not have to wait out a seven-day TTL to see it reflected here.
+ *
+ * It costs two upstream calls against a shared daily budget, which is why it is
+ * a deliberate click rather than something the dialog does on open.
+ */
+export async function recheckCertification(ndc: string): Promise<void> {
+  const body = await apiFetch("compliance", "/explore", {
+    method: "POST",
+    body: JSON.stringify({ ndc: [ndc] }),
+  });
+  // A per-NDC upstream failure is a 200 with an `errors` entry — the endpoint is
+  // built for batches, where one dead lookup must not lose the answers that did
+  // come back. For a batch of one that would otherwise read as success and the
+  // dialog would redisplay the stale verdict as though it were fresh.
+  const failure = (body?.errors ?? {})[ndc];
+  if (failure) throw new Error(String(failure));
 }
