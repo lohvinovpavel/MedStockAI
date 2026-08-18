@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
+import { useSession } from "@/lib/session";
+import { can } from "@/lib/rbac";
 import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType } from "@/lib/mock-data";
 import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
 import { DecisionTrail } from "@/components/dashboard/DecisionTrail";
@@ -22,6 +24,7 @@ const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string 
 
 export default function AuditPage() {
   const { setFocus } = useCopilot();
+  const { user } = useSession();
   const { facilityId, facility } = useFacility();
   const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
 
@@ -93,15 +96,17 @@ export default function AuditPage() {
                 stored certStatus here instead would let this page and that one
                 show different colours for the same drug. */}
             <CertificationBadge result={item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 }} />
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 text-xs"
-              onClick={() => toast.success(`Audit trail for ${item.drugName} exported to compliance archive.`)}
-            >
-              <Download data-icon="inline-start" />
-              Export Audit Trail
-            </Button>
+            {can(user?.role, "exportAudit") && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                onClick={() => toast.success(`Audit trail for ${item.drugName} exported to compliance archive.`)}
+              >
+                <Download data-icon="inline-start" />
+                Export Audit Trail
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

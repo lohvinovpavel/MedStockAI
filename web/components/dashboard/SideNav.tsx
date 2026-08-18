@@ -40,6 +40,8 @@ import { Separator } from "@/components/ui/separator";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
+import { useSession } from "@/lib/session";
+import { canAccessPage, ROLE_LABEL } from "@/lib/rbac";
 import { operatedFacilities } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
@@ -92,11 +94,21 @@ function ThemeToggle() {
 // Shared between the desktop inline nav and the mobile Sheet — no local
 // state of its own, so mounting it in both places at once is safe (unlike
 // the copilot drawer, which holds a live conversation).
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts[parts.length - 1]?.[0] ?? "")).toUpperCase();
+}
+
 function NavBody({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const { facilityId, setFacilityId, facility } = useFacility();
   const { draftCount } = useOrders();
+  const { user } = useSession();
+  // Tabs the signed-in role can't reach (lib/rbac.ts) don't render at all —
+  // a hidden link is not a security boundary (the layout's route guard is),
+  // but a visible one for a page you'll just get bounced from is a bad menu.
+  const tabs = TABS.filter((t) => canAccessPage(user?.role, t.href));
 
   return (
     <>
@@ -108,7 +120,7 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
       </Link>
 
       <div className="flex flex-1 flex-col gap-1">
-        {TABS.map(({ href, label, icon: Icon }) => {
+        {tabs.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
           // Draft orders awaiting review — makes the forecast → orders
           // handoff visible the moment a suggestion is accepted.
@@ -178,13 +190,15 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm" className="mt-1 h-11 w-full justify-start gap-2 px-2 text-xs font-normal">
             <Avatar className="size-7 shrink-0">
-              <AvatarFallback className="text-xs">CP</AvatarFallback>
+              <AvatarFallback className="text-xs">{user?.full_name ? initials(user.full_name) : "?"}</AvatarFallback>
             </Avatar>
             <span className="flex min-w-0 flex-col items-start leading-tight">
-              <span className="truncate font-medium text-foreground">Dr. Casey Park</span>
-              <span className="truncate text-[11px] text-muted-foreground">Chief Pharmacist</span>
+              <span className="truncate font-medium text-foreground">{user?.full_name ?? "—"}</span>
+              <span className="truncate text-[11px] text-muted-foreground">
+                {user ? ROLE_LABEL[user.role as keyof typeof ROLE_LABEL] ?? user.role : ""}
+              </span>
             </span>
-            <span className="sr-only">Account menu, Dr. Casey Park</span>
+            <span className="sr-only">Account menu, {user?.full_name ?? "unknown user"}</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
@@ -224,7 +238,7 @@ export function SideNav() {
 
 // Below `lg`: a slim bar above the nav/main/copilot row carrying the brand,
 // a hamburger that opens the same NavBody in a Sheet, and a shortcut to
-// open the AI Copilot (which supplies its own trigger at `lg` and above).
+// open the AI MedStock Assistant (which supplies its own trigger at `lg` and above).
 export function MobileTopBar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -255,7 +269,7 @@ export function MobileTopBar() {
         <span className="text-sm font-semibold tracking-tight">MedStock AI</span>
       </Link>
 
-      <Button variant="ghost" size="icon" onClick={() => setCopilotOpen(true)} aria-label="Open AI Copilot">
+      <Button variant="ghost" size="icon" onClick={() => setCopilotOpen(true)} aria-label="Open AI MedStock Assistant">
         <Bot />
       </Button>
     </div>
