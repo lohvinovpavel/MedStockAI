@@ -18,11 +18,14 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { StatTile } from "@/components/dashboard/StatTile";
+import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
+import { useSession } from "@/lib/session";
+import { can } from "@/lib/rbac";
 import {
   facilityById,
   inventoryFor,
@@ -56,7 +59,25 @@ function money(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+type SortKey = "id" | "createdAt" | "facility" | "supplier" | "drug" | "qty" | "total" | "source" | "status";
+
+function sortValue(o: PurchaseOrder, key: SortKey): string | number {
+  switch (key) {
+    case "id": return o.id;
+    case "createdAt": return new Date(o.createdAt).getTime();
+    case "facility": return facilityById(o.facilityId).name;
+    case "supplier": return supplierById(o.supplierId).name;
+    case "drug": return o.drugName;
+    case "qty": return o.quantity;
+    case "total": return orderTotal(o);
+    case "source": return o.source;
+    case "status": return STATUS_LABEL[o.status];
+  }
+}
+
 export default function OrdersPage() {
+  const { user } = useSession();
+  const canPlace = can(user?.role, "placeOrder");
   const { facilityId, facility } = useFacility();
   const { orders, addOrder, updateOrderStatus } = useOrders();
 
@@ -66,6 +87,7 @@ export default function OrdersPage() {
   const [drugId, setDrugId] = useState<string | undefined>();
   const [quantity, setQuantity] = useState(100);
   const [statusFilter, setStatusFilter] = useState<"all" | OrderStatus>("all");
+  const [sort, setSort] = useState<SortState<SortKey>>(null);
 
   // Switching facility in the sidebar used to leave this form pointed at
   // the previous site with no indication the two disagreed. Following it
@@ -93,7 +115,12 @@ export default function OrdersPage() {
   const estimated = unitCost * quantity + supplier.shippingFlat;
 
   const drafts = orders.filter((o) => o.status === "draft");
-  const history = orders.filter((o) => (statusFilter === "all" ? true : o.status === statusFilter));
+  const filteredHistory = orders.filter((o) => (statusFilter === "all" ? true : o.status === statusFilter));
+  const history = useMemo(() => {
+    if (!sort) return filteredHistory;
+    const dir = sort.direction === "asc" ? 1 : -1;
+    return [...filteredHistory].sort((a, b) => dir * compareValues(sortValue(a, sort.key), sortValue(b, sort.key)));
+  }, [filteredHistory, sort]);
 
   const thisMonth = orders.filter(
     (o) => o.status === "delivered" && new Date(o.createdAt).getUTCMonth() === today.getUTCMonth(),
@@ -157,6 +184,19 @@ export default function OrdersPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+        {/* Committing spend is a Procurement Officer action (docs/rbac-matrix.md
+            #13) — a pharmacist still reviews and discards AI drafts below, but
+            can't raise or place a manual PO. */}
+        {!canPlace ? (
+          <Card className="gap-3 py-4">
+            <CardHeader className="px-4">
+              <CardTitle className="text-sm">New purchase order</CardTitle>
+              <CardDescription className="text-xs">
+                Placing an order commits spend and is restricted to Procurement. You can review and discard AI drafts.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
         <Card className="gap-3 py-4">
           <CardHeader className="px-4">
             <CardTitle className="text-sm">New purchase order</CardTitle>
@@ -273,6 +313,7 @@ export default function OrdersPage() {
             </Button>
           </CardFooter>
         </Card>
+        )}
 
         <Card className="gap-3 py-4">
           <CardHeader className="px-4">
@@ -315,10 +356,12 @@ export default function OrdersPage() {
                       <X data-icon="inline-start" />
                       Discard
                     </Button>
-                    <Button size="sm" className="h-7 flex-1 text-xs" onClick={() => placeDraft(o)}>
-                      <CheckCircle2 data-icon="inline-start" />
-                      Place
-                    </Button>
+                    {canPlace && (
+                      <Button size="sm" className="h-7 flex-1 text-xs" onClick={() => placeDraft(o)}>
+                        <CheckCircle2 data-icon="inline-start" />
+                        Place
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))
@@ -355,15 +398,15 @@ export default function OrdersPage() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
-                  <TableHead className="pl-4">PO Ref</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Facility</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Drug</TableHead>
-                  <TableHead>Qty</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead className="pr-4">Status</TableHead>
+                  <SortableHead sortKey="id" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))} className="pl-4">PO Ref</SortableHead>
+                  <SortableHead sortKey="createdAt" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Created</SortableHead>
+                  <SortableHead sortKey="facility" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Facility</SortableHead>
+                  <SortableHead sortKey="supplier" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Supplier</SortableHead>
+                  <SortableHead sortKey="drug" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Drug</SortableHead>
+                  <SortableHead sortKey="qty" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Qty</SortableHead>
+                  <SortableHead sortKey="total" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Total</SortableHead>
+                  <SortableHead sortKey="source" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Source</SortableHead>
+                  <SortableHead sortKey="status" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))} className="pr-4">Status</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

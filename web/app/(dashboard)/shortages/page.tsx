@@ -13,6 +13,8 @@ import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge
 import { Callout } from "@/components/dashboard/Callout";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
+import { useSession } from "@/lib/session";
+import { can } from "@/lib/rbac";
 import { facilityById, shortageAlerts, shortageRowsFor, type FacilityStockRow } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +41,8 @@ function impliedDailyBurn(row: FacilityStockRow): number {
 
 export default function ShortagesPage() {
   const { setFocus } = useCopilot();
+  const { user } = useSession();
+  const canTransfer = can(user?.role, "requestTransfer");
   const { facilityId, facility } = useFacility();
   const [alertId, setAlertId] = useState(shortageAlerts[0].id);
   const [search, setSearch] = useState("");
@@ -219,7 +223,9 @@ export default function ShortagesPage() {
             <CardDescription className="text-xs">Redistribute stock from a facility with spare supply to this location.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-4 text-xs">
-            {candidateSources.length === 0 ? (
+            {!canTransfer ? (
+              <p className="text-muted-foreground">Read-only — requesting a transfer is a pharmacist/procurement action.</p>
+            ) : candidateSources.length === 0 ? (
               <p className="text-muted-foreground">No facility has spare {alert.drugName} to transfer right now.</p>
             ) : (
               <>
@@ -293,7 +299,7 @@ export default function ShortagesPage() {
                     </div>
                     <Separator className="my-1.5" />
                     <p className="text-muted-foreground">
-                      Logged by Dr. Casey Park at {dispatch.time} · automated logistics notified · audit trail recorded per ISO-27001.
+                      Logged by {user?.full_name ?? "you"} at {dispatch.time} · automated logistics notified · audit trail recorded per ISO-27001.
                     </p>
                   </Callout>
                 )}

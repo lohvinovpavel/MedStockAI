@@ -4,22 +4,36 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Plus, ShieldCheck, Stethoscope, ClipboardList, UserCog, Loader2 } from "lucide-react";
+import { Plus, ShieldCheck, ShieldOff, Stethoscope, ClipboardList, UserCog, Truck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldSeparator } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
-import { sanitizeNextPath } from "@/lib/session";
+import { sanitizeNextPath, SessionProvider, useSession, LOCAL_AUTH_ENABLED } from "@/lib/session";
+import { ROLE_LABEL } from "@/lib/rbac";
 
+// One seeded account per role (services/auth/app/seed.py) — all four the
+// app actually has, so a reviewer can sign in as each without knowing the
+// seed script exists.
 const DEMO_ROLES = [
-  { role: "Physician", email: "ben@stmarys.org", icon: Stethoscope },
-  { role: "Chief Pharmacist", email: "ann@stmarys.org", icon: ClipboardList },
-  { role: "Clinical Director", email: "cara@stmarys.org", icon: UserCog },
+  { role: "physician", name: "Ben Okafor", email: "ben@stmarys.org", icon: Stethoscope },
+  { role: "pharmacist", name: "Ann Reyes", email: "ann@stmarys.org", icon: ClipboardList },
+  { role: "director", name: "Cara Lindqvist", email: "cara@stmarys.org", icon: UserCog },
+  { role: "admin", name: "Dan Whitfield", email: "dan@stmarys.org", icon: Truck },
 ] as const;
 
-export default function LoginPage() {
+// Reads ?next= directly from location.search rather than useSearchParams() —
+// that hook forces a Suspense boundary that never resumes on a direct load
+// of this already-"use client" route.
+function nextDestination(): string {
+  const rawNext = new URLSearchParams(window.location.search).get("next");
+  return rawNext ? sanitizeNextPath(rawNext) : "/inventory";
+}
+
+function LoginForm() {
   const router = useRouter();
+  const { loginLocal } = useSession();
   const [pending, setPending] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,12 +48,7 @@ export default function LoginPage() {
         body: JSON.stringify({ email: nextEmail, password: nextPassword }),
       });
       toast.success("Signed in.");
-      // Sent here by the dashboard's session gate with ?next=/wherever-they-
-      // were-headed; land there instead of always going to /inventory.
-      // Reading location.search directly (not useSearchParams()) avoids the
-      // Suspense boundary that hook forces on a direct load of this page.
-      const rawNext = new URLSearchParams(window.location.search).get("next");
-      router.push(rawNext ? sanitizeNextPath(rawNext) : "/inventory");
+      router.push(nextDestination());
     } catch {
       setError("invalid credentials");
       setPending(false);
@@ -49,6 +58,15 @@ export default function LoginPage() {
   function submitCredentials(e: React.FormEvent) {
     e.preventDefault();
     void signIn(email, password);
+  }
+
+  // No password, no backend call — see LOCAL_AUTH_ENABLED. Only reachable
+  // when that flag was set at build time, which is why the section below
+  // doesn't render at all otherwise.
+  function signInLocal(role: string, demoEmail: string, name: string) {
+    loginLocal(role, demoEmail, name);
+    toast.success("Signed in (local, no backend).");
+    router.push(nextDestination());
   }
 
   return (
@@ -119,10 +137,34 @@ export default function LoginPage() {
                 onClick={() => setEmail(demoEmail)}
               >
                 <Icon data-icon="inline-start" />
-                Use {role} ({demoEmail})
+                Use {ROLE_LABEL[role]} ({demoEmail})
               </Button>
             ))}
           </div>
+
+          {LOCAL_AUTH_ENABLED && (
+            <>
+              <FieldSeparator className="my-4">or, no backend running locally</FieldSeparator>
+              <div className="flex flex-col gap-2">
+                {DEMO_ROLES.map(({ role, name, email: demoEmail, icon: Icon }) => (
+                  <Button
+                    key={role}
+                    type="button"
+                    variant="secondary"
+                    className="w-full justify-start text-xs"
+                    onClick={() => signInLocal(role, demoEmail, name)}
+                  >
+                    <Icon data-icon="inline-start" />
+                    Continue as {name} — no password
+                  </Button>
+                ))}
+                <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <ShieldOff className="mt-0.5 size-3.5 shrink-0" />
+                  Local dev only — client-side session, no DB, not a real sign-in.
+                </p>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -135,5 +177,17 @@ export default function LoginPage() {
         ← Back to overview
       </Link>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  // Not nested under app/(dashboard) or app/(legacy) — this route has no
+  // SessionProvider from a parent layout, so it mounts its own just to
+  // reach loginLocal()/useSession(). redirectToAuth is off: this page must
+  // never redirect itself away.
+  return (
+    <SessionProvider redirectToAuth={false}>
+      <LoginForm />
+    </SessionProvider>
   );
 }
