@@ -572,7 +572,13 @@ export function CopilotDrawer() {
       setMessages((m) => m.map((msg) => (msg.id === replyId ? fn(msg) : msg)));
 
     try {
-      const history = [...toCopilotHistory(priorMessages), { role: "user" as const, text: userText }];
+      // The "Context: …" banner is UI chrome — it's shown, not said. Gemini
+      // never sees the page unless it's folded into the turn's own text, so
+      // whatever SKU/alert is focused when the user hits send goes in here.
+      // Re-added on every turn (not just the first) because focus can change
+      // mid-conversation and each call resends the full history from scratch.
+      const contextPrefix = focus ? `[Currently viewing: ${focus.label} — ${focus.detail}]\n\n` : "";
+      const history = [...toCopilotHistory(priorMessages), { role: "user" as const, text: contextPrefix + userText }];
       for await (const evt of streamCopilotChat(history, controller.signal)) {
         if (evt.event === "delta") {
           applyToReply((msg) => ({ ...msg, text: msg.text + evt.data.text }));
