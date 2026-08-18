@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # ask_ai() only — set on analogue and prediction, unused elsewhere
     gemini_api_key: str = ""
     # Single source for the Gemini model id. Override with env GEMINI_MODEL.
-    gemini_model: str = "gemini-3.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     llm_timeout_seconds: float = 20.0
 
 

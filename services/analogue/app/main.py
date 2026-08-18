@@ -25,6 +25,8 @@ from medstock_shared.stock import stock_fields
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
+from app.copilot import copilot
+
 app = FastAPI(title="analogue")
 drugs = APIRouter()
 _log = logging.getLogger("analogue")
@@ -186,14 +188,16 @@ def _ai_available() -> bool:
     return bool((settings.gemini_api_key or "").strip())
 
 
-def _ask_analogue_ai(payload: dict) -> dict:
+def _ask_analogue_ai(payload: dict, principal: Principal) -> dict:
     """Lazy import so UC-1/UC-3 tests never construct a Gemini client."""
     from medstock_shared import ask_ai
 
-    return ask_ai("analogue", payload)
+    return ask_ai("analogue", payload, principal=principal)
 
 
-def _filter_full_with_ai(source: str, items: list[dict]) -> tuple[list[dict], bool]:
+def _filter_full_with_ai(
+    source: str, items: list[dict], principal: Principal
+) -> tuple[list[dict], bool]:
     """UC-5: closed-world keep-set from Gemini. Empty or failed → unfiltered + flag."""
     try:
         drug_name = _source_drug_name(source)
@@ -204,7 +208,7 @@ def _filter_full_with_ai(source: str, items: list[dict]) -> tuple[list[dict], bo
             "candidates": _analogue_candidate_lines(items),
             "source_text": source_text,
         }
-        result = _ask_analogue_ai(payload)
+        result = _ask_analogue_ai(payload, principal)
         raw_items = result.get("items") if isinstance(result, dict) else None
         if not isinstance(raw_items, list) or not raw_items:
             _log.info("Gemini keep-set empty for rxcui %s; falling back to unfiltered Full", source)
@@ -352,7 +356,7 @@ def get_analogues(
         _log.info("RxClass full rxcui=%s candidates=%s", source, len(items))
     rationale_unavailable = False
     if use_ai and mode == "full" and items:
-        items, rationale_unavailable = _filter_full_with_ai(source, items)
+        items, rationale_unavailable = _filter_full_with_ai(source, items, principal)
     body: dict = {
         "rxcui": source,
         "mode": mode,
@@ -369,3 +373,6 @@ def get_analogues(
 
 app.include_router(drugs)
 app.include_router(drugs, prefix="/api/analogue")
+
+app.include_router(copilot)
+app.include_router(copilot, prefix="/api/analogue")

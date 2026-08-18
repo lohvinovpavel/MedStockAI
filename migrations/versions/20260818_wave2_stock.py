@@ -265,6 +265,7 @@ def upgrade() -> None:
         )
     )
     op.execute(sa.text("REVOKE UPDATE, DELETE ON audit_log_entry FROM app_role"))
+    op.execute(sa.text("REVOKE UPDATE, DELETE ON ai_audit_log FROM app_role"))
 
 
 def downgrade() -> None:

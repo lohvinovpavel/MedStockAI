@@ -38,6 +38,7 @@ spec:
       - name: seed-patients
         # Any image: all carry shared/ + scripts/ (see the root Dockerfile).
         image: ghcr.io/medstockai/patient-profiling:latest
+        workingDir: /srv
         command: ["python", "scripts/seed_patients.py"]
         env:
         # deploy-dev.yml rewrites this literal when the workflow is dispatched

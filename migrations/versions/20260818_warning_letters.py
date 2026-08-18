@@ -12,7 +12,7 @@ leaves it empty on every row, so closure is not in the data; a column for it
 would invite a reader to assume otherwise.
 
 Revision ID: 20260818_wl
-Revises: 20260817_comp
+Revises: 20260818_ai_audit
 Create Date: 2026-08-18
 """
 
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260818_wl"
-down_revision: str | None = "20260817_comp"
+down_revision: str | None = "20260818_ai_audit"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

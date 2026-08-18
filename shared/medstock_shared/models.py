@@ -28,7 +28,7 @@ class Base(DeclarativeBase):
 
 
 class AICache(Base):
-    """No queue, no worker. `ask_ai()` in `ai.py` calls Gemini inline and
+    """No queue, no worker. `ask_ai()` in `ai/core.py` calls Gemini inline and
     keeps the answer here so the same question is never paid for twice.
 
     Deliberately not a tenant table — no `hospital_id`, no RLS. The payload
@@ -36,19 +36,85 @@ class AICache(Base):
     text), never PHI, so two hospitals asking the identical question share
     the identical cached answer. That is a feature: it is what makes the
     cache work across the whole system, not just within one hospital.
+
+    Provenance (which user asked, from which hospital) deliberately does not
+    live here either — adding it would either break that cross-hospital
+    sharing or return one user's row to another. It belongs on an audit row
+    that references this one, not on this row itself (docs/ai-module-plan.md
+    §0.3) — see `AIAuditLog` below.
+
+    `prompt_version` is part of the unique key, not just a label: it is what
+    makes editing a prompt in ai_tasks.py invalidate its own cache instead of
+    silently keeps serving answers the old prompt produced.
     """
 
     __tablename__ = "ai_cache"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     type: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False, server_default="v1")
+    model_name: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
     dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
     result: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (UniqueConstraint("type", "dedupe_key", name="uq_ai_cache_type_dedupe"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "type", "prompt_version", "dedupe_key", name="uq_ai_cache_type_promptver_dedupe"
+        ),
+    )
+
+
+class AIAuditLog(Base):
+    """Who asked the model what, and what came back. Sibling of
+    `AssessmentLog` below, same actor/request_id shape, for the same reason:
+    the audit read is "what happened, newest first" either way.
+
+    `hospital_id` is nullable UUID, unlike `AssessmentLog`'s — most `ask_ai()`
+    callers are a pharmacist through `analogue`, tenant-scoped like anything
+    else in §1.2, but `ingest`'s offline CronJobs (`prognosis`) process a
+    public FDA label with no hospital attached to the call at all, the same
+    reason `ai_cache` above has no tenant column. `actor_id` is never null:
+    ingest's calls are still attributable, to `'system:ingest'`.
+
+    Append-only: wave 2 REVOKEs UPDATE/DELETE from app_role. FORCE RLS is
+    not applied here because `write_audit()` uses SessionLocal without
+    `session_scope`, so it never sets `app.hospital_id`; a tenant policy
+    would fail-open and silently drop provenance rows.
+    Written from Python, not a trigger — the event being audited is an
+    outbound API call, not a row mutation, so there is no row for a trigger
+    to hang off.
+    """
+
+    __tablename__ = "ai_audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=True
+    )
+    actor_id: Mapped[str] = mapped_column(Text, nullable=False)
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_type: Mapped[str] = mapped_column(Text, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # cache_hit | live | breaker_open | error -- see docs/ai-module-plan.md §5.
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    # ponytail: unused until the Phase 4 copilot exists; a JSONB column with a
+    # default costs nothing today and saves a second migration on this table
+    # when it does. [] until then, always.
+    tools_called: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_ai_audit_hospital_time", "hospital_id", "created_at"),
+        Index("ix_ai_audit_dedupe", "dedupe_key"),
+    )
 
 
 # --- Reference tables (services/services.md §1.1): global, no RLS, written

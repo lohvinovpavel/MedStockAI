@@ -1,11 +1,10 @@
 """Wave 0: hospital_id Text → uuid FK on every tenant table.
 
-Merges the two demo heads (forecast/stock_daily vs warning_letters) and
-collapses DEMO GENERAL HOSPITAL (all-zeros UUID) into St Mary's General so
+Collapses DEMO GENERAL HOSPITAL (all-zeros UUID) into St Mary's General so
 auth, seed_demo, seed_stock and seed_patients share one tenant.
 
 Revision ID: 20260818_hospital_uuid
-Revises: 20260818_stock_daily, 20260818_wl
+Revises: 20260818_stock_daily
 Create Date: 2026-08-18
 """
 
@@ -20,7 +19,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import text
 
 revision: str = "20260818_hospital_uuid"
-down_revision: tuple[str, str] = ("20260818_stock_daily", "20260818_wl")
+down_revision: str | None = "20260818_stock_daily"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -60,6 +59,15 @@ def upgrade() -> None:
             postgresql_using="hospital_id::uuid",
             existing_nullable=False,
         )
+    # Created as Text by 20260818_ai_audit, which now runs before this revision.
+    op.alter_column(
+        "ai_audit_log",
+        "hospital_id",
+        existing_type=sa.Text(),
+        type_=UUID(as_uuid=True),
+        postgresql_using="NULLIF(hospital_id, '')::uuid",
+        existing_nullable=True,
+    )
 
     conn = op.get_bind()
     keep, drop_ids = _keep_and_drop(conn)
@@ -84,9 +92,25 @@ def upgrade() -> None:
             ["hospital_id"],
             ["id"],
         )
+    op.create_foreign_key(
+        "fk_ai_audit_log_hospital",
+        "ai_audit_log",
+        "hospital",
+        ["hospital_id"],
+        ["id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint("fk_ai_audit_log_hospital", "ai_audit_log", type_="foreignkey")
+    op.alter_column(
+        "ai_audit_log",
+        "hospital_id",
+        existing_type=UUID(as_uuid=True),
+        type_=sa.Text(),
+        postgresql_using="hospital_id::text",
+        existing_nullable=True,
+    )
     for table in reversed(TENANT_TABLES):
         op.drop_constraint(f"fk_{table}_hospital", table, type_="foreignkey")
         op.alter_column(
@@ -155,7 +179,7 @@ def _remap_hospital(conn, src: uuid.UUID, dst: uuid.UUID) -> None:
 
     for table, tail in UNIQUE_TAIL.items():
         _remap_unique(conn, table, src, dst, tail)
-    for table in ("patient", "assessment_log"):
+    for table in ("patient", "assessment_log", "ai_audit_log"):
         conn.execute(
             text(f"UPDATE {table} SET hospital_id = :dst WHERE hospital_id = :src"),
             {"dst": dst, "src": src},
@@ -258,7 +282,7 @@ def _remap_unique(conn, table: str, src: uuid.UUID, dst: uuid.UUID, tail: tuple[
 
 
 def _delete_orphan_tenant_rows(conn) -> None:
-    for table in TENANT_TABLES:
+    for table in (*TENANT_TABLES, "ai_audit_log"):
         conn.execute(
             text(
                 f"DELETE FROM {table} WHERE hospital_id NOT IN (SELECT id FROM hospital)"

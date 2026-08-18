@@ -59,3 +59,78 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
   }
   return res.status === 204 ? null : res.json();
 }
+
+/**
+ * One event from `POST /api/analogue/copilot/chat`'s SSE stream — the shape
+ * `_sse()` in services/analogue/app/copilot.py writes
+ * (`event: <kind>\ndata: <json>\n\n`), typed here rather than left as
+ * `{event: string, data: unknown}` so a caller can narrow on `.event` and
+ * get the right `.data` shape for free.
+ */
+export type CopilotEvent =
+  | { event: "delta"; data: { text: string } }
+  | { event: "tool_start"; data: { name: string; args: Record<string, unknown> } }
+  | { event: "tool_end"; data: { name: string; ok: boolean; error?: string } }
+  | { event: "degraded"; data: { reason: string } }
+  | { event: "done"; data: { request_id: string } };
+
+export type CopilotMessage = { role: "user" | "model"; text: string };
+
+/**
+ * Streams one copilot turn. A generator, not a promise of the final text —
+ * the whole point of this endpoint is that the caller can render deltas and
+ * tool activity as they arrive, not wait for the connection to close.
+ *
+ * Not built on `apiFetch`: that helper always awaits `res.json()`, which
+ * would buffer the entire SSE stream before returning anything.
+ */
+export async function* streamCopilotChat(
+  messages: CopilotMessage[],
+  signal?: AbortSignal,
+): AsyncGenerator<CopilotEvent> {
+  const res = await fetch(`${SERVICES.analogue}/copilot/chat`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("medstock:unauthorized"));
+    }
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") message = body.detail;
+    } catch {
+      /* keep status text */
+    }
+    throw new ApiError(message, res.status);
+  }
+
+  // SSE frames are separated by a blank line; a chunk boundary can land
+  // mid-frame, so what's read has to be buffered and split on "\n\n" rather
+  // than trusted to line up with one `read()` call each.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary: number;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const eventLine = frame.split("\n").find((l) => l.startsWith("event: "));
+      const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+      if (!eventLine || !dataLine) continue;
+      yield {
+        event: eventLine.slice("event: ".length),
+        data: JSON.parse(dataLine.slice("data: ".length)),
+      } as CopilotEvent;
+    }
+  }
+}

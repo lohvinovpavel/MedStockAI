@@ -9,7 +9,7 @@ Deviations from the E1 DDL, both deliberate:
   outrun the forecast and trigger a re-run without a second query.
 
 Revision ID: 20260818_forecast
-Revises: 20260817_comp
+Revises: 20260818_wl
 Create Date: 2026-08-18
 """
 
@@ -20,7 +20,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "20260818_forecast"
-down_revision: str | None = "20260817_comp"
+down_revision: str | None = "20260818_wl"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
