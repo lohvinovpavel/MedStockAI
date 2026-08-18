@@ -27,6 +27,7 @@ accepts each profile before it can colour anything.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 
@@ -56,6 +57,9 @@ SECTIONS = (
 # Labels run to hundreds of KB. Cost and prompt limits both say to send the
 # sections that matter, truncated, not the document.
 MAX_CHARS = 8_000
+
+# Worst first, so a merge keeps the gravest assessment of a shared reaction.
+_SERIOUSNESS_RANK = {"fatal": 0, "serious": 1, "moderate": 2, "mild": 3}
 
 
 def label_text(rxcui: str) -> tuple[str, str] | None:
@@ -118,6 +122,58 @@ def _ask_with_backoff(payload: dict, attempts: int = 4) -> dict:
     raise AIError("unreachable")
 
 
+# Most serious placement first. FDA puts in a boxed warning what it most wants
+# read, so when one reaction is described in several sections that is the quote
+# worth keeping.
+_SECTION_RANK = {name: i for i, name in enumerate(SECTIONS)}
+
+
+def merge_by_reaction(rows: list[dict]) -> list[dict]:
+    """One row per reaction, with every section's risk factors unioned.
+
+    A label routinely says the same thing more than once: metformin's lactic
+    acidosis is stated in the boxed warning *and* twice in warnings and
+    cautions, and the extraction faithfully returns all three. Both obvious
+    ways of handling that are wrong.
+
+    Writing three rows makes `prognosis_findings` emit three findings for one
+    reaction and score it three times over, which inflates the very number a
+    pharmacist is meant to weigh. Letting the natural key collapse them
+    silently discards two — and which one survives is upsert order, so the
+    boxed warning, the most serious statement of the three, is as likely to be
+    thrown away as kept. That is what actually happened the first time this ran
+    against a real label.
+
+    So: union the factors, keep the quote and section from the most
+    authoritative placement, and take the worst seriousness anyone assigned.
+    The dropped quotes are a real loss, but they restate a reaction already
+    represented, and gate 2 still holds on the quote that remains.
+    """
+    merged: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row["rxcui"], row["reaction"].strip().casefold())
+        current = merged.get(key)
+        if current is None:
+            merged[key] = {**row, "risk_factors": list(row["risk_factors"])}
+            continue
+
+        seen = {json.dumps(f, sort_keys=True) for f in current["risk_factors"]}
+        for factor in row["risk_factors"]:
+            marker = json.dumps(factor, sort_keys=True)
+            if marker not in seen:
+                seen.add(marker)
+                current["risk_factors"].append(factor)
+
+        if _SECTION_RANK.get(row["section"], 99) < _SECTION_RANK.get(current["section"], 99):
+            current["citation"] = row["citation"]
+            current["section"] = row["section"]
+        if _SERIOUSNESS_RANK.get(row["seriousness"], 9) < _SERIOUSNESS_RANK.get(
+            current["seriousness"], 9
+        ):
+            current["seriousness"] = row["seriousness"]
+    return list(merged.values())
+
+
 def extract(rxcui: str) -> list[dict]:
     """Risk profiles for one drug. `[]` means no label, or nothing conditional
     in it — both are ordinary."""
@@ -129,19 +185,21 @@ def extract(rxcui: str) -> list[dict]:
     result = _ask_with_backoff(
         {"rxcui": rxcui, "drug_name": drug_name(rxcui, text), "source_text": text},
     )
-    return [
-        {
-            "rxcui": str(rxcui),
-            "reaction": str(risk.get("reaction"))[:200],
-            "seriousness": str(risk.get("seriousness") or "moderate")[:20],
-            "risk_factors": risk.get("risk_factors") or [],
-            "citation": str(risk.get("citation"))[:2000],
-            "section": str(risk.get("section") or "")[:60],
-            "spl_id": spl_id,
-            "status": "awaiting_approval",
-        }
-        for risk in result.get("risks") or []
-    ]
+    return merge_by_reaction(
+        [
+            {
+                "rxcui": str(rxcui),
+                "reaction": str(risk.get("reaction"))[:200],
+                "seriousness": str(risk.get("seriousness") or "moderate")[:20],
+                "risk_factors": risk.get("risk_factors") or [],
+                "citation": str(risk.get("citation"))[:2000],
+                "section": str(risk.get("section") or "")[:60],
+                "spl_id": spl_id,
+                "status": "awaiting_approval",
+            }
+            for risk in result.get("risks") or []
+        ]
+    )
 
 
 # What re-extraction resets, over and above the extracted values themselves.

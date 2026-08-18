@@ -104,6 +104,16 @@ Four gates, in order. A profile failing any of them never reaches a pharmacist.
 4. **Versioned.** Each profile records the label `spl_id` and extraction date, so
    a prediction made today can still be explained after the label changes.
 
+**One reaction, several placements.** A label routinely states the same risk more
+than once: metformin's lactic acidosis is in the boxed warning *and* twice in
+warnings and cautions, and the extraction faithfully returns all three. Both
+naive handlings are wrong — three rows make stage 7b score one reaction three
+times, and letting the `(rxcui, reaction)` key collapse them discards two at
+random, which is what happened the first time this ran against a real label (the
+boxed warning was the one lost, leaving a single risk factor where the label
+gave three). `merge_by_reaction` unions the factors, keeps the quote from the
+most authoritative section, and takes the gravest seriousness anyone assigned.
+
 ### 1.4 Applying it — still deterministic
 
 At request time this is a lookup and a count, in the existing pipeline:
