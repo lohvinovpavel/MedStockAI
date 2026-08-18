@@ -1,8 +1,8 @@
-"""Task registry. `ai.py` owns the *mechanism* (the Gemini call, retries,
-the cache). Each service owns its *task*: the prompt and the shape of the
-answer, registered here rather than hardcoded in `ai.py`.
+"""Task registry. `ai/core.py` owns the *mechanism* (the Gemini call, retries,
+the cache, the breaker). Each service owns its *task*: the prompt and the
+shape of the answer, registered here rather than hardcoded in `ai/core.py`.
 
-Add your task here; you do not touch `ai.py` to do it.
+Add your task here; you do not touch `ai/core.py` to do it.
 Owner column is not decoration — it is who gets paged when a prompt regresses.
 """
 
@@ -15,6 +15,11 @@ class AITask:
     name: str
     owner: str
     prompt: str                      # str.format()-ed with the payload passed to ask_ai()
+    # Bump on any edit to `prompt` or `validate`. It's part of the ai_cache
+    # unique key (type, prompt_version, dedupe_key) -- an old answer from a
+    # since-edited prompt is a stale answer, not a valid cache hit, and
+    # bumping this is what makes that cache miss instead of replaying it.
+    prompt_version: str = "v1"
     validate: Callable[[dict], None] | None = None   # raise to reject the answer (raises AIError)
     # Seconds, when this task needs longer than settings.llm_timeout_seconds.
     # Only for offline work: a request-path task that needs 90 s does not need a
