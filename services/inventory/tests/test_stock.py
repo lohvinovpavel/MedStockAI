@@ -46,7 +46,7 @@ def test_stock_joins_ndcs_to_snapshots(monkeypatch):
         lambda rxcui: ["00113041178", "00904201559"],
     )
 
-    row = SimpleNamespace(ndc="00113041178", quantity=42, location_id="main-pharmacy")
+    row = SimpleNamespace(ndc="00113041178", quantity=42, location_id="main-pharmacy", facility_id=1, updated_at=None)
 
     @contextmanager
     def fake_scope(*args, **kwargs):
@@ -56,9 +56,10 @@ def test_stock_joins_ndcs_to_snapshots(monkeypatch):
 
     monkeypatch.setattr("app.main.session_scope", fake_scope)
     body = _client().get("/stock", params={"rxcui": "246461"}).json()
-    assert body["items"] == [
-        {"ndc": "00113041178", "quantity": 42, "location_id": "main-pharmacy"}
-    ]
+    assert body["items"][0]["ndc"] == "00113041178"
+    assert body["items"][0]["quantity"] == 42
+    assert body["items"][0]["location_id"] == "main-pharmacy"
+    assert body["rxnorm_degraded"] is False
 
 
 def test_stock_requires_auth():

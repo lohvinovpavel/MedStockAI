@@ -23,21 +23,10 @@ import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge
 import { StatTile } from "@/components/dashboard/StatTile";
 import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import { useFacility } from "@/lib/facility-context";
-import { useOrders } from "@/lib/orders-context";
+import { useOrders, type OrderListItem, type OrderStatus } from "@/lib/orders-context";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
-import {
-  facilityById,
-  inventoryFor,
-  isoPlusDays,
-  operatedFacilities,
-  orderTotal,
-  supplierById,
-  suppliers,
-  today,
-  type OrderStatus,
-  type PurchaseOrder,
-} from "@/lib/mock-data";
+import { apiFetch } from "@/lib/api";
 
 const STATUS_TONE: Record<OrderStatus, StatusTone> = {
   draft: "warning",
@@ -47,7 +36,7 @@ const STATUS_TONE: Record<OrderStatus, StatusTone> = {
   cancelled: "critical",
 };
 
-const STATUS_LABEL: Record<OrderStatus, string> = {
+const STATUS_LABEL: Record<OrderStatus, StatusTone extends never ? string : string> = {
   draft: "Draft",
   placed: "Placed",
   in_transit: "In transit",
@@ -55,21 +44,41 @@ const STATUS_LABEL: Record<OrderStatus, string> = {
   cancelled: "Cancelled",
 };
 
+type SupplierRow = {
+  id: number;
+  name: string;
+  lead_time_days: number;
+  shipping_flat: number;
+  active: boolean;
+};
+
+type CatalogRow = { ndc: string; unit_cost: number; pack_size: number; min_order_qty: number };
+
+type QuoteBody = {
+  subtotal: number;
+  shipping: number;
+  total: number;
+  lead_time_days: number;
+  expected_delivery: string;
+};
+
+type FormItem = { ndc: string; name: string | null };
+
 function money(n: number) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
 type SortKey = "id" | "createdAt" | "facility" | "supplier" | "drug" | "qty" | "total" | "source" | "status";
 
-function sortValue(o: PurchaseOrder, key: SortKey): string | number {
+function sortValue(o: OrderListItem, key: SortKey): string | number {
   switch (key) {
-    case "id": return o.id;
-    case "createdAt": return new Date(o.createdAt).getTime();
-    case "facility": return facilityById(o.facilityId).name;
-    case "supplier": return supplierById(o.supplierId).name;
-    case "drug": return o.drugName;
+    case "id": return o.ref;
+    case "createdAt": return o.created_at ? new Date(o.created_at).getTime() : 0;
+    case "facility": return o.facility.name ?? "";
+    case "supplier": return o.supplier.name ?? "";
+    case "drug": return o.primary_drug ?? "";
     case "qty": return o.quantity;
-    case "total": return orderTotal(o);
+    case "total": return o.total;
     case "source": return o.source;
     case "status": return STATUS_LABEL[o.status];
   }
@@ -78,41 +87,96 @@ function sortValue(o: PurchaseOrder, key: SortKey): string | number {
 export default function OrdersPage() {
   const { user } = useSession();
   const canPlace = can(user?.role, "placeOrder");
-  const { facilityId, facility } = useFacility();
-  const { orders, addOrder, updateOrderStatus } = useOrders();
+  const { facility, operatedFacilities } = useFacility();
+  const { orders, summary, createOrder, placeOrder, discardDraft } = useOrders();
 
-  // Order form — follows the facility you're currently operating as.
-  const [formFacility, setFormFacility] = useState(facilityId);
-  const [supplierId, setSupplierId] = useState(suppliers[0].id);
-  const [drugId, setDrugId] = useState<string | undefined>();
+  const [formFacilityPk, setFormFacilityPk] = useState(facility.id);
+  const [supplierId, setSupplierId] = useState<number | undefined>();
+  const [ndc, setNdc] = useState<string | undefined>();
   const [quantity, setQuantity] = useState(100);
   const [statusFilter, setStatusFilter] = useState<"all" | OrderStatus>("all");
   const [sort, setSort] = useState<SortState<SortKey>>(null);
+  const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
+  const [formItems, setFormItems] = useState<FormItem[]>([]);
+  const [quote, setQuote] = useState<QuoteBody | null>(null);
+  const [unitCost, setUnitCost] = useState(0);
 
-  // Switching facility in the sidebar used to leave this form pointed at
-  // the previous site with no indication the two disagreed. Following it
-  // by default still allows an explicit override below — ordering on
-  // behalf of another site is a real workflow — but the override no longer
-  // survives a facility switch, same as the drug selection doesn't.
   useEffect(() => {
-    setFormFacility(facilityId);
-    setDrugId(undefined);
-  }, [facilityId]);
+    setFormFacilityPk(facility.id);
+    setNdc(undefined);
+  }, [facility.id]);
 
-  const formItems = useMemo(() => inventoryFor(formFacility), [formFacility]);
-  const supplier = supplierById(supplierId);
-  const selectedDrug = formItems.find((i) => i.id === drugId);
-
-  // A SKU picked before a facility switch — sidebar-triggered or via the
-  // form's own facility select — can outlive its facility's catalogue.
-  // Clearing it here (rather than only where the switch happens) covers
-  // both entry points from one place.
   useEffect(() => {
-    if (drugId && !formItems.some((i) => i.id === drugId)) setDrugId(undefined);
-  }, [formItems, drugId]);
+    let cancelled = false;
+    apiFetch("warehouse", "/suppliers")
+      .then((body: { items: SupplierRow[] }) => {
+        if (cancelled) return;
+        const active = (body.items ?? []).filter((s) => s.active);
+        setSuppliers(active);
+        setSupplierId((prev) => prev ?? active[0]?.id);
+      })
+      .catch(() => {
+        if (!cancelled) setSuppliers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const unitCost = selectedDrug ? supplier.catalog[selectedDrug.id] ?? 0 : 0;
-  const estimated = unitCost * quantity + supplier.shippingFlat;
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("inventory", `/items?facility_id=${formFacilityPk}&limit=200`)
+      .then((body: { items: FormItem[] }) => {
+        if (cancelled) return;
+        setFormItems(body.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setFormItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formFacilityPk]);
+
+  useEffect(() => {
+    if (ndc && !formItems.some((i) => i.ndc === ndc)) setNdc(undefined);
+  }, [formItems, ndc]);
+
+  const supplier = suppliers.find((s) => s.id === supplierId);
+  const selectedDrug = formItems.find((i) => i.ndc === ndc);
+
+  useEffect(() => {
+    if (!supplierId || !ndc || !formFacilityPk) {
+      setQuote(null);
+      setUnitCost(0);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      apiFetch("warehouse", `/suppliers/${supplierId}/catalog?ndc=${encodeURIComponent(ndc)}`) as Promise<{ items: CatalogRow[] }>,
+      apiFetch("warehouse", "/quote", {
+        method: "POST",
+        body: JSON.stringify({
+          supplier_id: supplierId,
+          facility_id: formFacilityPk,
+          lines: [{ ndc, quantity }],
+        }),
+      }) as Promise<QuoteBody>,
+    ])
+      .then(([catalog, quoted]) => {
+        if (cancelled) return;
+        setUnitCost(catalog.items?.[0]?.unit_cost ?? 0);
+        setQuote(quoted);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setQuote(null);
+        setUnitCost(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supplierId, ndc, quantity, formFacilityPk]);
 
   const drafts = orders.filter((o) => o.status === "draft");
   const filteredHistory = orders.filter((o) => (statusFilter === "all" ? true : o.status === statusFilter));
@@ -122,43 +186,42 @@ export default function OrdersPage() {
     return [...filteredHistory].sort((a, b) => dir * compareValues(sortValue(a, sort.key), sortValue(b, sort.key)));
   }, [filteredHistory, sort]);
 
-  const thisMonth = orders.filter(
-    (o) => o.status === "delivered" && new Date(o.createdAt).getUTCMonth() === today.getUTCMonth(),
-  ).length;
-  const committed = orders
-    .filter((o) => o.status === "placed" || o.status === "in_transit")
-    .reduce((sum, o) => sum + orderTotal(o), 0);
-
-  function placeOrder() {
-    if (!selectedDrug) return;
-    const order = addOrder({
-      facilityId: formFacility,
-      supplierId,
-      drugId: selectedDrug.id,
-      drugName: selectedDrug.drugName,
-      quantity,
-      unit: selectedDrug.unit,
-      unitCost,
-      shipping: supplier.shippingFlat,
-      status: "placed",
-      source: "manual",
-      expectedDelivery: isoPlusDays(supplier.leadTimeDays),
-    });
-    toast.success(`Order ${order.id} placed with ${supplier.name}.`, {
-      description: `${quantity} ${selectedDrug.unit} of ${selectedDrug.drugName} · ${money(estimated)}`,
-    });
-    setDrugId(undefined);
-    setQuantity(100);
+  async function submitManual() {
+    if (!selectedDrug || !supplierId) return;
+    try {
+      const order = await createOrder({
+        facility_id: formFacilityPk,
+        supplier_id: supplierId,
+        status: "placed",
+        source: "manual",
+        lines: [{ ndc: selectedDrug.ndc, quantity }],
+      });
+      toast.success(`Order ${order.ref} placed with ${supplier?.name ?? "supplier"}.`, {
+        description: `${quantity} of ${selectedDrug.name ?? selectedDrug.ndc} · ${money(quote?.total ?? 0)}`,
+      });
+      setNdc(undefined);
+      setQuantity(100);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not place order.");
+    }
   }
 
-  function placeDraft(order: PurchaseOrder) {
-    updateOrderStatus(order.id, "placed");
-    toast.success(`Order ${order.id} placed with ${supplierById(order.supplierId).name}.`);
+  async function placeDraft(order: OrderListItem) {
+    try {
+      await placeOrder(order.id);
+      toast.success(`Order ${order.ref} placed with ${order.supplier.name ?? "supplier"}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not place draft.");
+    }
   }
 
-  function discardDraft(order: PurchaseOrder) {
-    updateOrderStatus(order.id, "cancelled");
-    toast(`Draft ${order.id} discarded.`);
+  async function dropDraft(order: OrderListItem) {
+    try {
+      await discardDraft(order.id);
+      toast(`Draft ${order.ref} discarded.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not discard draft.");
+    }
   }
 
   return (
@@ -174,19 +237,26 @@ export default function OrdersPage() {
         <StatTile
           icon={Inbox}
           label="Drafts awaiting review"
-          value={drafts.length}
+          value={summary?.drafts_awaiting_review ?? drafts.length}
           hint="AI suggestions, all facilities"
-          tone={drafts.length > 0 ? "warning" : undefined}
+          tone={(summary?.drafts_awaiting_review ?? drafts.length) > 0 ? "warning" : undefined}
         />
-        <StatTile icon={Truck} label="In transit" value={orders.filter((o) => o.status === "in_transit").length} hint="All facilities" tone="info" />
-        <StatTile icon={PackageCheck} label="Delivered this month" value={thisMonth} hint="By order date, not delivery date" />
-        <StatTile icon={Wallet} label="Committed spend" value={money(committed)} hint="Placed + in transit, all facilities" />
+        <StatTile icon={Truck} label="In transit" value={summary?.in_transit ?? 0} hint="All facilities" tone="info" />
+        <StatTile
+          icon={PackageCheck}
+          label="Delivered this month"
+          value={summary?.delivered_this_month ?? 0}
+          hint={summary?.timezone === "UTC" ? "Calendar month, UTC" : "This calendar month"}
+        />
+        <StatTile
+          icon={Wallet}
+          label="Committed spend"
+          value={money(summary?.committed_spend.amount ?? 0)}
+          hint={summary?.committed_spend.definition || "Placed + in transit"}
+        />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
-        {/* Committing spend is a Procurement Officer action (docs/rbac-matrix.md
-            #13) — a pharmacist still reviews and discards AI drafts below, but
-            can't raise or place a manual PO. */}
         {!canPlace ? (
           <Card className="gap-3 py-4">
             <CardHeader className="px-4">
@@ -206,19 +276,19 @@ export default function OrdersPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground">Receiving pharmacy</span>
-                <Select value={formFacility} onValueChange={setFormFacility}>
+                <Select value={String(formFacilityPk)} onValueChange={(v) => setFormFacilityPk(Number(v))}>
                   <SelectTrigger size="sm" className="h-8 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {operatedFacilities.map((f) => (
-                        <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+                        <SelectItem key={f.id} value={String(f.id)}>{f.name}</SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                {formFacility !== facilityId && (
+                {formFacilityPk !== facility.id && (
                   <span className="text-[11px] text-amber-700 dark:text-amber-400">
                     On behalf of — your active site is {facility.name}.
                   </span>
@@ -227,15 +297,15 @@ export default function OrdersPage() {
 
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground">Supplier</span>
-                <Select value={supplierId} onValueChange={setSupplierId}>
+                <Select value={supplierId ? String(supplierId) : undefined} onValueChange={(v) => setSupplierId(Number(v))}>
                   <SelectTrigger size="sm" className="h-8 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {suppliers.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name} — {s.leadTimeDays}d lead
+                        <SelectItem key={s.id} value={String(s.id)}>
+                          {s.name} — {s.lead_time_days}d lead
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -245,14 +315,14 @@ export default function OrdersPage() {
 
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground">Drug</span>
-                <Select value={drugId} onValueChange={setDrugId}>
+                <Select value={ndc} onValueChange={setNdc}>
                   <SelectTrigger size="sm" className="h-8 w-full text-xs">
                     <SelectValue placeholder="Select a SKU" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {formItems.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
+                        <SelectItem key={i.ndc} value={i.ndc}>{i.name ?? i.ndc}</SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>
@@ -275,41 +345,41 @@ export default function OrdersPage() {
 
             <div className="flex flex-col gap-1.5 rounded-md bg-muted/40 p-3">
               <p className="mb-0.5 text-xs font-medium">Estimated cost</p>
-              {!selectedDrug ? (
+              {!selectedDrug || !quote ? (
                 <p className="py-2 text-center text-muted-foreground">Select a SKU to see unit cost, shipping, and expected delivery.</p>
               ) : (
                 <>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Unit cost ({supplier.shortName})</span>
+                    <span className="text-muted-foreground">Unit cost ({supplier?.name})</span>
                     <span className="font-mono tabular-nums">${unitCost.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Line total</span>
-                    <span className="font-mono tabular-nums">{money(unitCost * quantity)}</span>
+                    <span className="font-mono tabular-nums">{money(quote.subtotal)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Shipping</span>
-                    <span className="font-mono tabular-nums">{money(supplier.shippingFlat)}</span>
+                    <span className="font-mono tabular-nums">{money(quote.shipping)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Expected delivery (if ordered today)</span>
                     <span className="font-mono tabular-nums">
-                      {isoPlusDays(supplier.leadTimeDays)} ({supplier.leadTimeDays}d)
+                      {quote.expected_delivery} ({quote.lead_time_days}d)
                     </span>
                   </div>
                   <Separator className="my-1" />
                   <div className="flex justify-between text-sm font-semibold">
                     <span>Estimated total</span>
-                    <span className="font-mono tabular-nums">{money(estimated)}</span>
+                    <span className="font-mono tabular-nums">{money(quote.total)}</span>
                   </div>
                 </>
               )}
             </div>
           </CardContent>
           <CardFooter className="px-4">
-            <Button size="sm" className="h-8 w-full text-xs" disabled={!selectedDrug} onClick={placeOrder}>
+            <Button size="sm" className="h-8 w-full text-xs" disabled={!selectedDrug || !quote} onClick={() => void submitManual()}>
               <Truck data-icon="inline-start" />
-              {selectedDrug ? `Place order — ${money(estimated)}` : "Select a SKU to continue"}
+              {selectedDrug && quote ? `Place order — ${money(quote.total)}` : "Select a SKU to continue"}
             </Button>
           </CardFooter>
         </Card>
@@ -321,7 +391,7 @@ export default function OrdersPage() {
               <Sparkles className="size-4 text-primary" />
               AI suggestions awaiting review
             </CardTitle>
-            <CardDescription className="text-xs">Draft orders raised from the forecast page.</CardDescription>
+            <CardDescription className="text-xs">Draft orders raised from the forecast page and copilot.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 px-4 text-xs">
             {drafts.length === 0 ? (
@@ -337,27 +407,25 @@ export default function OrdersPage() {
                 <div key={o.id} className="flex flex-col gap-2 rounded-md border border-amber-500/30 p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{o.drugName}</p>
+                      <p className="truncate font-medium">{o.primary_drug}</p>
                       <p className="truncate text-[11px] text-muted-foreground">
-                        {facilityById(o.facilityId).name} · {supplierById(o.supplierId).name}
+                        {o.facility.name} · {o.supplier.name}
                       </p>
                     </div>
                     <Badge variant="secondary" className="shrink-0 text-[10px] font-normal">AI Suggested</Badge>
                   </div>
                   <div className="flex justify-between font-mono tabular-nums">
-                    <span className="text-muted-foreground">
-                      {o.quantity} {o.unit}
-                    </span>
-                    <span className="font-semibold">{money(orderTotal(o))}</span>
+                    <span className="text-muted-foreground">{o.quantity} units</span>
+                    <span className="font-semibold">{money(o.total)}</span>
                   </div>
                   {o.note && <p className="text-[11px] text-muted-foreground">{o.note}</p>}
                   <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" className="h-7 flex-1 text-xs" onClick={() => discardDraft(o)}>
+                    <Button variant="ghost" size="sm" className="h-7 flex-1 text-xs" onClick={() => void dropDraft(o)}>
                       <X data-icon="inline-start" />
                       Discard
                     </Button>
                     {canPlace && (
-                      <Button size="sm" className="h-7 flex-1 text-xs" onClick={() => placeDraft(o)}>
+                      <Button size="sm" className="h-7 flex-1 text-xs" onClick={() => void placeDraft(o)}>
                         <CheckCircle2 data-icon="inline-start" />
                         Place
                       </Button>
@@ -412,15 +480,13 @@ export default function OrdersPage() {
               <TableBody>
                 {history.map((o) => (
                   <TableRow key={o.id} className="text-xs">
-                    <TableCell className="py-2 pl-4 font-mono text-[11px] tabular-nums">{o.id}</TableCell>
-                    <TableCell className="py-2 font-mono tabular-nums text-muted-foreground">{o.createdAt}</TableCell>
-                    <TableCell className="py-2">{facilityById(o.facilityId).name}</TableCell>
-                    <TableCell className="py-2 text-muted-foreground">{supplierById(o.supplierId).name}</TableCell>
-                    <TableCell className="py-2 font-medium">{o.drugName}</TableCell>
-                    <TableCell className="py-2 font-mono tabular-nums">
-                      {o.quantity} <span className="font-sans text-muted-foreground">{o.unit}</span>
-                    </TableCell>
-                    <TableCell className="py-2 font-mono tabular-nums">{money(orderTotal(o))}</TableCell>
+                    <TableCell className="py-2 pl-4 font-mono text-[11px] tabular-nums">{o.ref}</TableCell>
+                    <TableCell className="py-2 font-mono tabular-nums text-muted-foreground">{o.created_at}</TableCell>
+                    <TableCell className="py-2">{o.facility.name}</TableCell>
+                    <TableCell className="py-2 text-muted-foreground">{o.supplier.name}</TableCell>
+                    <TableCell className="py-2 font-medium">{o.primary_drug}</TableCell>
+                    <TableCell className="py-2 font-mono tabular-nums">{o.quantity}</TableCell>
+                    <TableCell className="py-2 font-mono tabular-nums">{money(o.total)}</TableCell>
                     <TableCell className="py-2">
                       <Badge variant={o.source === "ai_suggestion" ? "secondary" : "outline"} className="text-[10px] font-normal">
                         {o.source === "ai_suggestion" ? "AI" : "Manual"}

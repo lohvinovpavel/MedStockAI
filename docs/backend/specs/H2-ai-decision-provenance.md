@@ -1,6 +1,6 @@
 # H2 — AI decision provenance
 
-**Owner:** `shared/medstock_shared/ai.py` + `ai_tasks.py` · **Flows:** 7, 12, 18, 19 · **Status:** ❌
+**Owner:** `shared/medstock_shared/ai.py` + `ai_tasks.py` · **Flows:** 7, 12, 18, 19 · **Status:** ✅ (wave 6)
 **Depends on:** H1
 
 ## Goal
@@ -76,12 +76,12 @@ decision to the exact stored model output.
 
 ## Acceptance criteria
 
-- [ ] Editing a prompt and bumping `prompt_version` produces a cache miss and a new row.
-- [ ] Editing a prompt without bumping fails CI.
-- [ ] Two tasks on different models produce different keys for the same payload.
-- [ ] A `review_decision` created from an AI recommendation has `ai_dedupe_key` set on its audit row.
-- [ ] That key resolves to exactly one `ai_cache` row.
-- [ ] Existing rows keep working (empty defaults, no migration failure).
+- [x] Editing a prompt and bumping `prompt_version` produces a cache miss and a new row.
+- [x] Editing a prompt without bumping fails CI.
+- [x] Two tasks on different models produce different keys for the same payload.
+- [x] A `review_decision` created from an AI recommendation has `ai_dedupe_key` set on its audit row.
+- [x] That key resolves to exactly one `ai_cache` row.
+- [x] Existing rows keep working (empty defaults, no migration failure).
 
 ## Out of scope
 

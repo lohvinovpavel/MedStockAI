@@ -1,6 +1,6 @@
 # C5 — Local availability overlay on analogues
 
-**Service:** `analogue` · **Flow:** 7 · **Status:** ❌ · **Depends on:** B1, B2, C3, C4
+**Service:** `analogue` · **Flow:** 7 · **Status:** ✅ (wave 3) · **Depends on:** B1, B2, C3, C4
 
 ## Goal
 
@@ -51,8 +51,8 @@ caller breaks.
    Mixing the two would make a mediocre substitute outrank a good one because a shelf happened
    to be full.
 3. Distance is relative to `facility_id`, not to Central. This is the exact bug already fixed
-   on the mock side (`Math.abs(f.distanceKm - facility.distanceKm)`); do not reintroduce it
-   server-side.
+   in the facility switcher (`web/lib/geo.ts` — relative haversine, not an absolute origin);
+   do not reintroduce it server-side.
 4. If the stock query fails, return the analogue list with `availability: null` and a
    `stock_degraded: true` flag rather than failing the whole request — same degradation
    principle as `ask_ai` failing back to the unfiltered list.
@@ -61,11 +61,11 @@ caller breaks.
 
 ## Acceptance criteria
 
-- [ ] Without `facility_id` the response is byte-identical to today's.
-- [ ] Switching `facility_id` flips a candidate between stocked and not-stocked.
-- [ ] `nearest_with_stock` never names the requesting facility.
-- [ ] Candidate count N produces one stock query, not N.
-- [ ] With `stock_snapshot` unavailable, the endpoint still returns ranked analogues.
+- [x] Without `facility_id` the response is byte-identical to today's.
+- [x] Switching `facility_id` flips a candidate between stocked and not-stocked.
+- [x] `nearest_with_stock` never names the requesting facility.
+- [x] Candidate count N produces one stock query, not N.
+- [x] With `stock_snapshot` unavailable, the endpoint still returns ranked analogues.
 
 ## Out of scope
 

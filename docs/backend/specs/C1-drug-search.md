@@ -8,13 +8,13 @@ ingredient/SCDC hits to `SCD`/`SBD`, and returns candidates for **explicit** sel
 single hit is still a list, and the client must not auto-pick. Gemini is not involved.
 
 Sort is `in_formulary` desc, then RxNorm score. `in_formulary` is a LEFT JOIN to
-`formulary_item`; until B6 writes that table every item is `false` and the shape is unchanged.
+`formulary_item` (B6 import / demo seed).
 
 **No implementation work.** Verify:
 
-- [ ] `q` is bounded 1–120 characters and `limit` caps at 50.
-- [ ] After B6 imports a formulary, formulary hits sort first.
-- [ ] RxNorm being unreachable produces a clean error, not a 500 traceback.
+- [x] `q` is bounded 1–120 characters and `limit` caps at 50.
+- [x] After B6 imports a formulary, formulary hits sort first.
+- [x] RxNorm being unreachable produces a clean error, not a 500 traceback.
 
 Ukrainian trade names remain out of scope — RxNorm is US English, the same capstone feed choice
 recorded in `docs/services.md` §7.

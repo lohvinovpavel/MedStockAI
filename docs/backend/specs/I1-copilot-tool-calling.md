@@ -1,13 +1,12 @@
 # I1 — Copilot chat with tool calling
 
-**Service:** new thin gateway (`/api/copilot`) or `analogue` extended · **Flow:** 19 · **Status:** ❌ canned replies (`docs/specs/UX-09`)
+**Service:** new thin gateway (`/api/copilot`) or `analogue` extended · **Flow:** 19 · **Status:** ✅ (wave 6) — analogue hosts `/api/copilot`
 **Depends on:** A4, B2, C5, D1, E1 · **Scope:** `copilot:use`
 
 ## Goal
 
-The drawer returns hardcoded strings from a `switch` in `CopilotDrawer.tsx`. Make it a real
-model conversation whose answers come from the services that already own the data — never from
-the model's own knowledge of drugs.
+The drawer is a real model conversation (`POST /api/copilot/messages`) whose answers come from
+the services that already own the data — never from the model's own knowledge of drugs.
 
 **No framework.** `ask_ai()` is already the orchestration layer: registry, cache, validation,
 degradation, in ~150 commented lines the team owns. LangChain would replace that with control
@@ -74,12 +73,12 @@ maps to exactly one card, and the model's prose wraps it rather than restating i
 
 ## Acceptance criteria
 
-- [ ] Asking for stock triggers `get_stock` and the number in the reply matches the endpoint's.
-- [ ] A physician asking for a draft order gets a refusal sourced from a real 403, not a model refusal.
-- [ ] With the model unavailable, quick actions still return cards.
-- [ ] A question needing no tool (a greeting) makes no tool calls.
-- [ ] A tool result containing "ignore previous instructions" does not change behaviour.
-- [ ] Turn count and tool-call count are bounded under an adversarial prompt.
+- [x] Asking for stock triggers `get_stock` and the number in the reply matches the endpoint's.
+- [x] A physician asking for a draft order gets a refusal sourced from a real 403, not a model refusal.
+- [x] With the model unavailable, quick actions still return cards.
+- [x] A question needing no tool (a greeting) makes no tool calls.
+- [x] A tool result containing "ignore previous instructions" does not change behaviour.
+- [x] Turn count and tool-call count are bounded under an adversarial prompt.
 
 ## Out of scope
 

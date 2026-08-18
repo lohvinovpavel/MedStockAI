@@ -174,7 +174,11 @@ Web --> PhysicianOrPharmacist: list + rationale (user chooses)
 
 ### How to test
 
-Not implemented. When it is: same aspirin 325 path as UC-4, **Full (therapeutic)**. With Gemini up, expect a shorter list (about 3–7), each row still High/Normal/Low/Out of stock in that order, plus reason and a citation that appears in `source_text`. Empty indication vs e.g. `pain` may change which rows are kept; both stay closed-world. Kill Gemini or force a bad citation → full unfiltered list and “rationale unavailable”, not an empty table. **Ingredient** must not call Gemini.
+Open http://127.0.0.1:3000/analogue (pharmacist JWT). Search `aspirin 325`, confirm a
+preparation, switch to **Full (therapeutic)**, leave **Use AI** on, **Find analogues**.
+Expect at most 5 rows, each with Shelf status and a short reason. Uncheck Use AI and search
+again: the unfiltered Full list, longer than 5. If Gemini fails, a warning banner says the
+list is unfiltered — not an empty table. **Ingredient** must not call Gemini.
 
 ## UC-P — Physician appointment cart (demo)
 

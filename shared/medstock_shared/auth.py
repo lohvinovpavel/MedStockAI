@@ -88,6 +88,14 @@ PERMS: dict[str, set[str]] = {
         # is held by the same people who read forecasts: the pharmacist at the
         # keyboard is the one who notices the data has outrun the run.
         "forecast:run",
+        # PAGE_ROLES and the rbac matrix give the pharmacist the audit page;
+        # without this grant GET /audit 403s a role that can already open it.
+        "audit:read",
+        "batch:write",
+        "order:read",
+        "order:write",
+        "transfer:write",
+        "copilot:use",
     },
     "physician": {
         "alert:read",
@@ -103,6 +111,7 @@ PERMS: dict[str, set[str]] = {
         "profile:explain",
         "certificate:read",
         "copilot:chat",
+        "copilot:use",
     },
     "director": {
         "dashboard:read",
@@ -117,6 +126,10 @@ PERMS: dict[str, set[str]] = {
         "copilot:chat",
         "forecast:read",
         "forecast:run",
+        "order:read",
+        "transfer:write",
+        "audit:export",
+        "copilot:use",
     },
     "admin": {
         "mapping:approve",
@@ -131,8 +144,23 @@ PERMS: dict[str, set[str]] = {
         "certificate:read",
         "certification:explore",
         "copilot:chat",
+        "batch:write",
+        "par:write",
+        "order:read",
+        "order:write",
+        "recommendation:approve",
+        "copilot:use",
     },
 }
+
+# Must stay in lockstep with membership.role's CHECK (A4). A role in one and
+# not the other fails closed at the first require() — confusing, so fail at
+# import instead.
+_MEMBERSHIP_ROLES = {"pharmacist", "physician", "director", "admin"}
+if set(PERMS) != _MEMBERSHIP_ROLES:
+    raise RuntimeError(
+        f"PERMS keys {sorted(PERMS)} != membership CHECK {_MEMBERSHIP_ROLES}"
+    )
 
 
 def require(permission: str):

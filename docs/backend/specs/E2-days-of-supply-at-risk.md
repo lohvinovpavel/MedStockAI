@@ -1,13 +1,14 @@
 # E2 — Days of supply and at-risk list
 
-**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ❌ · **Depends on:** B2, B5, E1
-**Scope:** `forecast:read`
+**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ✅ `GET /at-risk` and `GET /days-of-supply` — `/forecasts` consumes them; inventory status is B5 par; B3 exposure and G1 shortage coverage attach trailing-mean `days_of_supply` when consumption exists
+**Depends on:** B1, E1 · **Scope:** `forecast:read`
 
 ## Goal
 
-"Days of supply is the core metric of the whole product" (`docs/services.md` §3). It appears on
-the inventory table, the forecast chart's depletion line, the shortage matrix and the KPI row —
-and it is currently computed nowhere. One definition, one endpoint, four consumers.
+"Days of supply is the core metric of the whole product" (`docs/services.md` §3). The formula
+lives in `GET /at-risk` and `GET /days-of-supply`. `/forecasts` is the consumer that is live;
+the inventory table uses B5 par status (wave 2). G1 shortage coverage attaches trailing-mean
+`days_of_supply` when consumption exists.
 
 ## API
 

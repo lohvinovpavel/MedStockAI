@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
@@ -59,6 +59,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { Badge } from "@/components/ui/badge";
 import { StatTile } from "@/components/dashboard/StatTile";
 import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import {
@@ -70,90 +71,167 @@ import {
   type CertResult,
 } from "@/components/CertificationBadge";
 import { explainCertification, exploreStance, gatesFor, type Gate } from "@/lib/certification";
+import { apiFetch } from "@/lib/api";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
-import { useInventory } from "@/lib/inventory-context";
+import { useInventory, type ShelfItem, type ShelfStatus } from "@/lib/inventory-context";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
-import {
-  inventoryKpisFor,
-  isoPlusDays,
-  daysOfSupply,
-  reorderPoint,
-  stockRisk,
-  daysUntil,
-  type InventoryItem,
-  type StockRisk,
-} from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
-const RISK_LABEL: Record<StockRisk, string> = { critical: "Critical", warning: "Warning", normal: "Normal" };
+const STATUS_LABEL: Record<ShelfStatus, string> = {
+  stockout: "Stockout",
+  critical: "Critical",
+  normal: "Normal",
+  surplus: "Surplus",
+};
 
-function expiryTone(days: number): StatusTone {
+const STATUS_TONE: Record<ShelfStatus, StatusTone> = {
+  stockout: "critical",
+  critical: "critical",
+  normal: "normal",
+  surplus: "surplus",
+};
+
+function expiryTone(days: number | null): StatusTone {
+  if (days == null) return "neutral";
   if (days <= 14) return "critical";
   if (days <= 30) return "warning";
   return "normal";
 }
 
-const OTHER_SKU = "__other__";
+function isoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
-type SortKey = "drugName" | "batchNumber" | "stock" | "burn" | "risk" | "expiry";
+function daysUntil(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.round((new Date(iso + "T00:00:00Z").getTime() - Date.now()) / 86_400_000);
+}
 
-// Risk sorts by days-of-supply (the number actually driving the badge), not
-// the tone label — "most urgent first" is what a pharmacist wants from this
-// column, and daysOfSupply is what "urgent" means here.
-function sortValue(item: InventoryItem, key: SortKey): string | number {
+type SortKey = "drugName" | "batchNumber" | "stock" | "risk" | "expiry";
+
+// Words that appear in RxNorm display names but should not drive the
+// inventory filter — otherwise "Oral Tablet" would match half the shelf.
+const FILTER_NOISE = new Set([
+  "mg",
+  "mcg",
+  "ug",
+  "ml",
+  "g",
+  "l",
+  "iu",
+  "meq",
+  "oral",
+  "tablet",
+  "tablets",
+  "capsule",
+  "capsules",
+  "injection",
+  "injectable",
+  "solution",
+  "suspension",
+  "cream",
+  "ointment",
+  "gel",
+  "patch",
+  "pack",
+  "packs",
+  "film",
+  "coated",
+  "chewable",
+  "delayed",
+  "extended",
+  "release",
+  "and",
+  "with",
+  "for",
+]);
+
+function significantFilterTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[\s/,+()]+/)
+    .map((token) => token.replace(/[^a-z0-9-]/g, ""))
+    .filter((token) => token.length >= 4 && !FILTER_NOISE.has(token) && !/^\d/.test(token));
+}
+
+function itemMatchesInventoryQuery(
+  item: ShelfItem,
+  search: string,
+  rxcuiNdcs: Set<string> | null,
+): boolean {
+  const q = search.trim().toLowerCase();
+  if (!q && !rxcuiNdcs) return true;
+  if (rxcuiNdcs?.has(item.ndc)) return true;
+  if (!q) return false;
+  const name = (item.name ?? "").toLowerCase();
+  if (name.includes(q) || item.ndc.toLowerCase().includes(q)) return true;
+  const tokens = significantFilterTokens(q);
+  if (tokens.length === 0) return false;
+  return tokens.some((token) => name.includes(token) || item.ndc.toLowerCase().includes(token));
+}
+
+function shelfStatusTone(status: string): StatusTone {
+  return STATUS_TONE[status as ShelfStatus] ?? "neutral";
+}
+
+function shelfStatusLabel(status: string): string {
+  return STATUS_LABEL[status as ShelfStatus] ?? status;
+}
+
+function sortValue(item: ShelfItem, key: SortKey): string | number {
   switch (key) {
-    case "drugName": return item.drugName;
-    case "batchNumber": return item.batchNumber;
-    case "stock": return item.currentStock;
-    case "burn": return item.dailyBurnRate;
-    case "risk": return Number.isFinite(daysOfSupply(item)) ? daysOfSupply(item) : Infinity;
-    case "expiry": return item.expiryDate;
+    case "drugName": return item.name ?? item.ndc;
+    case "batchNumber": return item.lot ?? "";
+    case "stock": return item.quantity;
+    case "risk": return item.status === "stockout" ? 0 : item.status === "critical" ? 1 : item.status === "surplus" ? 2 : 3;
+    case "expiry": return item.earliest_expiry ?? "9999-12-31";
   }
 }
 
-// Actually writes into inventory now — previously validated a full form
-// and then discarded it, with a success toast in front of a no-op. A
-// picker over the facility's own catalogue is the default (free text can't
-// resolve to a real InventoryItem); "Other / new SKU" is the escape hatch
-// for a genuinely new product.
-function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: InventoryItem[] }) {
+function ReceiveBatchDialog({ items }: { items: ShelfItem[] }) {
   const { receiveBatch } = useInventory();
   const [open, setOpen] = useState(false);
-  const [itemId, setItemId] = useState<string>(items[0]?.id ?? OTHER_SKU);
-  const [drugName, setDrugName] = useState("");
+  const [ndc, setNdc] = useState<string>(items[0]?.ndc ?? "");
   const [batchNumber, setBatchNumber] = useState("");
   const [quantity, setQuantity] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  const [saving, setSaving] = useState(false);
 
   function reset() {
-    setItemId(items[0]?.id ?? OTHER_SKU);
-    setDrugName("");
+    setNdc(items[0]?.ndc ?? "");
     setBatchNumber("");
     setQuantity("");
     setExpiryDate("");
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     const qty = Number(quantity);
-    const isNew = itemId === OTHER_SKU;
-    if (!qty || qty < 1 || !batchNumber.trim() || !expiryDate || (isNew && !drugName.trim())) return;
-
-    const selected = items.find((i) => i.id === itemId);
-    const created = receiveBatch(facilityId, {
-      itemId: isNew ? undefined : itemId,
-      drugName: isNew ? drugName.trim() : selected!.drugName,
-      batchNumber: batchNumber.trim(),
-      quantity: qty,
-      expiryDate,
-    });
-    setOpen(false);
-    reset();
-    toast.success("Batch received into inventory.", {
-      description: `${qty} ${isNew ? "units" : selected!.unit} of ${created.drugName} — batch ${batchNumber.trim()}.`,
-    });
+    const selected = items.find((i) => i.ndc === ndc);
+    if (!qty || qty < 1 || !batchNumber.trim() || !expiryDate || !selected) return;
+    setSaving(true);
+    try {
+      await receiveBatch({
+        ndc: selected.ndc,
+        lot: batchNumber.trim(),
+        quantity: qty,
+        expiryDate,
+        location_id: selected.location_id,
+      });
+      setOpen(false);
+      reset();
+      toast.success("Batch received into inventory.", {
+        description: `${qty} of ${selected.name ?? selected.ndc} — batch ${batchNumber.trim()}.`,
+      });
+    } catch (err) {
+      toast.error("Could not receive batch", {
+        description: err instanceof Error ? err.message : "inventory write failed",
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -179,32 +257,19 @@ function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: 
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="rb-item">Drug</FieldLabel>
-              <Select value={itemId} onValueChange={setItemId}>
+              <Select value={ndc} onValueChange={setNdc}>
                 <SelectTrigger id="rb-item" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
                     {items.map((i) => (
-                      <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
+                      <SelectItem key={i.ndc} value={i.ndc}>{i.name ?? i.ndc}</SelectItem>
                     ))}
-                    <SelectItem value={OTHER_SKU}>Other / new SKU…</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
             </Field>
-            {itemId === OTHER_SKU && (
-              <Field>
-                <FieldLabel htmlFor="rb-drug">Drug name</FieldLabel>
-                <Input
-                  id="rb-drug"
-                  value={drugName}
-                  onChange={(e) => setDrugName(e.target.value)}
-                  placeholder="e.g. Amoxicillin/Clavulanate 875mg"
-                  required
-                />
-              </Field>
-            )}
             <Field>
               <FieldLabel htmlFor="rb-batch">Batch #</FieldLabel>
               <Input
@@ -232,7 +297,7 @@ function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: 
               <Input
                 id="rb-expiry"
                 type="date"
-                min={isoPlusDays(0)}
+                min={isoToday()}
                 value={expiryDate}
                 onChange={(e) => setExpiryDate(e.target.value)}
                 required
@@ -241,7 +306,7 @@ function ReceiveBatchDialog({ facilityId, items }: { facilityId: string; items: 
           </FieldGroup>
           <DialogFooter className="mt-4">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit">Save batch</Button>
+            <Button type="submit" disabled={saving || items.length === 0}>{saving ? "Saving…" : "Save batch"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -307,7 +372,7 @@ function CertificateDialog({
   open,
   onOpenChange,
 }: {
-  item: InventoryItem | null;
+  item: { drugName: string; ndc: string } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -521,66 +586,92 @@ export default function InventoryPage() {
   const router = useRouter();
   const { setFocus } = useCopilot();
   const { user } = useSession();
-  const { facilityId, facility } = useFacility();
-  const { itemsFor } = useInventory();
+  const { facility } = useFacility();
+  const { items, loading, error } = useInventory();
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<"all" | StockRisk>("all");
+  const [rxcuiFilter, setRxcuiFilter] = useState<string | null>(null);
+  const [rxcuiNdcs, setRxcuiNdcs] = useState<Set<string> | null>(null);
+  const [status, setStatus] = useState<"all" | ShelfStatus>("all");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [certItem, setCertItem] = useState<InventoryItem | null>(null);
+  const [certItem, setCertItem] = useState<{ drugName: string; ndc: string } | null>(null);
   const [sort, setSort] = useState<SortState<SortKey>>(null);
 
-  const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const name = params.get("name") ?? "";
+    const rxcui = params.get("rxcui");
+    if (name) setSearch(name);
+    if (rxcui) setRxcuiFilter(rxcui);
+  }, []);
 
-  // COMP-1: one batched call for the whole shelf, not one per row. Fetched
-  // separately from stock on purpose — compliance being down must never blank
-  // the inventory table (docs/compliance-usecases.md §2.2).
+  useEffect(() => {
+    if (!rxcuiFilter) {
+      setRxcuiNdcs(null);
+      return;
+    }
+    let cancelled = false;
+    apiFetch("inventory", `/stock?rxcui=${encodeURIComponent(rxcuiFilter)}&facility_id=${facility.id}`)
+      .then((body: { items?: { ndc: string }[] }) => {
+        if (cancelled) return;
+        setRxcuiNdcs(new Set((body.items ?? []).map((row) => row.ndc)));
+      })
+      .catch(() => {
+        if (!cancelled) setRxcuiNdcs(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rxcuiFilter, facility.id]);
+
   const certNdcs = useMemo(() => items.map((i) => i.ndc).filter(Boolean), [items]);
   const certification = useCertificationStatuses(certNdcs);
 
-  // A row with no NDC is `unknown` (nothing to certify), not `unavailable`
-  // (we tried and could not reach the service). Those are different facts and
-  // the badge says so.
-  const certFor = (item: InventoryItem): CertResult | undefined =>
+  const certFor = (item: ShelfItem): CertResult | undefined =>
     item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 };
-  // criticalStock/expiringSoon/certAlerts recomputed from `items` (the
-  // received-batch overlay included) rather than read verbatim from
-  // inventoryKpisFor, so topping up a critical SKU can move it out of that
-  // count. totalSkus stays the network-wide catalogue figure — it was never
-  // meant to be "rows in this table" (see UX-12).
+
   const kpis = useMemo(() => {
-    const catalogue = inventoryKpisFor(facilityId);
     return {
-      totalSkus: catalogue.totalSkus,
-      criticalStock: items.filter((i) => stockRisk(i) === "critical").length,
-      expiringSoon: items.filter((i) => daysUntil(i.expiryDate) <= 30).length,
-      // Amber and red only. `unknown` and `unavailable` are deliberately not
-      // counted here — a drug nobody has a record for, or one we could not
-      // check because the service is down, is not the same alert as a live
-      // recall, and folding them together would make this number jump to the
-      // shelf size the moment compliance goes offline.
+      totalSkus: items.length,
+      criticalStock: items.filter((i) => i.status === "critical" || i.status === "stockout").length,
+      expiringSoon: items.filter((i) => {
+        const d = daysUntil(i.earliest_expiry);
+        return d != null && d <= 30;
+      }).length,
       certAlerts: items.filter((i) => {
         const s = i.ndc ? certification[i.ndc]?.status : undefined;
         return s === "yellow" || s === "red";
       }).length,
     };
-  }, [items, facilityId, certification]);
+  }, [items, certification]);
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
-      const q = search.trim().toLowerCase();
-      if (q && !(item.drugName.toLowerCase().includes(q) || item.inn.toLowerCase().includes(q) || item.atcCode.toLowerCase().includes(q))) {
-        return false;
-      }
-      if (status !== "all" && stockRisk(item) !== status) return false;
-      if (range?.from) {
-        const expiry = new Date(item.expiryDate);
+      if (!itemMatchesInventoryQuery(item, search, rxcuiNdcs)) return false;
+      if (status !== "all" && item.status !== status) return false;
+      if (range?.from && item.earliest_expiry) {
+        const expiry = new Date(item.earliest_expiry);
         if (expiry < range.from) return false;
         if (range.to && expiry > range.to) return false;
+      } else if (range?.from && !item.earliest_expiry) {
+        return false;
       }
       return true;
     });
-  }, [items, search, status, range]);
+  }, [items, search, rxcuiNdcs, status, range]);
+
+  function clearInventoryDeepLink() {
+    if (!rxcuiFilter && !window.location.search) return;
+    setRxcuiFilter(null);
+    if (window.location.search) {
+      router.replace("/inventory", { scroll: false });
+    }
+  }
+
+  function onSearchChange(value: string) {
+    setSearch(value);
+    clearInventoryDeepLink();
+  }
 
   const sorted = useMemo(() => {
     if (!sort) return filtered;
@@ -588,15 +679,17 @@ export default function InventoryPage() {
     return [...filtered].sort((a, b) => dir * compareValues(sortValue(a, sort.key), sortValue(b, sort.key)));
   }, [filtered, sort]);
 
-  function selectRow(item: InventoryItem) {
-    const next = selectedId === item.id ? null : item.id;
+  function selectRow(item: ShelfItem) {
+    const next = selectedId === item.ndc ? null : item.ndc;
     setSelectedId(next);
     if (next) {
       setFocus({
         kind: "sku",
-        label: item.drugName,
-        detail: `Batch ${item.batchNumber} · ${item.currentStock} ${item.unit} on hand · expires ${item.expiryDate}`,
-        itemId: item.id,
+        label: item.name ?? item.ndc,
+        detail: `Lot ${item.lot ?? "—"} · ${item.quantity} on hand · expires ${item.earliest_expiry ?? "—"}`,
+        itemId: item.ndc,
+        ndc: item.ndc,
+        rxcui: item.rxcui ?? null,
       });
     }
   }
@@ -612,8 +705,8 @@ export default function InventoryPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile icon={Boxes} label="Catalogue SKUs" value={kpis.totalSkus.toLocaleString()} />
-        <StatTile icon={AlertTriangle} label="Critical stock (<3d)" value={kpis.criticalStock} tone="critical" />
+        <StatTile icon={Boxes} label="SKUs this site" value={kpis.totalSkus.toLocaleString()} />
+        <StatTile icon={AlertTriangle} label="Critical / stockout" value={kpis.criticalStock} tone="critical" />
         <StatTile icon={Clock} label="Expiring soon (<30d)" value={kpis.expiringSoon} tone="warning" />
         <StatTile icon={ShieldAlert} label="Certification alerts" value={kpis.certAlerts} tone="warning" />
       </div>
@@ -623,11 +716,25 @@ export default function InventoryPage() {
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter by SKU, INN, or ATC code…"
-            className="h-8 w-64 pl-8 text-xs"
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Filter by name, NDC, or analogue…"
+            className="h-8 w-80 pl-8 text-xs"
           />
         </div>
+        {search.trim() || rxcuiFilter ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => {
+              setSearch("");
+              clearInventoryDeepLink();
+            }}
+          >
+            Clear filter
+          </Button>
+        ) : null}
 
         <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
           <SelectTrigger size="sm" className="h-8 w-36 text-xs">
@@ -636,9 +743,10 @@ export default function InventoryPage() {
           <SelectContent>
             <SelectGroup>
               <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="stockout">Stockout</SelectItem>
               <SelectItem value="critical">Critical</SelectItem>
-              <SelectItem value="warning">Warning</SelectItem>
               <SelectItem value="normal">Normal</SelectItem>
+              <SelectItem value="surplus">Surplus</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
@@ -663,7 +771,7 @@ export default function InventoryPage() {
 
         {can(user?.role, "receiveBatch") && (
           <div className="ml-auto">
-            <ReceiveBatchDialog facilityId={facilityId} items={items} />
+            <ReceiveBatchDialog items={items} />
           </div>
         )}
       </div>
@@ -685,36 +793,31 @@ export default function InventoryPage() {
             means this is the page's only scroll container — a fixed cap
             plus the page's own overflow-y-auto produced two independently
             scrolling bars stacked at the same edge. */}
-          <Table containerClassName="h-full overflow-auto">
+          <Table containerClassName="h-full overflow-auto" className="min-w-[52rem]">
             <TableHeader className="sticky top-0 z-10 border-b bg-card">
               <TableRow>
                 <SortableHead sortKey="drugName" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Drug Name & Form</SortableHead>
-                <SortableHead sortKey="batchNumber" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Batch #</SortableHead>
+                <SortableHead sortKey="batchNumber" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Lot</SortableHead>
                 <SortableHead sortKey="stock" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Stock</SortableHead>
-                <SortableHead sortKey="burn" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Daily Burn</SortableHead>
-                <SortableHead sortKey="risk" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Stockout Risk</SortableHead>
+                <SortableHead sortKey="risk" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Status</SortableHead>
                 <SortableHead sortKey="expiry" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Expiry</SortableHead>
                 <TableHead>Certificate</TableHead>
-                <TableHead className="w-8" />
+                <TableHead className="sticky right-0 z-20 w-10 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.18)]" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.map((item) => {
-                const risk = stockRisk(item);
-                const expiryDays = daysUntil(item.expiryDate);
-                const selected = selectedId === item.id;
+                const expiryDays = daysUntil(item.earliest_expiry);
+                const selected = selectedId === item.ndc;
+                const label = item.name ?? item.ndc;
                 return (
                     <TableRow
-                      key={item.id}
+                      key={item.ndc}
                       onClick={() => selectRow(item)}
                       aria-selected={selected}
-                      className={cn("cursor-pointer text-xs", selected && "bg-muted/60")}
+                      className={cn("group cursor-pointer text-xs", selected && "bg-muted/60")}
                     >
-                      <TableCell className="py-2 font-medium">
-                        {/* A real button, not just a clickable <tr> — the
-                            row's onClick is a mouse convenience, this is
-                            what makes row selection (and the copilot
-                            context it sets) reachable by keyboard. */}
+                      <TableCell className="max-w-[18rem] whitespace-normal py-2 font-medium">
                         <button
                           type="button"
                           onClick={(e) => {
@@ -723,67 +826,78 @@ export default function InventoryPage() {
                           }}
                           className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          {item.drugName}
-                          <span className="block font-normal text-muted-foreground">
-                            {item.form} · {item.inn}
-                          </span>
-                          <span className="block font-mono text-[10px] text-muted-foreground">{item.atcCode}</span>
+                          {label}
+                          {item.in_formulary ? (
+                            <Badge variant="secondary" className="ml-1.5 text-[10px] font-normal">
+                              formulary
+                            </Badge>
+                          ) : null}
+                          <span className="block font-mono text-[10px] font-normal text-muted-foreground">{item.ndc}</span>
                         </button>
                       </TableCell>
-                      <TableCell className="py-2 font-mono text-[11px] tabular-nums">{item.batchNumber}</TableCell>
+                      <TableCell className="py-2 font-mono text-[11px] tabular-nums">{item.lot ?? "—"}</TableCell>
                       <TableCell className="py-2 font-mono tabular-nums">
-                        {item.currentStock} <span className="font-sans text-muted-foreground">{item.unit}</span>
-                        <span className="block font-sans text-[10px] font-normal text-muted-foreground">
-                          Reorder at {reorderPoint(item)}
-                        </span>
+                        {item.quantity}
+                        <span className="font-sans text-muted-foreground"> on hand</span>
+                        {item.par_defined && item.reorder_point != null && (
+                          <span className="block font-sans text-[10px] font-normal text-muted-foreground">
+                            Reorder at {item.reorder_point}
+                          </span>
+                        )}
                       </TableCell>
-                      <TableCell className="py-2 font-mono tabular-nums text-muted-foreground">{item.dailyBurnRate}/day</TableCell>
                       <TableCell className="py-2">
-                        <StatusBadge tone={risk}>
-                          {RISK_LABEL[risk]} · {Number.isFinite(daysOfSupply(item)) ? `${daysOfSupply(item)}d` : "∞"}
+                        <StatusBadge tone={shelfStatusTone(item.status)}>
+                          {shelfStatusLabel(item.status)} · {item.quantity}
+                          {!item.par_defined ? " · no par" : ""}
                         </StatusBadge>
                       </TableCell>
                       <TableCell className="py-2">
-                        <StatusBadge tone={expiryTone(expiryDays)}>
-                          {item.expiryDate} ({expiryDays}d)
-                        </StatusBadge>
+                        {item.earliest_expiry ? (
+                          <StatusBadge tone={expiryTone(expiryDays)}>
+                            {item.earliest_expiry} ({expiryDays}d)
+                          </StatusBadge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
-                      {/* The badge is the trigger. The reasoning used to live
-                          behind the kebab menu, which is an odd place to hide
-                          the answer to the question the colour itself provokes.
-                          stopPropagation so it does not also select the row. */}
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <CertificationBadge
                           result={certFor(item)}
-                          label={item.drugName}
-                          onClick={() => setCertItem(item)}
+                          label={label}
+                          onClick={() => setCertItem({ drugName: label, ndc: item.ndc })}
                         />
                       </TableCell>
-                      <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                      <TableCell
+                        className={cn(
+                          "sticky right-0 z-10 py-2 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.18)]",
+                          selected ? "bg-muted" : "bg-card group-hover:bg-muted/50",
+                        )}
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-6">
-                              <MoreHorizontal className="size-3.5" />
-                              <span className="sr-only">Actions for {item.drugName}</span>
+                            <Button variant="ghost" size="icon" className="size-7">
+                              <MoreHorizontal className="size-4" />
+                              <span className="sr-only">Actions for {label}</span>
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          <DropdownMenuContent align="end" className="w-auto min-w-48">
                             <DropdownMenuGroup>
                               <DropdownMenuItem
                                 onSelect={() => {
                                   selectRow(item);
-                                  router.push(`/analogue?q=${encodeURIComponent(item.drugName)}`);
+                                  router.push(`/analogue?q=${encodeURIComponent(label)}`);
                                 }}
                               >
                                 <Repeat2 /> Find analogues
                               </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => setCertItem(item)}>
+                              <DropdownMenuItem onSelect={() => setCertItem({ drugName: label, ndc: item.ndc })}>
                                 <FileText /> View certificate
                               </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => router.push(`/forecasts?sku=${item.id}`)}>
+                              <DropdownMenuItem onSelect={() => router.push(`/forecasts?sku=${item.ndc}`)}>
                                 <TrendingUp /> View forecast
                               </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => router.push(`/audit?sku=${item.id}`)}>
+                              <DropdownMenuItem onSelect={() => router.push(`/audit?sku=${item.ndc}`)}>
                                 <ScrollText /> Audit Log
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
@@ -795,10 +909,18 @@ export default function InventoryPage() {
               })}
               {filtered.length === 0 && (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={8} className="py-10 text-center">
+                  <TableCell colSpan={7} className="py-10 text-center">
                     <SearchX className="mx-auto size-6 text-muted-foreground/50" />
-                    <p className="mt-2 text-xs font-medium">No SKUs match the current filters</p>
-                    <p className="text-[11px] text-muted-foreground">Try clearing the status filter or expiry date range.</p>
+                    <p className="mt-2 text-xs font-medium">
+                      {loading ? "Loading shelf…" : error ? "Cannot load inventory" : "No SKUs match the current filters"}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {error
+                        ? error
+                        : search.trim() || rxcuiFilter
+                          ? "Try clearing the search box, status filter, or expiry date range."
+                          : "Try clearing the status filter or expiry date range."}
+                    </p>
                   </TableCell>
                 </TableRow>
               )}

@@ -104,17 +104,32 @@ counts above before concluding a feed is broken.
 
 ## 5. Locally, without Kubernetes
 
+Warehouse, forecasts, and the facility switcher need the demo tenant **before** the
+ingest feeds. Without `seed_demo` those screens are empty even if alembic has run.
+`seed_demo` + `seed_stock` also plant `stock_batch` / `par_level` for the 11
+dashboard SKUs (wave 2 inventory table), a default formulary (wave 3),
+the three `shortage_event` rows B3/G1 join, partner-site
+stock for the shortage matrix, the F2 supplier catalog, and wave 5
+purchase orders (`PO-2026-0141`…`0148`) so `/orders` is populated after regen.
+
 ```bash
 export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medstock
-uv run alembic upgrade head
+# this repo uses `.venv/bin/python`; `uv` is optional
+.venv/bin/alembic upgrade head
+
+SEED_PASSWORD=devpassword123 (cd services/auth && ../../.venv/bin/python -m app.seed)
+ENVIRONMENT=demo (cd services/ingest && ../../.venv/bin/python -m app.seed_demo)
+.venv/bin/python scripts/seed_stock.py
+.venv/bin/python scripts/seed_certification.py
+.venv/bin/python scripts/seed_patients.py --count 200
 
 cd services/ingest
-uv run python -m app.cpic
-uv run python -m app.faers --formulary --limit 25
-uv run python -m app.import_alerts
-uv run python -m app.warning_letters
-uv run python -m app.news --shelf
-uv run python -m app.prognosis --formulary --limit 20   # needs GEMINI_API_KEY
+../../.venv/bin/python -m app.cpic
+../../.venv/bin/python -m app.faers --formulary --limit 25
+../../.venv/bin/python -m app.import_alerts
+../../.venv/bin/python -m app.warning_letters
+../../.venv/bin/python -m app.news --shelf
+../../.venv/bin/python -m app.prognosis --formulary --limit 20   # needs GEMINI_API_KEY
 ```
 
 Both scrapers take `--dry-run`, which parses and reports without writing —
@@ -145,14 +160,13 @@ this table.
 ### Which tenant the rows land in
 
 The seed resolves the hospital **by name** (`St Mary's General`, matching
-`services/auth/app/seed.py`) and exits non-zero if no such hospital exists.
+`services/auth/app/seed.py` and `seed_demo`) and exits non-zero if no such hospital exists.
 
-That is not defensiveness for its own sake. `patient.hospital_id` is `Text`
-with no foreign key, and this script used to default to the literal
-`00000000-0000-0000-0000-000000000001` — an id nothing creates, since the auth
-seed lets Postgres generate one. So the old default wrote its rows, printed
-`seeded 1008`, and left every user staring at an empty picker, because a user
-only ever sees the hospital named in their token. Run the auth seed first, or
+That is not defensiveness for its own sake. This script used to default to the literal
+`00000000-0000-0000-0000-000000000001` — seed_demo's DEMO GENERAL HOSPITAL, an id auth
+never minted. So the old default wrote its rows, printed `seeded 1008`, and left every
+user staring at an empty picker, because a user only ever sees the hospital named in their
+token. Wave 0 collapsed those two names onto one uuid FK. Run the auth seed first, or
 pass `--hospital-id`.
 
 ### The population

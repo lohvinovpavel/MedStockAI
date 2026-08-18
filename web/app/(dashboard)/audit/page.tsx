@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Bot, Download, ScrollText, Server, ShieldCheck, Stethoscope } from "lucide-react";
+import { Bot, Download, ScrollText, Server, Stethoscope } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,54 +10,120 @@ import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
-import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType } from "@/lib/mock-data";
+import { apiFetch } from "@/lib/api";
+import { formatAuditTimestamp } from "@/lib/dates";
 import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
 import { DecisionTrail } from "@/components/dashboard/DecisionTrail";
 import { cn } from "@/lib/utils";
+
+type AuditActorType = "clinician" | "ai" | "system";
+
+type AuditRow = {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  actor_id: string | null;
+  actor_system: string | null;
+  ai_dedupe_key: string | null;
+  occurred_at: string | null;
+};
 
 const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string }> = {
   clinician: { icon: Stethoscope, className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-400" },
   ai: { icon: Bot, className: "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-400" },
   system: { icon: Server, className: "bg-slate-100 text-slate-700 dark:bg-slate-500/15 dark:text-slate-400" },
-  regulator: { icon: ShieldCheck, className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400" },
+};
+
+function actorType(row: AuditRow): AuditActorType {
+  if (row.ai_dedupe_key || row.actor_system === "copilot") return "ai";
+  if (row.actor_system) return "system";
+  return "clinician";
+}
+
+function actorLabel(row: AuditRow): string {
+  return row.actor_system || "Clinician";
+}
+
+type ShelfSku = {
+  ndc: string;
+  name: string | null;
+  quantity: number;
+  lot: string | null;
+  rxcui?: string | null;
 };
 
 export default function AuditPage() {
   const { setFocus } = useCopilot();
   const { user } = useSession();
-  const { facilityId, facility } = useFacility();
-  const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
+  const { facility } = useFacility();
+  const [items, setItems] = useState<ShelfSku[]>([]);
 
-  // Read ?sku= without useSearchParams(): that hook forces a Suspense
-  // boundary that never resumes on a direct load/refresh of this
-  // already-"use client" route (mainLen stayed 0 indefinitely). A plain
-  // location.search read in an effect avoids the SSR bailout entirely.
   const [skuParam, setSkuParam] = useState<string | null>(null);
   useEffect(() => {
     setSkuParam(new URLSearchParams(window.location.search).get("sku"));
   }, []);
-  const validSkuParam = skuParam && items.some((i) => i.id === skuParam) ? skuParam : null;
-
-  const [itemId, setItemId] = useState(validSkuParam ?? items[0].id);
-
-  // A row's "Audit Log" action deep-links with ?sku=; keep the picker in
-  // sync if that changes (e.g. navigating here again for a different SKU).
-  useEffect(() => {
-    if (validSkuParam) setItemId(validSkuParam);
-  }, [validSkuParam]);
-
-  // Falls back to the first SKU when the selected one isn't stocked at the
-  // facility you just switched to, rather than blowing up on a stale id.
-  const item = items.find((i) => i.id === itemId) ?? items[0];
-  const certification = useCertificationStatuses(item.ndc ? [item.ndc] : []);
-  const entries = useMemo(
-    () => [...auditLogFor(item.id)].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1)),
-    [item.id],
-  );
 
   useEffect(() => {
-    setFocus({ kind: "sku", label: item.drugName, detail: `Audit trail · ${entries.length} logged events`, itemId: item.id });
+    let cancelled = false;
+    apiFetch("inventory", `/items?facility_id=${facility.id}&limit=200`)
+      .then((body: { items: ShelfSku[] }) => {
+        if (!cancelled) setItems(body.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [facility.id]);
+
+  const validSkuParam = skuParam && items.some((i) => i.ndc === skuParam) ? skuParam : null;
+  const [itemId, setItemId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setItemId(validSkuParam ?? items[0]?.ndc);
+  }, [validSkuParam, items]);
+
+  const item = items.find((i) => i.ndc === itemId) ?? items[0];
+  const certification = useCertificationStatuses(item?.ndc ? [item.ndc] : []);
+
+  const [entries, setEntries] = useState<AuditRow[]>([]);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("compliance", "/audit")
+      .then((body: { items: AuditRow[] }) => {
+        if (cancelled) return;
+        setEntries(body.items ?? []);
+        setAuditError(null);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setEntries([]);
+        setAuditError(err.message || "Cannot load audit log.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!item) return;
+    setFocus({
+      kind: "sku",
+      label: item.name ?? item.ndc,
+      detail: `Audit trail · ${entries.length} logged events`,
+      itemId: item.ndc,
+      ndc: item.ndc,
+      rxcui: item.rxcui ?? null,
+    });
   }, [item, entries.length, setFocus]);
+
+  if (!item) {
+    return <p className="p-4 text-sm text-muted-foreground">No SKUs at this site.</p>;
+  }
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -69,14 +135,14 @@ export default function AuditPage() {
             <span className="font-medium text-foreground">{facility.name}</span>.
           </p>
         </div>
-        <Select value={item.id} onValueChange={setItemId}>
+        <Select value={item.ndc} onValueChange={setItemId}>
           <SelectTrigger size="sm" className="h-8 w-64 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
               {items.map((i) => (
-                <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
+                <SelectItem key={i.ndc} value={i.ndc}>{i.name ?? i.ndc}</SelectItem>
               ))}
             </SelectGroup>
           </SelectContent>
@@ -86,22 +152,41 @@ export default function AuditPage() {
       <Card className="gap-3 py-4">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4">
           <div>
-            <p className="text-sm font-medium">{item.drugName}</p>
+            <p className="text-sm font-medium">{item.name ?? item.ndc}</p>
             <p className="font-mono text-xs tabular-nums text-muted-foreground">
-              Batch {item.batchNumber} · {item.currentStock} {item.unit} on hand
+              Lot {item.lot ?? "—"} · {item.quantity} on hand
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Same COMP-1 source as the inventory shelf. Reading the row's
-                stored certStatus here instead would let this page and that one
-                show different colours for the same drug. */}
             <CertificationBadge result={item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 }} />
             {can(user?.role, "exportAudit") && (
               <Button
                 variant="outline"
                 size="sm"
                 className="h-8 gap-1.5 text-xs"
-                onClick={() => toast.success(`Audit trail for ${item.drugName} exported to compliance archive.`)}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const params = new URLSearchParams();
+                      if (item.ndc) params.set("ndc", item.ndc);
+                      params.set("facility_id", String(facility.id));
+                      const res = await fetch(`/api/compliance/export/compliance.csv?${params}`, {
+                        credentials: "include",
+                      });
+                      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `compliance-${item.ndc}.csv`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      toast.success(`Exported compliance trail for ${item.name ?? item.ndc}.`);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Export failed.");
+                    }
+                  })();
+                }}
               >
                 <Download data-icon="inline-start" />
                 Export Audit Trail
@@ -111,10 +196,6 @@ export default function AuditPage() {
         </CardContent>
       </Card>
 
-      {/* The real audit trail, from assessment_log. The SKU timeline below is
-          still demo data (lib/mock-data.ts) — keeping them visibly separate
-          matters more than making the page look uniform, because one of them
-          is evidence and the other is illustration. */}
       <DecisionTrail />
 
       <Card className="gap-3 py-4">
@@ -123,15 +204,22 @@ export default function AuditPage() {
             <ScrollText className="size-4 text-muted-foreground" />
             Event history
           </CardTitle>
-          <CardDescription className="text-xs">Newest first · clinician, AI pipeline, and regulator events. <span className="text-muted-foreground/70">Demo data.</span></CardDescription>
+          <CardDescription className="text-xs">
+            Newest first · rows written by the database trigger on <span className="font-mono">review_decision</span>,
+            purchase orders, and transfers. Export is a streamed CSV (D3).
+          </CardDescription>
         </CardHeader>
         <CardContent className="px-4">
-          {entries.length === 0 ? (
-            <p className="py-8 text-center text-xs text-muted-foreground">No audit events recorded for this SKU yet.</p>
+          {auditError ? (
+            <p className="py-8 text-center text-xs text-destructive">{auditError}</p>
+          ) : entries.length === 0 ? (
+            <p className="py-8 text-center text-xs text-muted-foreground">
+              No audited events yet. A row appears when a recommendation is approved or rejected.
+            </p>
           ) : (
             <ol className="flex flex-col">
               {entries.map((entry, i) => {
-                const style = ACTOR_STYLE[entry.actorType];
+                const style = ACTOR_STYLE[actorType(entry)];
                 const Icon = style.icon;
                 return (
                   <li key={entry.id} className="relative flex gap-3 pb-6 last:pb-0">
@@ -142,10 +230,13 @@ export default function AuditPage() {
                       <Icon className="size-4" />
                     </span>
                     <div className="flex flex-col gap-0.5 pt-1">
-                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{formatAuditTimestamp(entry.timestamp)}</span>
+                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {entry.occurred_at ? formatAuditTimestamp(entry.occurred_at) : "—"}
+                      </span>
                       <p className="text-sm">
-                        <span className="font-medium">{entry.actor}</span> {entry.action}
-                        {entry.refId && <span className="text-muted-foreground"> ({entry.refId})</span>}
+                        <span className="font-medium">{actorLabel(entry)}</span>{" "}
+                        {entry.action.toLowerCase()} {entry.entity_type.replaceAll("_", " ")}
+                        <span className="text-muted-foreground"> (#{entry.entity_id})</span>
                       </p>
                     </div>
                   </li>

@@ -16,8 +16,8 @@ const OPEN_STORAGE_KEY = "medstock-copilot-open";
 // replies (analogue/certificate/PO) instead of returning canned data that
 // ignores whatever SKU is actually focused.
 export type CopilotFocus =
-  | { kind: "sku"; label: string; detail: string; itemId: string }
-  | { kind: "alert"; label: string; detail: string }
+  | { kind: "sku"; label: string; detail: string; itemId: string; ndc?: string; rxcui?: string | null }
+  | { kind: "alert"; label: string; detail: string; ndc?: string }
   | null;
 
 // A one-shot "do this now" ask fired by a page (e.g. the forecast scenario

@@ -1,13 +1,13 @@
 # F1 — Restock recommendation
 
 **Services:** `prediction` proposes · `inventory` owns the decision record
-**Flows:** 12, 13 · **Status:** ❌ · **Depends on:** B5, E1, E2, F2, H1
+**Flows:** 12, 13 · **Status:** ✅ (wave 5, `20260818_wave5`) · **Depends on:** B5, E1, E2, F2, H1
 
 ## Goal
 
 Flow 12's card is the product's headline moment: the system notices a depletion and proposes an
-order a human accepts or declines. Today "Create Draft Order" writes to React state. Make the
-proposal a stored, auditable decision — and make declining it as first-class as accepting it.
+order a human accepts or declines. "Create Draft Order" materialises a `review_decision` and
+approves it; declining is a first-class write, not discarded client state.
 
 ## API
 
@@ -84,12 +84,12 @@ This is the table the audit trigger in `docs/services.md` §1.3 already assumes 
 
 ## Acceptance criteria
 
-- [ ] Approving creates exactly one `purchase_order` in `draft`, linked by `review_decision_id`.
-- [ ] Rejecting creates no order and stores the reason.
-- [ ] Double-approve returns 409 and leaves one order.
-- [ ] The stored `payload` still shows the original unit cost after `supplier_catalog` changes.
-- [ ] A recommendation for a facility with no par row is not generated (nothing to order up to).
-- [ ] Both transitions produce an `audit_log_entry` row without any application code calling `audit()`.
+- [x] Approving creates exactly one `purchase_order` in `draft`, linked by `review_decision_id`.
+- [x] Rejecting creates no order and stores the reason.
+- [x] Double-approve returns 409 and leaves one order.
+- [x] The stored `payload` still shows the original unit cost after `supplier_catalog` changes.
+- [x] A recommendation for a facility with no par row is not generated (nothing to order up to).
+- [x] Both transitions produce an `audit_log_entry` row without any application code calling `audit()`.
 
 ## Out of scope
 

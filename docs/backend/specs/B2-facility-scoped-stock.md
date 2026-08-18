@@ -1,13 +1,13 @@
 # B2 — Facility-scoped stock read
 
 **Service:** `inventory` · **Flows:** 3, 4, 7, 14 · **Depends on:** B1
-**Status:** ⚠️ specified in `docs/services.md` §3; the service serves only `/healthz`, `/readyz`, `/version`
+**Status:** ✅ (wave 2). `GET /stock?rxcui=&facility_id=` and `GET /items` read `stock_snapshot`; the inventory page uses `InventoryProvider` → live API.
 
 ## Goal
 
 The one read the whole dashboard sits on: given a clinical RxCUI — or nothing at all — return
-the shelf rows for one facility. `services/inventory/app/main.py` has three health endpoints
-and no domain code.
+the shelf rows for one facility. `GET /stock?rxcui=` joins RxNorm NDCs to `stock_snapshot`.
+`GET /items` is the inventory table (flow 4); status is derived per B5, lot/expiry per B4.
 
 ## API
 
@@ -39,8 +39,8 @@ ATC code. `status` is derived per B5, never stored: `stockout | critical | norma
 3. The RxNorm lookup is a live NLM call **from the service**, never from the browser. On
    upstream failure, degrade to matching `stock_snapshot.ndc` directly and set
    `rxnorm_degraded: true` — a stock read must not 500 because NLM is down.
-4. `in_formulary` is a LEFT JOIN to `formulary_item`. Until B6 populates it every item is
-   `false`, and the response shape does not change.
+4. `in_formulary` is a LEFT JOIN to `formulary_item` (B6). Dashboard SKUs resolve via the
+   `demo_shelf` RxCUI map so live RxNorm is not required for the inventory badge.
 5. Default sort is status severity descending, then name. The client should not have to
    re-sort to show the worst first.
 6. `status` carries `par_defined: false` when no par row exists (B5) rather than guessing.
@@ -56,11 +56,11 @@ ATC code. `status` is derived per B5, never stored: `stockout | critical | norma
 
 ## Acceptance criteria
 
-- [ ] Two facilities holding different SKUs return disjoint lists for the same tenant.
-- [ ] A drug with zero on-hand returns 200 with an empty list, never 404.
-- [ ] With RxNorm stubbed to raise, the endpoint still answers 200 and flags degradation.
-- [ ] The 10-SKU demo dataset resolves in one query plus at most one RxNorm call.
-- [ ] Pagination is stable across pages (deterministic ORDER BY including a tiebreak on `id`).
+- [x] Two facilities holding different SKUs return disjoint lists for the same tenant.
+- [x] A drug with zero on-hand returns 200 with an empty list, never 404.
+- [x] With RxNorm stubbed to raise, the endpoint still answers 200 and flags degradation.
+- [x] The 10-SKU demo dataset resolves in one query plus at most one RxNorm call.
+- [x] Pagination is stable across pages (deterministic ORDER BY including a tiebreak on `id`).
 
 ## Out of scope
 

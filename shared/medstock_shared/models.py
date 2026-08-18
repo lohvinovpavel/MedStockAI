@@ -3,6 +3,7 @@ service owns must be imported here before a migration is generated."""
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -72,17 +74,17 @@ class AIAuditLog(Base):
     `AssessmentLog` below, same actor/request_id shape, for the same reason:
     the audit read is "what happened, newest first" either way.
 
-    `hospital_id` is nullable, unlike `AssessmentLog`'s — most `ask_ai()`
+    `hospital_id` is nullable UUID, unlike `AssessmentLog`'s — most `ask_ai()`
     callers are a pharmacist through `analogue`, tenant-scoped like anything
     else in §1.2, but `ingest`'s offline CronJobs (`prognosis`) process a
     public FDA label with no hospital attached to the call at all, the same
     reason `ai_cache` above has no tenant column. `actor_id` is never null:
     ingest's calls are still attributable, to `'system:ingest'`.
 
-    No RLS policy and no `REVOKE` grant here, for the same reason
-    `AssessmentLog` has neither: no table in this schema has one yet
-    (services.md §8 tracks that gap once), and the app connects as the owning
-    role, so a policy here would be a silent no-op that looks implemented.
+    Append-only: wave 2 REVOKEs UPDATE/DELETE from app_role. FORCE RLS is
+    not applied here because `write_audit()` uses SessionLocal without
+    `session_scope`, so it never sets `app.hospital_id`; a tenant policy
+    would fail-open and silently drop provenance rows.
     Written from Python, not a trigger — the event being audited is an
     outbound API call, not a row mutation, so there is no row for a trigger
     to hang off.
@@ -91,7 +93,9 @@ class AIAuditLog(Base):
     __tablename__ = "ai_audit_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hospital_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=True
+    )
     actor_id: Mapped[str] = mapped_column(Text, nullable=False)
     request_id: Mapped[str] = mapped_column(Text, nullable=False)
     task_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -251,22 +255,23 @@ class Membership(Base):
 # (services.md §8 #2); not yet enforced, so this is the shape they will
 # filter, not a working guarantee today.
 #
-# hospital_id here is Text, not a FK to hospital.id (UUID) above — the two
-# were modeled independently by different owners in parallel. Flag for
-# whoever owns inventory: worth a follow-up migration once both tables have
-# real rows, not something to silently retype in a merge conflict resolution.
+# hospital_id is uuid FK to hospital.id on every tenant table (wave 0).
+# Wave 2 (A4) ENABLE/FORCE RLS on tenant tables; session_scope SETs ROLE
+# app_role so a superuser connection cannot bypass FORCE.
 
 
 class FormularyItem(Base):
     """Tenant formulary. Analogue reads `rxcui` to boost UC-1 search hits.
-    Inventory will own writes (`POST /formulary/import`). No application
+    Inventory owns writes (`POST /formulary/import`, wave 3). No application
     `WHERE hospital_id` — RLS + `session_scope` are the tenant filter.
     """
 
     __tablename__ = "formulary_item"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     rxcui: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -276,14 +281,19 @@ class FormularyItem(Base):
 
 
 class StockSnapshot(Base):
-    """On-hand quantity per hospital / NDC / location. Empty string location
-    is the hospital-wide bucket until warehouse locations exist.
+    """On-hand quantity per hospital / NDC / location.
+
+    `quantity` is a derived rollup of `stock_batch` (B4 trigger). Empty
+    string location is the intra-facility shelf code (matches
+    `storage_location.code`).
     """
 
     __tablename__ = "stock_snapshot"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     # B1: facility_id carries site identity; location_id survives as the
     # intra-facility shelf code (matches storage_location.code). Nullable
@@ -304,6 +314,62 @@ class StockSnapshot(Base):
             name="uq_stock_hospital_ndc_fac_loc",
             postgresql_nulls_not_distinct=True,
         ),
+    )
+
+
+class StockBatch(Base):
+    """One received lot. `stock_snapshot.quantity` is the rollup of these
+    rows (B4 trigger), never authored by the receive endpoint itself.
+    """
+
+    __tablename__ = "stock_batch"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    lot: Mapped[str] = mapped_column(Text, nullable=False)
+    expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    location_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("quantity >= 0", name="ck_stock_batch_qty"),
+        UniqueConstraint(
+            "hospital_id", "facility_id", "ndc", "lot", name="uq_stock_batch_natural"
+        ),
+        Index("ix_stock_batch_fefo", "hospital_id", "ndc", "expiry_date"),
+    )
+
+
+class ParLevel(Base):
+    """Reorder point and target per facility + NDC (B5). Status on B2 is
+    derived from this, never stored.
+    """
+
+    __tablename__ = "par_level"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    reorder_point: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("reorder_point >= 0", name="ck_par_reorder_nonneg"),
+        CheckConstraint("target_qty > reorder_point", name="ck_par_target_above_reorder"),
+        UniqueConstraint("hospital_id", "facility_id", "ndc", name="uq_par_level_natural"),
     )
 
 
@@ -480,7 +546,9 @@ class Patient(Base):
     __tablename__ = "patient"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False, index=True
+    )
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
     blood_group: Mapped[str | None] = mapped_column(Text)
@@ -734,7 +802,9 @@ class AssessmentLog(Base):
     __tablename__ = "assessment_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     # One id per API call, echoed back to the caller so a clinician can quote it
     # when they disagree with an answer.
     request_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -825,6 +895,60 @@ class StorageLocation(Base):
     )
 
 
+class Supplier(Base):
+    """Tenant supplier catalog (F2). Money is numeric, never float.
+
+    `active = false` stays readable (order history) but `/quote` and F3 reject it.
+    """
+
+    __tablename__ = "supplier"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    reliability_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    shipping_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal(0))
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+    __table_args__ = (
+        CheckConstraint("lead_time_days >= 0", name="ck_supplier_lead_nonneg"),
+        CheckConstraint(
+            "reliability_pct >= 0 AND reliability_pct <= 100",
+            name="ck_supplier_reliability_pct",
+        ),
+        UniqueConstraint("hospital_id", "name", name="uq_supplier_hospital_name"),
+    )
+
+
+class SupplierCatalog(Base):
+    """Per-SKU unit cost, pack size and minimum order for one supplier (F2)."""
+
+    __tablename__ = "supplier_catalog"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("supplier.id", ondelete="CASCADE"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    pack_size: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    min_order_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("unit_cost >= 0", name="ck_supplier_catalog_cost_nonneg"),
+        CheckConstraint("pack_size >= 1", name="ck_supplier_catalog_pack"),
+        CheckConstraint("min_order_qty >= 1", name="ck_supplier_catalog_min_order"),
+        UniqueConstraint("supplier_id", "ndc", name="uq_supplier_catalog_supplier_ndc"),
+    )
+
+
 class ConsumptionDaily(Base):
     """Daily drug consumption per facility — the history prediction (E1)
     forecasts from and the warehouse consumption chart plots.
@@ -839,7 +963,9 @@ class ConsumptionDaily(Base):
     __tablename__ = "consumption_daily"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     rxcui: Mapped[str] = mapped_column(Text, nullable=False)
@@ -882,15 +1008,15 @@ class ForecastPoint(Base):
 
     `data_through` is the last consumption date the run saw — constant within
     a run. Clients compare it against the newest consumption data to decide
-    that a forecast has been outrun and a re-run is due. `hospital_id` is Text
-    (not uuid, deviating from the E1 sketch) to join stock_snapshot and
-    consumption_daily without casts.
+    that a forecast has been outrun and a re-run is due.
     """
 
     __tablename__ = "forecast_point"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
@@ -929,7 +1055,9 @@ class StockDaily(Base):
     __tablename__ = "stock_daily"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -940,4 +1068,247 @@ class StockDaily(Base):
             "hospital_id", "facility_id", "ndc", "date", name="uq_stock_daily_natural"
         ),
         Index("ix_stock_daily_series", "facility_id", "ndc", "date"),
+    )
+
+
+# --- Audit (docs/backend/specs/H1-append-only-audit-log.md): review_decision
+# is the F1 shape; the append-only log is written by a trigger, never by
+# application code. Wave 3 attaches the trigger to formulary_item (B6
+# writers go through session_scope with an actor). drug_certification is
+# still seed/ingest-written; attaching it would fail the CHECK unless the
+# seeder sets actor_system.
+
+
+class ReviewDecision(Base):
+    """Human accept/reject of a restock recommendation or analogue switch.
+
+    F1 writers are still open; the table exists so H1 has something to
+    audit. `payload` is the recommendation exactly as shown, not a live join.
+    """
+
+    __tablename__ = "review_decision"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('restock_recommendation','analogue_substitution')",
+            name="ck_review_decision_entity_type",
+        ),
+        CheckConstraint(
+            "decision IN ('pending','approved','rejected')",
+            name="ck_review_decision_decision",
+        ),
+    )
+
+
+class AuditLogEntry(Base):
+    """Append-only trail. Inserts come from `write_audit_entry()`; the app
+    role cannot UPDATE or DELETE. At least one of actor_id / actor_system
+    must be set — an unattributable change must not commit.
+    """
+
+    __tablename__ = "audit_log_entry"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    actor_system: Mapped[str | None] = mapped_column(Text)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[dict | None] = mapped_column(JSONB)
+    after: Mapped[dict | None] = mapped_column(JSONB)
+    ai_dedupe_key: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "actor_id IS NOT NULL OR actor_system IS NOT NULL",
+            name="ck_audit_log_entry_actor",
+        ),
+        Index("ix_audit_entity", "hospital_id", "entity_type", "entity_id", "occurred_at"),
+        Index("ix_audit_time", "hospital_id", "occurred_at"),
+    )
+
+
+class PurchaseOrder(Base):
+    """F3 purchase order. Totals are SUM(line.qty * unit_cost) + shipping;
+    unit_cost is copied from F2 at create and never re-joined.
+    """
+
+    __tablename__ = "purchase_order"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ref: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    supplier_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("supplier.id"), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    review_decision_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("review_decision.id")
+    )
+    shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal(0))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expected_delivery: Mapped[date | None] = mapped_column(Date)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','placed','in_transit','delivered','cancelled')",
+            name="ck_purchase_order_status",
+        ),
+        CheckConstraint(
+            "source IN ('ai_suggestion','manual')",
+            name="ck_purchase_order_source",
+        ),
+        CheckConstraint(
+            "source = 'manual' OR review_decision_id IS NOT NULL",
+            name="ck_purchase_order_ai_has_decision",
+        ),
+        UniqueConstraint("hospital_id", "ref", name="uq_purchase_order_hospital_ref"),
+        Index("ix_purchase_order_status_created", "hospital_id", "status", "created_at"),
+        Index(
+            "uq_purchase_order_idempotency",
+            "hospital_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+
+class PurchaseOrderLine(Base):
+    """One NDC on a purchase order. RLS via the parent order's hospital."""
+
+    __tablename__ = "purchase_order_line"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("purchase_order.id", ondelete="CASCADE"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_purchase_order_line_qty"),
+        UniqueConstraint("purchase_order_id", "ndc", name="uq_purchase_order_line_ndc"),
+    )
+
+
+class TransferRequest(Base):
+    """G2 inter-facility movement. Stock moves on dispatch/receive, not here."""
+
+    __tablename__ = "transfer_request"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ref: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    from_facility_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("facility.id"), nullable=False
+    )
+    to_facility_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("facility.id"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="requested")
+    shortage_id: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    reserved_lots: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_transfer_request_qty"),
+        CheckConstraint(
+            "status IN ('requested','dispatched','received','cancelled')",
+            name="ck_transfer_request_status",
+        ),
+        CheckConstraint(
+            "from_facility_id <> to_facility_id",
+            name="ck_transfer_request_distinct_facilities",
+        ),
+        UniqueConstraint("hospital_id", "ref", name="uq_transfer_request_hospital_ref"),
+    )
+
+
+class CopilotConversation(Base):
+    """I2: one actor's copilot thread. Soft-deleted via deleted_at."""
+
+    __tablename__ = "copilot_conversation"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    facility_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("facility.id"))
+    title: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CopilotMessage(Base):
+    """I2: one turn in a copilot conversation. Tool rows store a summary only."""
+
+    __tablename__ = "copilot_message"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("copilot_conversation.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    card: Mapped[dict | None] = mapped_column(JSONB)
+    tool_name: Mapped[str | None] = mapped_column(Text)
+    ai_dedupe_key: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user','assistant','tool')", name="ck_copilot_message_role"),
+        Index("ix_copilot_msg", "conversation_id", "created_at"),
     )

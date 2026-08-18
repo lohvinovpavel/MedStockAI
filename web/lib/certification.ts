@@ -250,11 +250,11 @@ export function gatesFor(detail: CertDetail | null, ruleset: Ruleset | null): Ga
  * page that deliberately does not depend on it.
  *
  * Deliberately not `can()` from lib/rbac.ts, though both gate a button on this
- * page. `CAN` covers actions on the mock pages, where hiding the control *is*
- * the enforcement because there is no endpoint behind it. This one sits in
- * front of a real 403, so it needs the third state: `unconfirmed` offers the
- * control rather than hiding it, and a denial arrives as a toast from the
- * server. Folding the two together would lose that state.
+ * page. `CAN` hides dashboard actions as a courtesy; the matching endpoints
+ * still 403 on their own PERMS grant. This control sits in front of a real
+ * 403, so it needs the third state: `unconfirmed` offers the control rather
+ * than hiding it, and a denial arrives as a toast from the server. Folding
+ * the two together would lose that state.
  */
 export type ExploreStance = "allowed" | "denied" | "unconfirmed";
 

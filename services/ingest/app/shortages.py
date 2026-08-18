@@ -1,10 +1,11 @@
 """CronJob entrypoint, hourly: FDA drug shortages -> shortage_event.
 
-ponytail: FEED_URL/field names are a placeholder — the real FDA Drug Shortage
-feed's response shape hasn't been verified yet (openFDA does not currently
-mirror this dataset; confirm the actual source before scheduling this for
-real). The upsert shape (_row_to_values + ON CONFLICT on source_id) is what
-matters and will not change once the real field names are swapped in.
+The upsert shape (_row_to_values + ON CONFLICT on source_id) is the join
+surface B3 needs. The live FDA Drug Shortage feed URL/field names are still
+unverified (openFDA does not currently mirror this dataset). Until that feed
+is confirmed, the demo plants the three mock-aligned rows (Norepinephrine,
+Ceftriaxone, Heparin) from `demo_shelf.demo_shortage_rows()` during seed_demo
+/ seed_stock so exposure `uncovered` is a real claim rather than an empty join.
 """
 
 from medstock_shared import engine

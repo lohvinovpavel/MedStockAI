@@ -8,7 +8,7 @@ docs/ai-module-plan.md Phase 1.
 
 from .breaker import CircuitBreaker, CircuitBreakerConfig
 from .cache import cache_get, cache_put, write_audit
-from .core import AIError, ask_ai, client, dedupe_key, shared_breaker
+from .core import AIError, ask_ai, client, dedupe_key, parse_model_json, shared_breaker
 
 __all__ = [
     "AIError",
@@ -19,6 +19,7 @@ __all__ = [
     "cache_put",
     "client",
     "dedupe_key",
+    "parse_model_json",
     "shared_breaker",
     "write_audit",
 ]
