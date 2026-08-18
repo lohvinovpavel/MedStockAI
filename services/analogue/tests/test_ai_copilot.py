@@ -398,6 +398,60 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
 
 
+def test_explore_ndc_passes_the_ndc_through_to_the_promoted_explore(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import ExploreNdcArgs, explore_ndc
+
+    captured = {}
+
+    def fake_explore(session, ndc):
+        captured["session"] = session
+        captured["ndc"] = ndc
+        return {"ndc": ndc, "status": "green", "provenance": "on_demand", "codes": []}
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.explore", fake_explore)
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.Session", lambda engine: MagicMock())
+
+    result = explore_ndc(ExploreNdcArgs(ndc="00069406101"), PHARMACIST)
+    assert captured["ndc"] == "00069406101"
+    assert result["status"] == "green"
+
+
+def test_get_patient_regimen_never_returns_name_or_dob(monkeypatch):
+    """The point of this tool: a PHI-boundary test, not a formality."""
+    from contextlib import contextmanager
+    from datetime import date
+
+    from medstock_shared.ai.tools.pharmacy import PatientRegimenArgs, get_patient_regimen
+
+    patient_id = "11111111-1111-1111-1111-111111111111"
+    row = SimpleNamespace(
+        hospital_id="hospital-1",
+        full_name="Jane Real Patient",
+        date_of_birth=date(1970, 1, 1),
+        blood_group="O+",
+        allergy_codes=["penicillin"],
+        condition_codes=["ckd"],
+        pgx_phenotypes=["CYP2C19:Poor Metabolizer"],
+    )
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        session = MagicMock()
+        session.get.return_value = row
+        yield session
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    physician = Principal("user-2", "hospital-1", "physician")
+    result = get_patient_regimen(PatientRegimenArgs(patient_id=patient_id), physician)
+
+    assert "full_name" not in result
+    assert "date_of_birth" not in str(result)
+    assert "Jane" not in str(result)
+    assert result["allergy_codes"] == ["penicillin"]
+    assert result["age_band"] in {"18-39", "40-64", "65-74", "75-89", "90+"}
+
+
 def test_declarations_are_scoped_to_the_caller_role():
     """No mocking -- the real registry, populated by the real pharmacy.py."""
     from medstock_shared.ai.tools import declarations_for
@@ -408,23 +462,25 @@ def test_declarations_are_scoped_to_the_caller_role():
         "verify_batch_cert",
         "check_stock_by_ndc",
         "sweep_shelf_certificates",
+        "explore_ndc",
     }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
 def test_denied_tools_for_is_the_complement_of_declarations_for():
-    """No role today actually lacks drug:search/certificate:read, so the
-    interesting case (some tools denied) is exercised by the copilot
-    integration test below via a monkeypatched PERMS entry."""
+    """Pharmacist lacks patient:read, so get_patient_regimen is the one tool
+    denied to the role with the widest permission set in the system."""
     from medstock_shared.ai.tools import denied_tools_for
 
-    assert denied_tools_for(PHARMACIST) == []
+    assert {d["name"] for d in denied_tools_for(PHARMACIST)} == {"get_patient_regimen"}
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
     assert names == {
         "search_analogues_rxnorm",
         "verify_batch_cert",
         "check_stock_by_ndc",
         "sweep_shelf_certificates",
+        "explore_ndc",
+        "get_patient_regimen",
     }
 
 
@@ -452,4 +508,9 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
     assert "don't have permission" in instruction
     # still-granted tools stay callable, not just named in the prompt
     declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
-    assert declared_names == {"search_analogues_rxnorm", "check_stock_by_ndc", "sweep_shelf_certificates"}
+    assert declared_names == {
+        "search_analogues_rxnorm",
+        "check_stock_by_ndc",
+        "sweep_shelf_certificates",
+        "get_patient_regimen",
+    }

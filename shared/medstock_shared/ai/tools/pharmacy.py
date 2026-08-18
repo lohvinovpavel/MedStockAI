@@ -1,12 +1,12 @@
-"""Pharmacist-scoped copilot tools.
+"""Copilot tools -- docs/ai_workflow_impl_plan.md.
 
-Only two: `search_analogues_rxnorm` and `verify_batch_cert`, both thin
-wrappers around reads `medstock_shared` already implements for the analogue
-and compliance services. `check_bioequivalence`, named in the original brief
-alongside these two, is deliberately not here -- there is no bioequivalence
-data or logic anywhere in this repo to wrap. Declaring it to Gemini with
-nothing behind it would make it a hallucination generator, exactly the
-failure mode docs/ai-module-plan.md Phase 4 rules out for
+Each is a thin wrapper around a read `medstock_shared` already implements, or
+a plain query against a reference/tenant table -- never new business logic.
+`check_bioequivalence`, named in the original brief, is deliberately not
+here -- there is no bioequivalence data or logic anywhere in this repo to
+wrap. Declaring it to Gemini with nothing behind it would make it a
+hallucination generator, exactly the failure mode docs/ai-module-plan.md
+Phase 4 rules out for
 `generate_draft_po`/`approve_and_send_po`/`approve_emergency_protocol`.
 Add it here, for real, once that logic exists somewhere.
 """
@@ -15,10 +15,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+import uuid
+
 from ...auth import Principal
 from ...certification import Finding, signal
 from ...db import engine, session_scope
-from ...models import CertificationFinding, DrugCertification, StockSnapshot
+from ...explore import explore
+from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
+from ...patient import age_band_from_dob
 from ...rxnorm import RxNormError, ndcs_for_rxcui, related_scd_sbd, therapeutic_scd_sbd
 from ...stock import stock_fields
 from .registry import tool
@@ -247,3 +251,64 @@ def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
     detail["status"] = record.status
     detail["ruleset_version"] = record.ruleset_version
     return {"ndc": args.ndc, **detail}
+
+
+class ExploreNdcArgs(BaseModel):
+    ndc: str = Field(description="NDC to research against openFDA and RxNorm for a drug nobody has looked up before")
+
+
+@tool(
+    permission="certification:explore",
+    description=(
+        "Research an NDC that has no certification record yet -- a drug "
+        "nobody has stocked or checked before -- against openFDA's NDC "
+        "directory and RxNorm's status feed, live. Spends a shared, rate-"
+        "limited openFDA budget, so only use it when verify_batch_cert or "
+        "sweep_shelf_certificates has already come back 'unknown' for this "
+        "NDC and the user wants it resolved, not for an NDC already "
+        "certified."
+    ),
+    args=ExploreNdcArgs,
+)
+def explore_ndc(args: ExploreNdcArgs, principal: Principal) -> dict:
+    # Reference table, no hospital_id -- same split verify_batch_cert
+    # documents. explore() does its own commit.
+    with Session(engine) as session:
+        return explore(session, args.ndc)
+
+
+class PatientRegimenArgs(BaseModel):
+    patient_id: str = Field(description="UUID of the patient")
+
+
+@tool(
+    permission="patient:read",
+    description=(
+        "Look up what a patient's profile carries -- allergies, conditions, "
+        "and pharmacogenomic phenotypes -- summarised so a physician can ask "
+        "before prescribing instead of opening the chart. This system does "
+        "not track an active medication list, so no current-therapy RxCUIs "
+        "are returned; ask the patient or check the chart for that."
+    ),
+    args=PatientRegimenArgs,
+)
+def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
+    try:
+        patient_uuid = uuid.UUID(args.patient_id)
+    except ValueError:
+        return {"error": "patient_id must be a UUID"}
+
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        row = session.get(Patient, patient_uuid)
+        if row is None or row.hospital_id != principal.hospital_id:
+            return {"error": "patient not found"}
+        # PHI boundary: no full_name, no date_of_birth -- an age band only,
+        # same de-identification the assessment path already performs. This
+        # tool result is sent to Gemini, so the identifiers stop here.
+        return {
+            "age_band": age_band_from_dob(row.date_of_birth),
+            "blood_group": row.blood_group,
+            "allergy_codes": list(row.allergy_codes or []),
+            "condition_codes": list(row.condition_codes or []),
+            "pgx_phenotypes": list(row.pgx_phenotypes or []),
+        }

@@ -121,7 +121,7 @@ def test_a_network_failure_is_absence_not_an_exception(monkeypatch):
 
 def test_scheduled_rows_never_go_stale():
     """They have a CronJob behind them; only on-demand rows expire."""
-    from app.explore import is_stale
+    from medstock_shared.explore import is_stale
 
     class Row:
         expires_at = None
@@ -130,7 +130,7 @@ def test_scheduled_rows_never_go_stale():
 
 
 def test_an_expired_on_demand_row_is_stale():
-    from app.explore import is_stale
+    from medstock_shared.explore import is_stale
 
     class Row:
         expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
@@ -139,7 +139,7 @@ def test_an_expired_on_demand_row_is_stale():
 
 
 def test_a_fresh_on_demand_row_is_not():
-    from app.explore import TTL_DAYS, is_stale
+    from medstock_shared.explore import TTL_DAYS, is_stale
 
     class Row:
         expires_at = datetime.now(tz=UTC) + timedelta(days=TTL_DAYS)

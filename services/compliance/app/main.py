@@ -25,7 +25,7 @@ from sqlalchemy import case, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
-from app.explore import TTL_DAYS, explore, is_stale
+from medstock_shared.explore import TTL_DAYS, explore, is_stale
 
 app = FastAPI(title="compliance")
 
