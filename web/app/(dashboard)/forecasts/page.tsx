@@ -185,10 +185,19 @@ export default function ForecastsPage() {
 
   const chartData = useMemo(() => {
     if (!forecast) return [];
-    return [
-      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity, forecast: null as number | null, band: undefined as [number, number] | undefined })),
+    const rows = [
+      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined })),
       ...forecast.forecast.map((p) => ({ date: p.date.slice(5), actual: null, forecast: p.p50, band: [p.p10, p.p90] as [number, number] })),
     ];
+    // Bridge point: give the forecast series (and its band) the last actual
+    // value at the boundary date, so the dashed line grows out of the tip of
+    // the solid one instead of starting a day later across a gap.
+    const boundary = forecast.history.length - 1;
+    if (boundary >= 0 && forecast.forecast.length > 0) {
+      const lastActual = forecast.history[boundary].quantity;
+      rows[boundary] = { ...rows[boundary], forecast: lastActual, band: [lastActual, lastActual] };
+    }
+    return rows;
   }, [forecast]);
 
   const todayLabel = forecast?.history.length
