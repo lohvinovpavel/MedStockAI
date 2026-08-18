@@ -51,7 +51,15 @@ class _FakeChunk:
 
 
 class _FakeModels:
-    """One `turns` entry per expected `generate_content_stream` call."""
+    """One `turns` entry per expected `generate_content_stream` call.
+
+    `generate_content_stream` itself is a plain coroutine that *returns* an
+    async generator, matching the real google-genai 2.18.0 calling
+    convention (copilot.py `await`s it, then does `async for` on the
+    result) -- not an async-generator function directly. Getting this wrong
+    here is exactly what let the `await` bug ship past a green test suite:
+    the old version of this fake matched the bug, not the SDK.
+    """
 
     def __init__(self, turns: list[list[_FakeChunk]], calls: list):
         self._turns = list(turns)
@@ -59,8 +67,13 @@ class _FakeModels:
 
     async def generate_content_stream(self, *, model, contents, config):
         self._calls.append(list(contents))
-        for chunk in self._turns.pop(0):
-            yield chunk
+        chunks = self._turns.pop(0)
+
+        async def _chunks():
+            for chunk in chunks:
+                yield chunk
+
+        return _chunks()
 
 
 class _FakeClient:
@@ -183,7 +196,6 @@ def test_gemini_stream_error_degrades_instead_of_crashing(monkeypatch, audit_cal
     class _BoomModels:
         async def generate_content_stream(self, *, model, contents, config):
             raise RuntimeError("upstream 503")
-            yield  # pragma: no cover -- makes this an async generator function
 
     fake = SimpleNamespace(aio=SimpleNamespace(models=_BoomModels()))
     monkeypatch.setattr("app.copilot.client", lambda: fake)
@@ -193,7 +205,55 @@ def test_gemini_stream_error_degrades_instead_of_crashing(monkeypatch, audit_cal
     events = _events(res.text)
     assert [e for e, _ in events] == ["degraded", "done"]
     assert audit_calls[0]["outcome"] == "error"
+
+
+def test_stream_call_must_be_awaited_before_iterating(monkeypatch, audit_calls):
+    """Regression test for the bug that actually shipped: google-genai
+    2.18.0's generate_content_stream returns a coroutine, not directly an
+    async iterator, despite its own `AsyncIterator[...]` return annotation
+    describing the awaited value. A fake whose `generate_content_stream` is
+    itself an async-generator function (the pre-fix shape every other fake
+    in this file used to have) would make this pass even with the bug back
+    -- this one is built the same mismatched way on purpose, so it only
+    passes if copilot.py actually awaits before iterating."""
+
+    class _WrongShapeModels:
+        async def generate_content_stream(self, *, model, contents, config):
+            yield _FakeChunk(text="this should never be reachable without an await")
+
+    fake = SimpleNamespace(aio=SimpleNamespace(models=_WrongShapeModels()))
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    assert res.status_code == 200
+    events = _events(res.text)
+    # A missing `await` raises TypeError from `async for` itself, which is
+    # exactly what should degrade the turn -- not a 500, not a hang.
+    assert [e for e, _ in events] == ["degraded", "done"]
+    assert audit_calls[0]["outcome"] == "error"
     assert ai_core._breaker.state == "CLOSED"  # one failure, below the trip threshold
+
+
+def test_429_degrades_this_turn_but_never_trips_the_breaker(monkeypatch, audit_calls):
+    """Same exemption ai/core.py's _Retryable makes for ask_ai() -- a rate
+    limit is the provider asking this one call to back off, not an outage."""
+
+    class _RateLimited(Exception):
+        status_code = 429
+
+    class _BusyModels:
+        async def generate_content_stream(self, *, model, contents, config):
+            raise _RateLimited("slow down")
+
+    fake = SimpleNamespace(aio=SimpleNamespace(models=_BusyModels()))
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    for _ in range(5):  # well past the 3-failure threshold this fixture's breaker uses
+        res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+        assert [e for e, _ in _events(res.text)] == ["degraded", "done"]
+
+    assert ai_core._breaker.state == "CLOSED"
+    assert all(row["outcome"] == "error" for row in audit_calls)
 
 
 def test_no_gemini_key_short_circuits_without_touching_the_breaker_or_client(

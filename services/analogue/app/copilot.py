@@ -125,7 +125,10 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
 
     for _round in range(_MAX_TOOL_ROUNDS):
         if not b.allow():
-            yield _sse("degraded", {"reason": "AI assistant temporarily unavailable"})
+            yield _sse("degraded", {
+                "reason": "AI assistant temporarily unavailable — too many recent failures, "
+                          "retrying automatically shortly.",
+            })
             _write_copilot_audit(principal, request_id, "breaker_open", started, tools_called)
             yield _sse("done", {"request_id": request_id})
             return
@@ -133,18 +136,35 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
         text_parts: list[str] = []
         function_calls: list = []
         try:
-            async for chunk in client().aio.models.generate_content_stream(
+            # `.generate_content_stream(...)`'s own `AsyncIterator[...]` return
+            # annotation describes what you get after awaiting it, not the
+            # call itself -- the call returns a coroutine (confirmed against
+            # the installed google-genai 2.18.0: `inspect.iscoroutine(...)`
+            # is true before this `await`), and iterating a coroutine
+            # directly raises TypeError, not a Gemini error.
+            stream = await client().aio.models.generate_content_stream(
                 model=settings.gemini_model, contents=contents, config=config
-            ):
+            )
+            async for chunk in stream:
                 if chunk.text:
                     text_parts.append(chunk.text)
                     yield _sse("delta", {"text": chunk.text})
                 if chunk.function_calls:
                     function_calls.extend(chunk.function_calls)
-        except Exception:  # noqa: BLE001 — any Gemini/network failure degrades this turn
-            b.record(False)
+        except Exception as exc:  # noqa: BLE001 — any Gemini/network failure degrades this turn
+            # A 429 is the provider asking this one call to back off, not
+            # evidence of an outage -- ai/core.py's `_Retryable` split makes
+            # the same exemption for ask_ai(); this path talks to Gemini
+            # directly (streaming isn't cacheable) and needs it repeated
+            # rather than inherited for free.
+            status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+            if status != 429:
+                b.record(False)
             _log.exception("copilot stream failed request_id=%s", request_id)
-            yield _sse("degraded", {"reason": "AI assistant temporarily unavailable"})
+            yield _sse("degraded", {
+                "reason": "AI assistant temporarily unavailable — the last request to Gemini "
+                          "failed. Check server logs for details.",
+            })
             _write_copilot_audit(principal, request_id, "error", started, tools_called)
             yield _sse("done", {"request_id": request_id})
             return
