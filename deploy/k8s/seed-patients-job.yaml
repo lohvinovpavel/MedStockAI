@@ -1,0 +1,52 @@
+# Demo patients for the prescribe cart — the one place this system stores a
+# name and a date of birth (docs/phi-readiness.md, the documented PHI
+# exception).
+#
+# **The data is invented and must stay invented.** Nothing real belongs in this
+# table; the rules engine is fed a de-identified vector derived from the row at
+# /cart-check time, and that boundary is the whole PHI argument.
+#
+# Deliberately NOT in kustomization.yaml, same as seed-job and seed-stock-job —
+# an apply of the overlay should not quietly write rows. It is, however, applied
+# by the `seed-patients` job in .github/workflows/deploy-dev.yml on every dev
+# deploy, which is the one seed that runs unasked. That is a judgement, not an
+# oversight: the script is idempotent and its log is a count, whereas the user
+# seed's log is a generated password.
+#
+#   kubectl -n medstock apply -f deploy/k8s/seed-patients-job.yaml
+#   kubectl -n medstock wait --for=condition=complete job/seed-patients --timeout=300s
+#
+# Pass --hospital-id to match the tenant you are demoing; the default is the
+# next-dev hospital. Re-running is safe: it skips patients that already exist
+# and backfills a genotype onto any seeded before pgx_phenotypes existed.
+#
+# SEED_PATIENT_COUNT is the generated cohort on top of the eight curated
+# patients. It is not decoration: /demand, the PP-4 forecast and the population
+# panels all answer questions about a cohort, and a cohort of eight makes every
+# one of them read as noise. A thousand rows cost a couple of seconds and about
+# a megabyte.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-patients
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: seed-patients
+        # Any image: all carry shared/ + scripts/ (see the root Dockerfile).
+        image: ghcr.io/medstockai/patient-profiling:latest
+        command: ["python", "scripts/seed_patients.py"]
+        env:
+        # deploy-dev.yml rewrites this literal when the workflow is dispatched
+        # with a different patient_count — keep it the only quoted "1000" here.
+        - name: SEED_PATIENT_COUNT
+          value: "1000"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits: { memory: 256Mi }

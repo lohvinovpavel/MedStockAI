@@ -186,7 +186,7 @@ The **Пошук аналогів** tab keeps UC-1..5 unchanged (no patient).
 
 ### How to test
 
-1. Run `patient-profiling` on port 8003 (Next proxies `/api/patients`). Seed: `uv run python scripts/seed_patients.py --hospital-id <hospital uuid>`.
+1. Run `patient-profiling` on port 8003 (Next proxies `/api/patients`). Seed: `uv run python scripts/seed_patients.py --count 1000` — it resolves the tenant by hospital name, so run the auth seed first, or pass `--hospital-id <hospital uuid>`.
 2. Open http://127.0.0.1:3001/analogue?tab=pryznachennia as physician (`ben@stmarys.org` / `devpassword123`).
 3. Select **Elena Vasquez** (seeded with `avoid_caffeine`) or create a patient with that condition.
 4. Search `aspirin caffeine`, **Add** **aspirin 400 MG / caffeine 32 MG Oral Tablet** (RxCUI 198479) → warning badge.

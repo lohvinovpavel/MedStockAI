@@ -144,19 +144,89 @@ Recommendation: two calls. Decide before the endpoint is written.
 
 | Method | Path | Permission | Status | Notes |
 |---|---|---|---|---|
-| `GET` | `/status?ndc=…` | `inventory:read` | **built** | Batch: repeatable `ndc` param, max 100, one page of stock in one call |
-| `GET` | `/certificates/{ndc}` | `inventory:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
+| `GET` | `/status?ndc=…` | `certificate:read` | **built** | Batch: repeatable `ndc` param, max 100, one page of stock in one call |
+| `GET` | `/certificates/{ndc}` | `certificate:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
 | `GET` | `/ruleset` | `inventory:read` | **built** | Every rule and threshold that can produce a colour |
+| `POST` | `/explore` | `certification:explore` | **built** | COMP-2 on demand, max 10 NDCs — two upstream calls each |
 | `GET` | `/export/compliance.csv` | `audit:read` | planned | Director surface, already sketched in services.md §3 |
 
-`inventory:read` is reused rather than adding a `certificate:read` permission: every role that
-can see the shelf needs to see the badge on it, and a change to `shared/auth.py` redeploys all
-seven services (services.md §0).
+`certificate:read` is held by pharmacist, physician and director — every role that can see the
+shelf can see the badge on it. `certification:explore` is narrower (pharmacist only) because it
+spends the shared openFDA daily budget, and `/ruleset` sits on `inventory:read` because it is
+the same document for everyone and contains nothing about a particular drug.
 
-**What is built today is COMP-1 only.** COMP-2 (§3) is designed but not implemented — an NDC with
-no row comes back `unknown` and nothing explores it. The status rules live in
-`shared/medstock_shared/certification.py`, the daily feed in
+The status rules live in `shared/medstock_shared/certification.py`, the daily feed in
 `services/ingest/app/certification.py`.
+
+### 2.4 Clicking the light
+
+The badge is a button. The colour is a verdict, and a verdict you cannot interrogate is one a
+pharmacist is right to distrust — so the evidence is one click from the light itself rather
+than behind a row menu.
+
+What the dialog says depends on the colour, and **green gets a sentence like every other
+state**. That is the point of the section. An empty findings list renders identically to
+"nobody looked", and those are opposite facts:
+
+| Colour | What it says |
+|---|---|
+| Green | *N* rules evaluated, none disqualifying, broken down by category — plus the limit: green is a statement about the FDA record, not an inspection of the physical stock |
+| Amber / Red | The finding that **set the colour**, tagged as such in the list so severity ordering is not a puzzle to solve, and whether the reasons are standing or have an end |
+| Unknown | No record held. Explicitly *not* a clean bill of health; opening the dialog is what asks the FDA (COMP-2) |
+| Unavailable | The service could not be reached. Nothing was checked — never rendered as green |
+
+The wording lives in `web/lib/certification.ts`, apart from the dialog, because the copilot
+drawer shows the same verdict and two copies would eventually disagree about what green means
+on the same screen.
+
+### 2.5 The gates
+
+One word on a badge is five questions collapsed into one. That is the right default for a
+shelf — eleven drugs cannot show forty findings — but it means "Attention" cannot be told from
+"Attention" without opening the list and inferring the difference from the codes.
+
+So the dialog shows the gates themselves, in pipeline order rather than alphabetically:
+
+| Gate | Asks |
+|---|---|
+| `lifecycle` | Is it still a marketed product? |
+| `approval` | What authority is it sold under? |
+| `enforcement` | Recalls and regulatory action |
+| `supply` | Can it actually be obtained? |
+| `data` | What could we not check? |
+
+Each shows *n/total* rules fired and a word — `pass`, `flagged`, `failed`, `not run`. The word
+carries the verdict, not the dot: green and red sit next to each other here, which is the one
+pair a red/green reader cannot separate.
+
+**`not run` is not `pass`.** An `unknown` or `unavailable` badge renders every gate grey. A row
+of green gates over a grey badge would be the most misleading thing on the page — it would
+claim five checks cleared for a drug nobody looked at.
+
+An `info` finding does not fail its gate. It is a note about what could not be checked, not a
+reason to hold the drug — which is why `data` can read `pass · 1/3`.
+
+### 2.6 Re-checking one drug
+
+`Re-check now`, in the certificate dialog, calls `POST /explore` for that NDC and reloads the
+verdict. Unlike opening the dialog — which explores only on a miss or an expired row — this
+re-fetches unconditionally. That is the point: a pharmacist who has just read a recall notice
+should not have to wait out the seven-day TTL to see it reflected.
+
+It costs two upstream calls against a shared daily budget, so it is a deliberate click rather
+than something the dialog does on open, and it is offered only to roles holding
+`certification:explore` (pharmacist, admin). When the role cannot be confirmed the button is
+still offered and the server decides — same reasoning as `approvalStance` in
+[prognosis-and-procurement.md](prognosis-and-procurement.md) §5.4: gating a control on auth
+being reachable puts auth back in the critical path of a page built not to need it.
+
+A failure leaves the previous verdict on screen under an error toast. Blanking it would imply
+the drug had become unknown when nothing about it changed.
+
+> `POST /explore` answers **200 with an `errors` entry** when an upstream lookup fails, because
+> it is built for batches where one dead lookup must not lose the answers that did come back.
+> A caller passing a single NDC has to check that map, or a failed re-check reads as success
+> and the dialog redisplays the stale verdict as though it were fresh.
 
 ---
 
@@ -217,7 +287,7 @@ same convention as `services/ingest`. Do not schedule anything marked `verify`.
 | **openFDA Enforcement** | `api.fda.gov/drug/enforcement.json` | none | Recall class I/II/III, `status` ongoing/terminated, reason text | daily |
 | **openFDA Drug Label** | `api.fda.gov/drug/label.json` | none | SPL text — the input to `extract` in COMP-2 | on demand |
 | **FDA Import Alerts (DWPE)** | `accessdata.fda.gov/cms_ia/ialist.html` — alerts **66-40** (GMP failure) and **66-41** (unapproved drugs) | none | **The import-certification source.** Foreign manufacturers detained without physical examination | weekly · `verify` |
-| **FDA Warning Letters** | `fda.gov` compliance-actions listing | none | Open enforcement action against a labeler | weekly · `verify` |
+| **FDA Warning Letters** | `…/warning-letters/datatables-data` — an **XLSX export**, not JSON | none | A letter issued to a labeler. **Not** whether it is still open — see below | weekly · **built** |
 | **FDA Inspection Classification** | FDA inspections dataset export | none | OAI / VAI / NAI per site — OAI is the Yellow signal | monthly · `verify` |
 | **FDA Drug Establishment Registration** | DECRS export | none | Is the foreign establishment registered at all | monthly · `verify` |
 | **EMA / EudraGMDP** | EudraGMDP portal | none | GMP certificates and **non-compliance statements** for non-US sites | monthly · `verify` |
@@ -330,7 +400,23 @@ findings are replayed, not re-fetched.
    says so, rather than wrong ones. `--dry-run` shows what the parser found before anything is
    written.
 
-   Warning letters and EudraGMDP remain unscraped; import alerts were the load-bearing one.
+   **Warning letters are built too**, and verifying the source changed the design twice. The
+   listing posts to a `datatables-data` endpoint that answers with an XLSX workbook despite the
+   URL, which is sturdier than the rendered table and needs no Excel dependency — the sheet is
+   flat, so `zipfile` plus shared strings is enough.
+
+   More important: **the export cannot say whether an action is open.** It carries a
+   `Closeout Letter` column that is empty on all 1 000 rows, while `Response Letter` is populated
+   on 128 — the closeout hyperlink does not survive the export. So the finding says a letter *was
+   issued*, names the firm, date and subject, and states that closeout status is not published.
+   Claiming an open investigation from a source that does not publish closure would be the one
+   dishonest finding in the module, and a test asserts the words never appear.
+
+   The endpoint caps at 1 000 rows however it is paged, but they are recent (newest 2026-04-09 on
+   the last run, 219 of 989 from CDER), and anything older than three years is dropped at finding
+   time anyway.
+
+   EudraGMDP and inspection classifications remain unscraped.
 4. **Two calls vs. a SQL join** for the inventory badge — §2.2.
 5. ~~**New permissions.**~~ **Done.** `certificate:read` and `certification:explore` are in
    `shared/medstock_shared/auth.py`, and `/status`, `/certificates/{ndc}` and `/explore` are on

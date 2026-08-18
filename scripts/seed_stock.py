@@ -19,18 +19,30 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.models import FormularyItem, StockSnapshot
+from medstock_shared.models import FormularyItem, Hospital, StockSnapshot
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
     ndcs_for_rxcui,
 )
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-# Same claim as web/.env.local / /tmp/medstock-dev/token.txt
-DEFAULT_HOSPITAL_ID = "00000000-0000-0000-0000-000000000001"
+# `stock_snapshot.hospital_id` and `formulary.hospital_id` are Text with no
+# foreign key, so seeding into a hospital that does not exist succeeds and
+# writes rows nobody can see — a user only ever sees the hospital named in their
+# token. This script used to default to the literal
+# 00000000-0000-0000-0000-000000000001, which nothing creates: the only place a
+# `hospital` row is made is services/auth/app/seed.py, and it lets Postgres
+# generate the uuid.
+#
+# That default is not a cosmetic problem here. `ingest-certification` certifies
+# `shelf_ndcs()`, which reads stock_snapshot — so an invisible shelf means the
+# daily job certifies drugs nobody can see and every badge on the dashboard sits
+# at "unknown". Same fix as scripts/seed_patients.py: resolve by name, refuse to
+# guess.
+DEFAULT_HOSPITAL_NAME = "St Mary's General"  # keep in step with auth's seed
 LOCATIONS = ("main-pharmacy", "icu", "ward-3")
 NDC_CAP = 6
 RNG_SEED = 42
@@ -47,7 +59,8 @@ DRUGS: tuple[dict, ...] = (
     {"rxcui": "200801", "name": "furosemide 20 MG Oral Tablet [Lasix]", "in_formulary": False},
 )
 
-# The ten SKUs the dashboard shelf shows (web/lib/mock-data.ts).
+# The SKUs the dashboard shelf shows (web/lib/mock-data.ts), pinned to this
+# list by services/compliance/tests/test_demo_shelf.py.
 #
 # Seeded by NDC rather than resolved through RxNorm like DRUGS above, because
 # these were chosen *as* NDCs: each is a real, currently-listed product picked so
@@ -69,6 +82,10 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     {"ndc": "63323041125", "name": "Midazolam 5mg/mL", "quantity": 180},
     {"ndc": "00143938610", "name": "Paracetamol 1g IV", "quantity": 300},
     {"ndc": "00338043304", "name": "Heparin Sodium 5000IU/mL", "quantity": 95},
+    # Obsolete in RxNorm, so the certification traffic light has a red to show.
+    # The two rows above were picked for open Class I recalls and both closed --
+    # the feed working, not failing, but it left the shelf with no red on it.
+    {"ndc": "76168080030", "name": "Carmellose Sodium 0.5% Eye Drops", "quantity": 62},
 )
 
 # Optional `quantity` (all locations) and `locations` freeze demo stock; otherwise random.
@@ -171,8 +188,17 @@ def build_shelf_rows(hospital_id: str) -> list[dict]:
 def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list[str]) -> None:
     if rows:
         stmt = insert(StockSnapshot).values(rows)
+        # uq_stock_hospital_ndc_fac_loc, not uq_stock_hospital_ndc_loc: the
+        # warehouse migration (20260817_warehouse) added facility_id to the
+        # natural key, because location codes repeat across facilities — every
+        # clinic has a "fridge-1". The old name no longer exists, so this script
+        # raised UndefinedObject against any database at current head, which is
+        # every environment the runbook tells you to seed.
+        #
+        # These rows carry no facility_id. The constraint is NULLS NOT DISTINCT,
+        # so they still de-duplicate on (hospital_id, ndc, location_id).
         stmt = stmt.on_conflict_do_update(
-            constraint="uq_stock_hospital_ndc_loc",
+            constraint="uq_stock_hospital_ndc_fac_loc",
             set_={"quantity": stmt.excluded.quantity, "updated_at": func.now()},
         )
         session.execute(stmt)
@@ -183,22 +209,50 @@ def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list
         session.execute(fstmt)
 
 
+def resolve_hospital_id(session: Session, explicit: str | None, name: str) -> str:
+    """The tenant to seed into — named, not assumed.
+
+    An explicit `--hospital-id` always wins; tests and one-off environments need
+    to name a tenant with no `hospital` row at all. Otherwise resolve by name
+    and, if it is not there, **stop**. Falling back to a constant would fill the
+    shelf with rows nobody can see and report success.
+    """
+    if explicit:
+        return explicit.strip()
+
+    row = session.execute(select(Hospital).where(Hospital.name == name)).scalars().first()
+    if row is None:
+        raise SystemExit(
+            f"no hospital named {name!r} — nothing to seed into. "
+            "Run the auth seed first (python -m app.seed in services/auth, or "
+            "deploy/k8s/seed-job.yaml), or pass --hospital-id explicitly."
+        )
+    return str(row.id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed UC-2 stock_snapshot demo rows")
-    parser.add_argument("--hospital-id", default=DEFAULT_HOSPITAL_ID)
-    args = parser.parse_args()
-    rng = random.Random(RNG_SEED)
-    rows = build_stock_rows(args.hospital_id, DRUGS, rng)
-    rows.extend(
-        build_stock_rows(args.hospital_id, ANALOGUE_DRUGS, rng, demo_edges=False)
+    parser.add_argument(
+        "--hospital-id",
+        default=None,
+        help="tenant to seed into; defaults to whichever hospital --hospital-name resolves to",
     )
-    rows.extend(build_shelf_rows(args.hospital_id))
-    formulary = [
-        d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]
-    ]
+    parser.add_argument(
+        "--hospital-name",
+        default=DEFAULT_HOSPITAL_NAME,
+        help="resolve the tenant by name instead of by uuid",
+    )
+    args = parser.parse_args()
+
     session = SessionLocal()
     try:
-        upsert(session, args.hospital_id, rows, formulary)
+        hospital_id = resolve_hospital_id(session, args.hospital_id, args.hospital_name)
+        rng = random.Random(RNG_SEED)
+        rows = build_stock_rows(hospital_id, DRUGS, rng)
+        rows.extend(build_stock_rows(hospital_id, ANALOGUE_DRUGS, rng, demo_edges=False))
+        rows.extend(build_shelf_rows(hospital_id))
+        formulary = [d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]]
+        upsert(session, hospital_id, rows, formulary)
         session.commit()
     except Exception:
         session.rollback()
@@ -209,7 +263,7 @@ def main() -> int:
         f"upserted {len(rows)} stock line(s) "
         f"({len(DASHBOARD_SHELF)} of them the dashboard shelf), "
         f"{len(formulary)} formulary rxcui(s) "
-        f"for hospital_id={args.hospital_id} locations={','.join(LOCATIONS)}"
+        f"for hospital_id={hospital_id} locations={','.join(LOCATIONS)}"
     )
     return 0
 

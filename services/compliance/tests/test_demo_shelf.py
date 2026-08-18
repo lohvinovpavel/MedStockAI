@@ -66,3 +66,40 @@ def test_shelf_ndcs_are_canonical_11_digit():
 def test_no_duplicate_ndcs_on_the_shelf():
     ui = _ui_ndcs()
     assert len(ui) == len(set(ui)), "the same NDC appears on two dashboard rows"
+
+
+def test_the_seed_targets_a_constraint_that_still_exists():
+    """`seed_stock.py` names a constraint in its ON CONFLICT clause, and a
+    migration renamed it out from under the script.
+
+    20260817_warehouse added `facility_id` to the natural key — location codes
+    repeat across facilities, every clinic has a "fridge-1" — dropping
+    `uq_stock_hospital_ndc_loc` for `uq_stock_hospital_ndc_fac_loc`. The script
+    kept naming the old one and raised UndefinedObject against any database at
+    head, which is every environment docs/populating-a-new-environment.md tells
+    you to seed. Nothing caught it because no test ran the script against a
+    migrated database.
+
+    Pinning the name against the model is cheaper than that round trip and fails
+    on the rename rather than on the next person's first deploy.
+    """
+    import re
+
+    from medstock_shared.models import FormularyItem, StockSnapshot
+
+    named = re.findall(r'constraint="([^"]+)"', _SEED.read_text(encoding="utf-8"))
+    assert named, "seed_stock.py should pin its upserts to named constraints"
+
+    # The script writes both tables, so check the names against both rather than
+    # against whichever one happens to be first.
+    declared = {
+        c.name
+        for model in (StockSnapshot, FormularyItem)
+        for c in model.__table__.constraints
+        if c.name
+    }
+    unknown = [c for c in named if c not in declared]
+    assert not unknown, (
+        f"seed_stock.py upserts on {unknown}, which no seeded model declares. "
+        f"Declared: {sorted(declared)}"
+    )

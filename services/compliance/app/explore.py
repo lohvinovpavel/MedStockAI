@@ -30,6 +30,7 @@ from medstock_shared.certification import (
     RULESET_VERSION,
     AlertListing,
     NewsItem,
+    WarningAction,
     evaluate,
     firm_key,
     ndc11,
@@ -42,6 +43,7 @@ from medstock_shared.models import (
     DrugCertification,
     ImportAlert,
     NewsSignal,
+    WarningLetter,
 )
 from medstock_shared.ndc_status import fetch_ndc_status
 from sqlalchemy import delete, select
@@ -113,6 +115,32 @@ def import_alerts_for(session: Session, labeler: str | None) -> list[AlertListin
     ]
 
 
+def warning_letters_for(session: Session, labeler: str | None) -> list[WarningAction]:
+    """Warning letters naming this labeler, matched exactly like import alerts.
+
+    Recency is applied in `evaluate` rather than here so the window lives beside
+    the rule it belongs to and one table read serves both.
+    """
+    if not labeler:
+        return []
+    try:
+        rows = session.scalars(
+            select(WarningLetter).where(WarningLetter.firm_key == firm_key(labeler))
+        ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        WarningAction(
+            company_name=row.company_name,
+            issue_date=row.issue_date,
+            issuing_office=row.issuing_office or "",
+            subject=row.subject or "",
+            source_url=row.source_url or "",
+        )
+        for row in rows
+    ]
+
+
 def news_for(session: Session, ndc: str) -> list[NewsItem]:
     """Recent press mentions attached to this NDC. Yellow at most — §4.3."""
     try:
@@ -153,6 +181,7 @@ def explore(session: Session, ndc: str) -> dict:
         marketing_category=(product or {}).get("marketing_category"),
         finished=(product or {}).get("finished"),
         import_alerts=import_alerts_for(session, labeler),
+        warning_letters=warning_letters_for(session, labeler),
         news=news_for(session, key),
         ndc_status=status_record,
         in_directory=product is not None,
@@ -169,6 +198,13 @@ def explore(session: Session, ndc: str) -> dict:
         "labeler": (product or {}).get("labeler_name"),
         "provenance": "on_demand",
         "ruleset_version": RULESET_VERSION,
+        # Set explicitly. The column carries onupdate=func.now(), which does not
+        # fire for INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert, and
+        # the conflict branch is the database's business, not the ORM's. Without
+        # this a re-check refreshes the findings and the TTL while still
+        # reporting the time of the very first check, which is precisely the
+        # thing the Re-check button exists to change.
+        "computed_at": now,
         "expires_at": now + timedelta(days=TTL_DAYS),
         "raw": {
             "directory": product or {},
