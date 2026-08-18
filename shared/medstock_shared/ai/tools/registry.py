@@ -73,6 +73,20 @@ def declarations_for(principal: Principal) -> list[dict]:
     return [spec.to_declaration() for spec in _REGISTRY.values() if spec.permission in granted]
 
 
+def denied_tools_for(principal: Principal) -> list[dict]:
+    """The complement of declarations_for(): name + description for tools this
+    role may not call. Not declared to Gemini as callable -- folded into the
+    system prompt instead, so a role-gated request gets an explicit "you
+    don't have permission" instead of the model either hallucinating an
+    answer or just going quiet about a capability it was never told exists."""
+    granted = PERMS.get(principal.role, set())
+    return [
+        {"name": spec.name, "description": spec.description}
+        for spec in _REGISTRY.values()
+        if spec.permission not in granted
+    ]
+
+
 class ToolDenied(Exception):
     """Raised by `execute()` -- an unknown name (a stale/forged tool call) or
     a permission the caller's role does not hold. Both are turned into a

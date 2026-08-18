@@ -3,12 +3,13 @@
 same way `ai_tasks.TASKS` is populated by module-level dict literals."""
 
 from . import pharmacy  # noqa: F401  -- import for its @tool registration side effect
-from .registry import ToolDenied, ToolSpec, declarations_for, execute, tool
+from .registry import ToolDenied, ToolSpec, declarations_for, denied_tools_for, execute, tool
 
 __all__ = [
     "ToolDenied",
     "ToolSpec",
     "declarations_for",
+    "denied_tools_for",
     "execute",
     "tool",
 ]

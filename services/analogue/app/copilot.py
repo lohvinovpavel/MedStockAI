@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from google.genai import types
 from medstock_shared.ai import client, shared_breaker, write_audit
-from medstock_shared.ai.tools import ToolDenied, declarations_for, execute
+from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
 from pydantic import BaseModel
@@ -71,6 +71,29 @@ def _sse(event: str, data: dict) -> str:
 
 def _ai_available() -> bool:
     return bool((settings.gemini_api_key or "").strip())
+
+
+def _system_instruction_for(principal: Principal) -> str:
+    """Base instruction plus a note naming any tool this role can't call.
+
+    declarations_for() already keeps ungranted tools off the model's callable
+    list -- that's the security boundary, execute() re-checks it regardless.
+    But an undeclared tool is invisible to the model, so without this it either
+    hallucinates an answer or goes vague. Naming it (not offering it) lets the
+    model give the user an honest "you don't have permission for that" instead.
+    """
+    denied = denied_tools_for(principal)
+    if not denied:
+        return _SYSTEM_INSTRUCTION
+    listing = "\n".join(f"- {d['name']}: {d['description']}" for d in denied)
+    return (
+        f"{_SYSTEM_INSTRUCTION}\n\n"
+        "The following capabilities exist in this system but this user's role "
+        f"does not have permission to use them:\n{listing}\n\n"
+        "If the user's request needs one of these, tell them plainly they don't "
+        "have permission for that -- do not attempt it, invent an answer, or "
+        "pretend the capability doesn't exist."
+    )
 
 
 def _write_copilot_audit(
@@ -112,7 +135,7 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
     ]
     declarations = declarations_for(principal)
     config = types.GenerateContentConfig(
-        system_instruction=_SYSTEM_INSTRUCTION,
+        system_instruction=_system_instruction_for(principal),
         tools=(
             [types.Tool(function_declarations=[types.FunctionDeclaration(**d) for d in declarations])]
             if declarations
@@ -134,7 +157,14 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
             return
 
         text_parts: list[str] = []
-        function_calls: list = []
+        # The raw `Part`s, not `chunk.function_calls` -- that convenience
+        # property strips each part down to a bare FunctionCall and drops
+        # `thought_signature`, an opaque token Gemini 3 requires echoed back
+        # on any function-call part sent in a later turn. Losing it is what
+        # shipped as "AI assistant temporarily unavailable" on every real
+        # tool round-trip: the next call 400s with "missing a
+        # thought_signature in functionCall parts".
+        function_call_parts: list = []
         try:
             # `.generate_content_stream(...)`'s own `AsyncIterator[...]` return
             # annotation describes what you get after awaiting it, not the
@@ -149,8 +179,10 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
                 if chunk.text:
                     text_parts.append(chunk.text)
                     yield _sse("delta", {"text": chunk.text})
-                if chunk.function_calls:
-                    function_calls.extend(chunk.function_calls)
+                cand = chunk.candidates[0] if chunk.candidates else None
+                for part in (cand.content.parts if cand and cand.content else None) or []:
+                    if part.function_call is not None:
+                        function_call_parts.append(part)
         except Exception as exc:  # noqa: BLE001 — any Gemini/network failure degrades this turn
             # A 429 is the provider asking this one call to back off, not
             # evidence of an outage -- ai/core.py's `_Retryable` split makes
@@ -170,16 +202,15 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
             return
         b.record(True)
 
-        if not function_calls:
+        if not function_call_parts:
             _write_copilot_audit(principal, request_id, "live", started, tools_called)
             yield _sse("done", {"request_id": request_id})
             return
 
-        contents.append(
-            types.Content(role="model", parts=[types.Part(function_call=fc) for fc in function_calls])
-        )
+        contents.append(types.Content(role="model", parts=function_call_parts))
         response_parts = []
-        for fc in function_calls:
+        for part in function_call_parts:
+            fc = part.function_call
             name = fc.name or ""
             args = dict(fc.args or {})
             yield _sse("tool_start", {"name": name, "args": args})

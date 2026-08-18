@@ -45,9 +45,20 @@ def _events(sse_text: str) -> list[tuple[str, dict]]:
 
 
 class _FakeChunk:
+    """`function_calls` items become real `Part`s under `.candidates[0].content.parts`
+    (not a flat `.function_calls` list) -- copilot.py reads parts, not the SDK's
+    `chunk.function_calls` convenience property, because that property drops
+    `thought_signature` and that omission is the bug this file guards against."""
+
     def __init__(self, text=None, function_calls=None):
         self.text = text
-        self.function_calls = function_calls
+        parts = [
+            SimpleNamespace(
+                function_call=fc, thought_signature=getattr(fc, "thought_signature", None)
+            )
+            for fc in (function_calls or [])
+        ]
+        self.candidates = [SimpleNamespace(content=SimpleNamespace(parts=parts))]
 
 
 class _FakeModels:
@@ -61,12 +72,14 @@ class _FakeModels:
     the old version of this fake matched the bug, not the SDK.
     """
 
-    def __init__(self, turns: list[list[_FakeChunk]], calls: list):
+    def __init__(self, turns: list[list[_FakeChunk]], calls: list, configs: list):
         self._turns = list(turns)
         self._calls = calls
+        self._configs = configs
 
     async def generate_content_stream(self, *, model, contents, config):
         self._calls.append(list(contents))
+        self._configs.append(config)
         chunks = self._turns.pop(0)
 
         async def _chunks():
@@ -79,7 +92,8 @@ class _FakeModels:
 class _FakeClient:
     def __init__(self, turns: list[list[_FakeChunk]]):
         self.calls: list = []
-        self.aio = SimpleNamespace(models=_FakeModels(turns, self.calls))
+        self.configs: list = []
+        self.aio = SimpleNamespace(models=_FakeModels(turns, self.calls, self.configs))
 
 
 @pytest.fixture(autouse=True)
@@ -154,6 +168,32 @@ def test_tool_call_round_trip_executes_and_continues_to_a_final_answer(
 
     assert audit_calls[0]["outcome"] == "live"
     assert audit_calls[0]["tools_called"] == [{"name": "search_analogues_rxnorm", "ok": True}]
+
+
+def test_thought_signature_survives_the_tool_round_trip(monkeypatch, audit_calls):
+    """Regression test for the bug that actually shipped: Gemini 3 requires
+    `thought_signature` echoed back on any function-call part sent in a later
+    turn, or the next call 400s with 'missing a thought_signature in
+    functionCall parts'. `chunk.function_calls` drops it; copilot.py must
+    read `.candidates[0].content.parts` instead, which keeps it."""
+    fc = SimpleNamespace(name="verify_batch_cert", args={"ndc": "123"}, thought_signature=b"sig-xyz")
+    fake = _FakeClient(
+        turns=[[_FakeChunk(function_calls=[fc])], [_FakeChunk(text="green.")]]
+    )
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    async def fake_execute(name, args, principal):
+        return {"status": "green"}
+
+    monkeypatch.setattr("app.copilot.execute", fake_execute)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "check it"}]})
+    assert res.status_code == 200
+    assert [e for e, _ in _events(res.text)] == ["tool_start", "tool_end", "delta", "done"]
+
+    second_round_contents = fake.calls[1]
+    model_turn = next(c for c in second_round_contents if c.role == "model")
+    assert model_turn.parts[0].thought_signature == b"sig-xyz"
 
 
 def test_forged_tool_call_is_denied_not_crashed(monkeypatch, audit_calls):
@@ -285,3 +325,41 @@ def test_declarations_are_scoped_to_the_caller_role():
     names = {d["name"] for d in declarations_for(PHARMACIST)}
     assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
+
+
+def test_denied_tools_for_is_the_complement_of_declarations_for():
+    """No role today actually lacks drug:search/certificate:read, so the
+    interesting case (some tools denied) is exercised by the copilot
+    integration test below via a monkeypatched PERMS entry."""
+    from medstock_shared.ai.tools import denied_tools_for
+
+    assert denied_tools_for(PHARMACIST) == []
+    names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
+    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+
+
+def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch, audit_calls):
+    """A role missing one tool's permission still gets the *other* tool
+    offered as callable, and the missing one named (not offered) in the
+    system prompt -- so the model can tell the user "you don't have
+    permission for that" instead of hallucinating or going vague."""
+    import medstock_shared.auth as auth_module
+
+    gapped_role = "physician"  # holds certificate:read today; test removes it
+    monkeypatch.setitem(
+        auth_module.PERMS, gapped_role, auth_module.PERMS[gapped_role] - {"certificate:read"}
+    )
+    principal = Principal("user-2", "hospital-1", gapped_role)
+
+    fake = _FakeClient(turns=[[_FakeChunk(text="hi")]])
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    res = _client(principal).post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    assert res.status_code == 200
+
+    instruction = fake.configs[0].system_instruction
+    assert "verify_batch_cert" in instruction
+    assert "don't have permission" in instruction
+    # still-granted tool stays callable, not just named in the prompt
+    declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
+    assert declared_names == {"search_analogues_rxnorm"}
