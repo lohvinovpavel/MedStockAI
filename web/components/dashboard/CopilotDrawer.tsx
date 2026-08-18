@@ -598,7 +598,8 @@ export function CopilotDrawer() {
       // whatever SKU/alert is focused when the user hits send goes in here.
       // Re-added on every turn (not just the first) because focus can change
       // mid-conversation and each call resends the full history from scratch.
-      const contextPrefix = focus ? `[Currently viewing: ${focus.label} — ${focus.detail}]\n\n` : "";
+      const ndcTag = focus?.kind === "sku" ? ` (NDC ${focus.ndc})` : "";
+      const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag} — ${focus.detail}]\n\n` : "";
       const history = [...toCopilotHistory(priorMessages), { role: "user" as const, text: contextPrefix + userText }];
       for await (const evt of streamCopilotChat(history, controller.signal)) {
         if (evt.event === "delta") {

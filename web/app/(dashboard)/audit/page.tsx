@@ -56,7 +56,7 @@ export default function AuditPage() {
   );
 
   useEffect(() => {
-    setFocus({ kind: "sku", label: item.drugName, detail: `Audit trail · ${entries.length} logged events`, itemId: item.id });
+    setFocus({ kind: "sku", label: item.drugName, detail: `Audit trail · ${entries.length} logged events`, itemId: item.id, ndc: item.ndc });
   }, [item, entries.length, setFocus]);
 
   return (

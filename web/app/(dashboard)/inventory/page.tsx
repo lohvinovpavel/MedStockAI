@@ -597,6 +597,7 @@ export default function InventoryPage() {
         label: item.drugName,
         detail: `Batch ${item.batchNumber} · ${item.currentStock} ${item.unit} on hand · expires ${item.expiryDate}`,
         itemId: item.id,
+        ndc: item.ndc,
       });
     }
   }
