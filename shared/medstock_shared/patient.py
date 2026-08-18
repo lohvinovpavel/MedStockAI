@@ -204,11 +204,43 @@ DRUG_CLASS: dict[str, str] = {
     "312086": "antiemetic",  # ondansetron
     "311700": "benzodiazepine",  # midazolam
     "11289": "anticoagulant",  # warfarin
+    # --- the drugs the demo shelf and prescribe cart actually offer ---------
+    # Without these every one of them resolves to no class, which silently
+    # disables four stages at once: the allergy hard gate, interactions,
+    # organ-function limits and the age rules all key on class. A
+    # penicillin-allergic patient was being shown a green badge for
+    # amoxicillin, because the map knew 308182 and the UI offers 308191.
+    #
+    # This is a targeted patch, not the fix. The real answer is deriving class
+    # from openFDA's `pharm_class` EPC field, which is free and already on an
+    # endpoint ingest calls — until then any drug outside this list is
+    # unclassified and says so via DRUG_CLASS_UNKNOWN.
+    "308191": "penicillin",  # amoxicillin
+    "562251": "penicillin",  # amoxicillin/clavulanate
+    "562508": "penicillin",  # Augmentin
+    "309062": "cephalosporin",  # cefepime
+    "309073": "cephalosporin",  # cefotaxime
+    "309090": "cephalosporin",  # ceftriaxone
+    "1665088": "cephalosporin",  # ceftriaxone, generic
+    "309089": "cephalosporin",  # cefuroxime
+    "854235": "anticoagulant",  # enoxaparin
+    "321208": "anticoagulant",  # fondaparinux
+    "1361574": "anticoagulant",  # heparin
+    "285018": "insulin",  # insulin detemir
+    "1157459": "insulin",  # insulin glargine
+    "1605101": "insulin",  # insulin glargine, Toujeo
+    "242969": "vasopressor",  # norepinephrine
+    "1114874": "vasopressor",  # phenylephrine
+    "1546028": "vasopressor",  # vasopressin
+    "203155": "anaesthetic",  # propofol
+    "1010600": "anaesthetic",  # propofol-lipuro
+    "310798": "anaesthetic",  # etomidate
 }
 
 ALLERGY_CLASS: dict[str, str] = {
     "penicillin": "penicillin",
     "amoxicillin": "penicillin",
+    "cephalosporin": "cephalosporin",
     "sulfa": "sulfonamide",
     "nsaid": "nsaid",
     "aspirin": "nsaid",
