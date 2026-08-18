@@ -73,7 +73,7 @@ export type CopilotEvent =
   | { event: "delta"; data: { text: string } }
   | { event: "tool_start"; data: { name: string; args: Record<string, unknown> } }
   | { event: "tool_end"; data: { name: string; ok: boolean; error?: string } }
-  | { event: "tool_card"; data: { name: string; card: Record<string, any> } }
+  | { event: "tool_card"; data: { name: string; card: Record<string, unknown> } }
   | { event: "degraded"; data: { reason: string } }
   // A name-based patient lookup (services/analogue/app/copilot.py) matched
   // more than one patient. Candidates carry PHI (name + DOB) precisely

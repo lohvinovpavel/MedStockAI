@@ -31,18 +31,13 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { useCopilot, type CopilotFocus, type EmergencyPlanRequest } from "@/lib/copilot-context";
+import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import { useSession } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { apiFetch, streamCopilotMessage, type PatientCandidate } from "@/lib/api";
-import {
-  CERT_LABELS,
-  CERT_TONE,
-  type CertResult,
-  type CertStatus,
-} from "@/components/CertificationBadge";
+import type { CertStatus } from "@/components/CertificationBadge";
 import { cn } from "@/lib/utils";
 
 export type ResponseCard =
@@ -1164,7 +1159,7 @@ export function CopilotDrawer() {
   useEffect(() => () => streamAbortRef.current?.abort(), []);
 
   function mapApiMessages(
-    items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[],
+    items: { id: number; role: string; text: string | null; card?: ResponseCard | null; tool_name?: string | null }[],
   ): Message[] {
     const result: Message[] = [];
     for (const row of items) {
@@ -1175,7 +1170,7 @@ export function CopilotDrawer() {
           id: `api-${row.id}`,
           role: "assistant",
           text: "",
-          card: row.card as ResponseCard,
+          card: row.card,
           live: true,
         });
       } else if (row.role === "assistant") {
@@ -1225,7 +1220,7 @@ export function CopilotDrawer() {
         if (!items[0]) return;
         const conv = (await apiFetch("copilot", `/conversations/${items[0].id}`)) as {
           id: string;
-          items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[];
+          items: { id: number; role: string; text: string | null; card?: ResponseCard | null; tool_name?: string | null }[];
         };
         if (cancelled) return;
         setConversationId(conv.id);
@@ -1311,7 +1306,7 @@ export function CopilotDrawer() {
     try {
       const conv = (await apiFetch("copilot", `/conversations/${saved.id}`)) as {
         id: string;
-        items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[];
+        items: { id: number; role: string; text: string | null; card?: ResponseCard | null; tool_name?: string | null }[];
       };
       setConversationId(conv.id);
       setMessages(mapApiMessages(conv.items ?? []));
