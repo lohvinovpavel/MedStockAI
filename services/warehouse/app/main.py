@@ -26,6 +26,7 @@ from medstock_shared.models import (
     Supplier,
     SupplierCatalog,
 )
+from medstock_shared.warehouse import excursions
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 
@@ -247,95 +248,13 @@ def get_excursions(
 ) -> dict:
     """Storage violations, computed on read: telemetry × stock placement ×
     the drug's class requirements. A misplaced cold-chain drug in a healthy
-    room shows up here just like a failing fridge does."""
-    temp_breach = or_(
-        LocationCondition.temperature_c < Drug.storage_min_c,
-        LocationCondition.temperature_c > Drug.storage_max_c,
-    )
-    humidity_breach = LocationCondition.humidity_pct > Drug.humidity_max_pct
+    room shows up here just like a failing fridge does.
+
+    The query itself lives in `medstock_shared.warehouse` (P2,
+    docs/ai_workflow_impl_plan.md) so the copilot's `list_storage_excursions`
+    tool can call the same thing this route does."""
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        stmt = (
-            select(
-                Facility.id.label("facility_id"),
-                Facility.code.label("facility"),
-                StorageLocation.id.label("location_id"),
-                StorageLocation.code.label("location"),
-                StorageLocation.kind,
-                StockSnapshot.ndc,
-                Drug.name,
-                Drug.storage_class,
-                Drug.storage_min_c,
-                Drug.storage_max_c,
-                Drug.humidity_max_pct,
-                StockSnapshot.quantity,
-                func.min(LocationCondition.ts).label("first_ts"),
-                func.max(LocationCondition.ts).label("last_ts"),
-                func.count().label("hours"),
-                func.min(LocationCondition.temperature_c).label("min_temp"),
-                func.max(LocationCondition.temperature_c).label("max_temp"),
-                func.max(LocationCondition.humidity_pct).label("max_humidity"),
-            )
-            .join(StorageLocation, StorageLocation.facility_id == Facility.id)
-            .join(
-                StockSnapshot,
-                (StockSnapshot.facility_id == Facility.id)
-                & (StockSnapshot.location_id == StorageLocation.code),
-            )
-            .join(Drug, Drug.ndc == StockSnapshot.ndc)
-            .join(LocationCondition, LocationCondition.location_id == StorageLocation.id)
-            .where(Drug.storage_class.is_not(None))
-            .where(or_(temp_breach, humidity_breach))
-            .group_by(
-                Facility.id,
-                Facility.code,
-                StorageLocation.id,
-                StorageLocation.code,
-                StorageLocation.kind,
-                StockSnapshot.ndc,
-                Drug.name,
-                Drug.storage_class,
-                Drug.storage_min_c,
-                Drug.storage_max_c,
-                Drug.humidity_max_pct,
-                StockSnapshot.quantity,
-            )
-            .order_by(func.count().desc(), StorageLocation.code, StockSnapshot.ndc)
-        )
-        if facility_id is not None:
-            stmt = stmt.where(Facility.id == facility_id)
-        items = []
-        for row in session.execute(stmt):
-            kinds = []
-            if float(row.min_temp) < float(row.storage_min_c) or float(row.max_temp) > float(
-                row.storage_max_c
-            ):
-                kinds.append("temperature")
-            if float(row.max_humidity) > float(row.humidity_max_pct):
-                kinds.append("humidity")
-            items.append(
-                {
-                    "facility_id": row.facility_id,
-                    "facility": row.facility,
-                    "location_id": row.location_id,
-                    "location": row.location,
-                    "location_kind": row.kind,
-                    "ndc": row.ndc,
-                    "drug": row.name,
-                    "storage_class": row.storage_class,
-                    "required_min_c": float(row.storage_min_c),
-                    "required_max_c": float(row.storage_max_c),
-                    "required_max_humidity_pct": float(row.humidity_max_pct),
-                    "quantity": row.quantity,
-                    "first_ts": row.first_ts.isoformat(),
-                    "last_ts": row.last_ts.isoformat(),
-                    "hours": row.hours,
-                    "observed_min_c": float(row.min_temp),
-                    "observed_max_c": float(row.max_temp),
-                    "observed_max_humidity_pct": float(row.max_humidity),
-                    "violations": kinds,
-                }
-            )
-        return {"items": items}
+        return {"items": excursions(session, facility_id)}
 
 
 def _require_facility(session, facility_id: int) -> Facility:

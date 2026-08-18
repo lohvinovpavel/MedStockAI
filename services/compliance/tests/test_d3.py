@@ -13,9 +13,9 @@ from medstock_shared.models import AuditLogEntry, Facility, Hospital, ReviewDeci
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-HOSPITAL_A = uuid.UUID("00000000-0000-0000-0000-00000000d3a1")
-HOSPITAL_B = uuid.UUID("00000000-0000-0000-0000-00000000d3b2")
-ACTOR = uuid.UUID("00000000-0000-0000-0000-00000000d3c3")
+HOSPITAL_A = uuid.uuid4()
+HOSPITAL_B = uuid.uuid4()
+ACTOR = uuid.uuid4()
 
 
 @pytest.fixture(autouse=True)

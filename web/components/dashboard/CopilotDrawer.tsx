@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Loader2, Plane, Plus, Repeat2, ShieldCheck, Send, Truck, X, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Loader2, Plane, Plus, Repeat2, ShieldCheck, Send, Siren, Truck, X, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,8 +16,9 @@ import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { useCopilot, type CopilotFocus, type EmergencyPlanRequest } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
+import { useSession } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { apiFetch, streamCopilotMessage } from "@/lib/api";
+import { apiFetch, streamCopilotMessage, type PatientCandidate } from "@/lib/api";
 import {
   CERT_LABELS,
   CERT_TONE,
@@ -73,6 +74,10 @@ type Message = {
   // read as if the assistant found nothing to say.
   degraded?: boolean;
   tools?: ToolActivity[];
+  // A name the user typed matched more than one patient — rendered as a
+  // picker (name, DOB, ID) instead of/alongside the message text. Cleared
+  // once a candidate is picked so the card doesn't linger as a dead control.
+  patientPicker?: { query: string; candidates: PatientCandidate[] };
 };
 
 let nextId = 1;
@@ -85,14 +90,122 @@ type SavedConversation = { id: string; savedAt: number; title?: string | null; m
 const GREETING: Message = {
   id: "m-greeting",
   role: "assistant",
-  text: "Hi, I'm the AI MedStock Assistant. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages.",
+  text: "Hi, I'm the AI MedStock Assistant. Select a SKU, patient, or alert on the page, or ask me anything about safety, stock, and shortages.",
 };
 
-const QUICK_ACTIONS = [
-  { key: "po", label: "Generate PO", icon: FileText },
-  { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
-  { key: "certificate", label: "Check Certificate", icon: ShieldCheck },
-] as const;
+export type QuickAction = {
+  key: string;
+  label: string;
+  icon: typeof FileText;
+  prompt?: string;
+};
+
+// PH-1 (docs/ai_workflows.md): one question chains the three real copilot
+// tools (check_stock_by_ndc, search_analogues_rxnorm, verify_batch_cert) in
+// one turn instead of four screens.
+const SHORTAGE_BRIEF_PROMPT =
+  "For the drug currently in context: report on-hand stock by location, then find " +
+  "substitutes ranked by what we hold, then check the compliance status of the top " +
+  "candidate. Say plainly if any step returns nothing.";
+
+export const ROLE_ACTIONS: Record<string, QuickAction[]> = {
+  physician: [
+    {
+      key: "doc_safety",
+      label: "Safety & Stock Check",
+      icon: ShieldCheck,
+      prompt:
+        "For the current patient and drug in context: run the deterministic safety rules (allergies, duplicate ingredients, renal/hepatic, PGx) and check our on-hand physical stock. If blocked or short, suggest alternatives.",
+    },
+    {
+      key: "doc_regimen",
+      label: "Patient Regimen",
+      icon: FileText,
+      prompt:
+        "Summarise the clinical profile (allergies, conditions, and PGx phenotypes) of the patient currently in context.",
+    },
+    {
+      key: "doc_explain",
+      label: "Explain Verdict",
+      icon: Sparkles,
+      prompt:
+        "Explain the deterministic score contributions and findings of the most recent safety assessment for this patient.",
+    },
+    {
+      key: "analogue",
+      label: "Find Alternatives",
+      icon: Repeat2,
+      prompt:
+        "Find safe therapeutic alternatives in stock for the drug currently in context.",
+    },
+  ],
+  pharmacist: [
+    { key: "shortage", label: "Shortage Brief", icon: Siren, prompt: SHORTAGE_BRIEF_PROMPT },
+    {
+      key: "sweep",
+      label: "Shelf Cert Sweep",
+      icon: ShieldCheck,
+      prompt:
+        "Review the compliance status of every stocked NDC in our hospital and report any red or yellow items needing attention.",
+    },
+    {
+      key: "excursions",
+      label: "Cold-Chain Excursions",
+      icon: AlertTriangle,
+      prompt:
+        "Report any storage condition violations or temperature excursions recorded in telemetry.",
+    },
+    { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
+  ],
+  admin: [
+    {
+      key: "sweep",
+      label: "Shelf Cert Sweep",
+      icon: ShieldCheck,
+      prompt:
+        "Review compliance status of stocked NDCs to ensure no recalled or non-compliant drugs are reordered.",
+    },
+    {
+      key: "excursions",
+      label: "Storage Report",
+      icon: AlertTriangle,
+      prompt:
+        "Report storage condition excursions across facilities before new shipments arrive.",
+    },
+    { key: "po", label: "Generate PO", icon: FileText },
+    { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
+  ],
+  director: [
+    {
+      key: "risk_digest",
+      label: "Facility Risk Digest",
+      icon: AlertTriangle,
+      prompt:
+        "Provide a cross-facility risk digest: at-risk SKUs depleting soon, storage excursions, and non-compliant certificates.",
+    },
+    {
+      key: "forecast_staleness",
+      label: "Forecast Staleness",
+      icon: Sparkles,
+      prompt:
+        "Check whether this hospital's forecast is stale and report the timestamp of the last forecast run.",
+    },
+    {
+      key: "review_queue",
+      label: "Review Queue",
+      icon: FileText,
+      prompt:
+        "Summarise the label risk-profile review queue: how many are awaiting approval, accept rate, and urgent pending items.",
+    },
+    {
+      key: "audit",
+      label: "AI Decisions",
+      icon: History,
+      prompt:
+        "Summarise this hospital's AI-assisted decisions over the last 30 days.",
+    },
+  ],
+};
 
 /**
  * One NDC's traffic light, from the same `GET /status` the shelf uses.
@@ -455,9 +568,12 @@ function ResponseCardView({
 
 export function CopilotDrawer() {
   const router = useRouter();
+  const { user } = useSession();
   const { open, setOpen, focus, emergencyRequest } = useCopilot();
   const { facility } = useFacility();
   const { reload: reloadOrders } = useOrders();
+  const role = user?.role ?? "pharmacist";
+  const quickActions = ROLE_ACTIONS[role] ?? ROLE_ACTIONS.pharmacist;
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [draft, setDraft] = useState("");
@@ -548,15 +664,18 @@ export function CopilotDrawer() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  function runAction(action: string) {
-    if (focus) {
-      setMessages((m) => [...m, { id: id(), role: "user", text: `${QUICK_ACTIONS.find((a) => a.key === action)?.label} — ${focus.label}` }]);
-    } else {
-      setMessages((m) => [...m, { id: id(), role: "user", text: QUICK_ACTIONS.find((a) => a.key === action)?.label ?? action }]);
-    }
+  function runAction(actionKey: string) {
+    if (pending) return; // one stream at a time, same rule send() follows
+    const action = quickActions.find((a) => a.key === actionKey);
+    const label = action?.label ?? actionKey;
+    setMessages((m) => [...m, { id: id(), role: "user", text: focus ? `${label} — ${focus.label}` : label }]);
     setPending(true);
+    if (action?.prompt) {
+      void streamReply(action.prompt);
+      return;
+    }
     window.setTimeout(async () => {
-      const reply = await replyFor(action, focus, facility.id);
+      const reply = await replyFor(actionKey, focus, facility.id);
       setMessages((m) => [...m, reply]);
       setPending(false);
     }, 300);
@@ -643,9 +762,14 @@ export function CopilotDrawer() {
           ? { type: "sku", ndc: focus.ndc ?? focus.itemId, facility_id: facility.id }
           : focus?.kind === "alert" && focus.ndc
             ? { type: "alert", ndc: focus.ndc, facility_id: facility.id }
-            : null;
+            : focus?.kind === "patient"
+              ? { type: "patient", patient_id: focus.patientId, rxcui: focus.rxcui, drug_name: focus.drugName, facility_id: facility.id }
+              : null;
+      const ndcTag = focus?.kind === "sku" ? (focus.ndc ? ` (NDC ${focus.ndc})` : "") : "";
+      const patientTag = focus?.kind === "patient" ? ` [Patient ID: ${focus.patientId}]` : "";
+      const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag}${patientTag} — ${focus.detail}]\n\n` : "";
       for await (const evt of streamCopilotMessage(
-        { conversation_id: cid, text: userText, focus: focusPayload },
+        { conversation_id: cid, text: contextPrefix + userText, focus: focusPayload },
         controller.signal,
       )) {
         if (evt.event === "delta") {
@@ -666,6 +790,15 @@ export function CopilotDrawer() {
           }));
         } else if (evt.event === "degraded") {
           applyToReply((msg) => ({ ...msg, text: evt.data.reason, degraded: true }));
+        } else if (evt.event === "patient_disambiguation") {
+          const { query, candidates } = evt.data;
+          applyToReply((msg) => ({
+            ...msg,
+            text:
+              msg.text ||
+              `I found ${candidates.length} patients matching "${query}" — which one did you mean?`,
+            patientPicker: { query, candidates },
+          }));
         }
       }
       void refreshHistory();
@@ -682,6 +815,22 @@ export function CopilotDrawer() {
         setPending(false);
       }
     }
+  }
+
+  // The candidate list came straight from the backend's disambiguation event,
+  // never through Gemini -- picking one must keep it that way. The resend
+  // carries only the UUID, exactly what a physician would have pasted
+  // directly before this feature existed, so the model can retry the same
+  // tool call already in its history with a resolved id instead of a name.
+  function pickPatient(messageId: string, candidate: PatientCandidate) {
+    if (pending) return;
+    const priorMessages = messages.map((msg) =>
+      msg.id === messageId ? { ...msg, patientPicker: undefined } : msg,
+    );
+    const text = `Use patient_id ${candidate.id} for my previous request.`;
+    setMessages([...priorMessages, { id: id(), role: "user", text }]);
+    setPending(true);
+    void streamReply(text);
   }
 
   function send() {
@@ -745,7 +894,7 @@ export function CopilotDrawer() {
       )}
 
       <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
-        {QUICK_ACTIONS.map(({ key, label, icon: Icon }) => (
+        {quickActions.map(({ key, label, icon: Icon }) => (
           <Button key={key} variant="outline" size="sm" className="h-7 text-xs" onClick={() => runAction(key)}>
             <Icon data-icon="inline-start" />
             {label}
@@ -799,6 +948,24 @@ export function CopilotDrawer() {
                     <Copy className="size-3" />
                     Copy
                   </Button>
+                </div>
+              )}
+              {m.patientPicker && (
+                <div className="flex w-[92%] flex-col gap-1">
+                  {m.patientPicker.candidates.map((c) => (
+                    <Button
+                      key={c.id}
+                      variant="outline"
+                      size="sm"
+                      className="h-auto justify-between gap-2 px-2.5 py-1.5 text-left text-xs"
+                      onClick={() => pickPatient(m.id, c)}
+                    >
+                      <span className="font-medium">{c.full_name}</span>
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        DOB {c.date_of_birth} · {c.id.slice(0, 8)}
+                      </span>
+                    </Button>
+                  ))}
                 </div>
               )}
             </div>

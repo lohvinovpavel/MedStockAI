@@ -18,9 +18,12 @@ from ._source import fetch_json
 FEED_URL = "https://api.fda.gov/drug/shortages.json"  # TODO: verify against the real feed
 
 
-def _row_to_values(row: dict) -> dict:
+def _row_to_values(row: dict) -> dict | None:
+    source_id = str(row.get("shortage_id") or row.get("id") or row.get("ndc") or "")
+    if not source_id:
+        return None
     return {
-        "source_id": str(row.get("shortage_id") or row.get("id") or row["ndc"]),
+        "source_id": source_id,
         "ndc": row.get("ndc"),
         "status": row.get("status"),
         "raw": row,
@@ -29,7 +32,7 @@ def _row_to_values(row: dict) -> dict:
 
 def run() -> int:
     data = fetch_json(FEED_URL, params={"limit": 1000})
-    rows = [_row_to_values(r) for r in data.get("results", [])]
+    rows = [v for r in data.get("results", []) if (v := _row_to_values(r)) is not None]
     if not rows:
         return 0
     with Session(engine) as s:

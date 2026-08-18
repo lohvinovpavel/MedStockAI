@@ -36,6 +36,7 @@ from medstock_shared.ai import client, shared_breaker, write_audit
 from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
+from medstock_shared.patient_assess import PatientAmbiguous
 from pydantic import BaseModel
 
 copilot = APIRouter()
@@ -46,12 +47,31 @@ _log = logging.getLogger("analogue.copilot")
 # the connection open forever.
 _MAX_TOOL_ROUNDS = 6
 
-_SYSTEM_INSTRUCTION = (
-    "You are the MedStock AI assistant for a hospital pharmacist. Answer only "
-    "from your tools' results and what the user tells you -- never invent an "
-    "RxCUI, NDC, stock number, or certification status. If a tool returns no "
-    "usable result, say so plainly rather than guessing."
-)
+# All four roles share this one endpoint (PERMS in medstock_shared.auth), and
+# a physician asking "can I prescribe X" is not a pharmacist -- a prompt that
+# hardcoded "for a hospital pharmacist" regardless of caller measurably made
+# the model decline questions the role's own tools (assess_patient_for_drug,
+# get_patient_regimen) exist to answer, treating an informational safety
+# check as if it were an authorization the model itself isn't allowed to give.
+_ROLE_TITLES = {
+    "pharmacist": "a hospital pharmacist",
+    "physician": "a hospital physician",
+    "director": "a clinical director",
+    "admin": "a procurement officer",
+}
+
+
+def _system_instruction_base(role: str) -> str:
+    title = _ROLE_TITLES.get(role, "a hospital staff member")
+    return (
+        f"You are the MedStock AI assistant for {title}. Answer only from your "
+        "tools' results and what the user tells you -- never invent an RxCUI, "
+        "NDC, stock number, or certification status. If a tool returns no "
+        "usable result, say so plainly rather than guessing. Calling a "
+        "read-only or assessment tool is not the same as authorizing, "
+        "prescribing, or committing anything -- use the tools you are given "
+        "whenever they answer the question."
+    )
 
 
 class ChatMessage(BaseModel):
@@ -80,12 +100,13 @@ def _system_instruction_for(principal: Principal) -> str:
     hallucinates an answer or goes vague. Naming it (not offering it) lets the
     model give the user an honest "you don't have permission for that" instead.
     """
+    base = _system_instruction_base(principal.role)
     denied = denied_tools_for(principal)
     if not denied:
-        return _SYSTEM_INSTRUCTION
+        return base
     listing = "\n".join(f"- {d['name']}: {d['description']}" for d in denied)
     return (
-        f"{_SYSTEM_INSTRUCTION}\n\n"
+        f"{base}\n\n"
         "The following capabilities exist in this system but this user's role "
         f"does not have permission to use them:\n{listing}\n\n"
         "If the user's request needs one of these, tell them plainly they don't "
@@ -222,6 +243,21 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
                 result = {"error": str(exc)}
                 tools_called.append({"name": name, "ok": False, "error": str(exc)})
                 yield _sse("tool_end", {"name": name, "ok": False, "error": str(exc)})
+            except PatientAmbiguous as exc:
+                # A name matched more than one patient. The candidate list is
+                # PHI (name + DOB) -- it goes straight to the frontend's own
+                # picker, never into a function_response Gemini would read, and
+                # the turn ends here rather than continuing the round loop.
+                yield _sse("tool_end", {"name": name, "ok": False, "error": "ambiguous patient name"})
+                yield _sse("patient_disambiguation", {
+                    "tool": name,
+                    "query": str(args.get("patient_id") or ""),
+                    "candidates": exc.candidates,
+                })
+                tools_called.append({"name": name, "ok": False, "error": "ambiguous patient name"})
+                _write_copilot_audit(principal, request_id, "disambiguation", started, tools_called)
+                yield _sse("done", {"request_id": request_id})
+                return
             response_parts.append(types.Part.from_function_response(name=name, response=result))
         contents.append(types.Content(role="user", parts=response_parts))
 

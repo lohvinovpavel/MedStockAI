@@ -14,9 +14,9 @@ from sqlalchemy import delete, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
-HOSPITAL_A = uuid.UUID("00000000-0000-0000-0000-00000000a0d1")
-HOSPITAL_B = uuid.UUID("00000000-0000-0000-0000-00000000b0d2")
-ACTOR = uuid.UUID("00000000-0000-0000-0000-00000000ac01")
+HOSPITAL_A = uuid.uuid4()
+HOSPITAL_B = uuid.uuid4()
+ACTOR = uuid.uuid4()
 
 
 @pytest.fixture(autouse=True)

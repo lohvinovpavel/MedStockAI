@@ -18,6 +18,7 @@ const OPEN_STORAGE_KEY = "medstock-copilot-open";
 export type CopilotFocus =
   | { kind: "sku"; label: string; detail: string; itemId: string; ndc?: string; rxcui?: string | null }
   | { kind: "alert"; label: string; detail: string; ndc?: string }
+  | { kind: "patient"; label: string; detail: string; patientId: string; rxcui?: string; drugName?: string }
   | null;
 
 // A one-shot "do this now" ask fired by a page (e.g. the forecast scenario

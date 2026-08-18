@@ -14,8 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-from app.supply import summarize
-from medstock_shared.forecasting import MIN_HISTORY_DAYS, forecast_series
+from medstock_shared.forecasting import MIN_HISTORY_DAYS, forecast_series, summarize
 
 DEMO_DIR = Path(__file__).resolve().parents[3] / "data" / "demo"
 

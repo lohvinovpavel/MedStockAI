@@ -25,10 +25,10 @@ from medstock_shared.models import (
     StockSnapshot,
     StorageLocation,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
-HOSPITAL_ID = uuid.UUID("00000000-0000-0000-0000-00000000c0de")
+HOSPITAL_ID = uuid.uuid4()
 NDC_FRIDGE = "99999-test-01"
 NDC_ROOM = "99999-test-02"
 
@@ -55,15 +55,19 @@ def seeded():
             facility_id=central.id, code="t-fridge", name="Test Fridge", kind="fridge"
         )
         s.add_all([room, fridge])
-        s.flush()
-        s.merge(Drug(
-            ndc=NDC_FRIDGE, name="Testinsulin 100 UNT/ML", storage_class="refrigerated",
-            storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0, raw={"source": "test"},
-        ))
-        s.merge(Drug(
-            ndc=NDC_ROOM, name="Testformin 500 MG Oral Tablet", storage_class="crt",
-            storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0, raw={"source": "test"},
-        ))
+        from sqlalchemy import select
+        for d in [
+            Drug(
+                ndc=NDC_FRIDGE, name="Testinsulin 100 UNT/ML", storage_class="refrigerated",
+                storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0, raw={"source": "test"},
+            ),
+            Drug(
+                ndc=NDC_ROOM, name="Testformin 500 MG Oral Tablet", storage_class="crt",
+                storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0, raw={"source": "test"},
+            ),
+        ]:
+            if not s.execute(select(Drug).where(Drug.ndc == d.ndc)).scalar_one_or_none():
+                s.add(d)
         s.add_all([
             StockSnapshot(
                 hospital_id=HOSPITAL_ID, ndc=NDC_FRIDGE, facility_id=central.id,

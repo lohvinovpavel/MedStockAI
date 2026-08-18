@@ -47,6 +47,6 @@ def test_the_on_demand_path_stamps_it_explicitly():
     services/ingest/tests/test_certification_mapping.py."""
     import inspect
 
-    from app import explore as on_demand
+    from medstock_shared import explore as on_demand
 
     assert '"computed_at": now' in inspect.getsource(on_demand.explore)

@@ -26,6 +26,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.orm import Session
+
 from medstock_shared.certification import (
     RULESET_VERSION,
     AlertListing,
@@ -46,10 +51,6 @@ from medstock_shared.models import (
     WarningLetter,
 )
 from medstock_shared.ndc_status import fetch_ndc_status
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.orm import Session
 
 NDC_URL = "https://api.fda.gov/drug/ndc.json"
 _TIMEOUT = 15.0

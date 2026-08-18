@@ -11,7 +11,8 @@ with today's weights.
 from __future__ import annotations
 
 import pytest
-from app.main import _band_for, app
+from app.main import app
+from medstock_shared.patient_assess import _band_for
 from fastapi.testclient import TestClient
 from medstock_shared.auth import PERMS, Principal, current_principal
 from medstock_shared.patient import BANDS, RULESET_VERSION
@@ -110,7 +111,9 @@ def _log_row(ruleset_version: str = RULESET_VERSION):
 
 
 def _explained(monkeypatch, row):
-    monkeypatch.setattr("app.main.session_scope", _fake_scope(row))
+    # The lookup now lives in medstock_shared.patient_assess -- app.main's
+    # /explain route just delegates to it (DOC-3 promotion).
+    monkeypatch.setattr("medstock_shared.patient_assess.session_scope", _fake_scope(row))
     return as_role(PHARMACIST).get("/explain/req-1")
 
 
