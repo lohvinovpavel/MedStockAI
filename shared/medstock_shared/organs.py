@@ -28,12 +28,18 @@ from dataclasses import dataclass
 # not something a physician reads at a glance.
 ORGANS = (
     "brain",
+    "thyroid",
     "heart",
     "lungs",
+    "oesophagus",
     "liver",
-    "kidneys",
+    "gallbladder",
+    "spleen",
     "stomach",
+    "pancreas",
+    "kidneys",
     "intestines",
+    "bladder",
     "blood",
     "skin",
 )
@@ -78,7 +84,7 @@ FINDING_ORGANS: dict[str, tuple[str, ...]] = {
 
 # Drug class -> the organ a duplicate of that class stacks on.
 DUPLICATE_CLASS_ORGANS: dict[str, tuple[str, ...]] = {
-    "nsaid": ("stomach", "kidneys"),
+    "nsaid": ("stomach", "kidneys", "oesophagus"),
     "anticoagulant": ("blood",),
     "benzodiazepine": ("brain",),
     "opioid": ("brain", "lungs"),
@@ -86,7 +92,10 @@ DUPLICATE_CLASS_ORGANS: dict[str, tuple[str, ...]] = {
     "statin": ("liver",),
     "ace_inhibitor": ("kidneys",),
     "beta_blocker": ("heart",),
-    "diuretic": ("kidneys",),
+    "diuretic": ("kidneys", "bladder"),
+    "bisphosphonate": ("oesophagus",),
+    "anticholinergic": ("bladder", "brain"),
+    "thyroid_hormone": ("thyroid", "heart"),
     "metformin": ("kidneys",),
 }
 
@@ -95,6 +104,23 @@ DUPLICATE_CLASS_ORGANS: dict[str, tuple[str, ...]] = {
 # a dozen ways. Ordered most specific first: "hepatic failure" must reach the
 # liver before "failure" reaches the heart.
 REACTION_ORGANS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pancreatit", ("pancreas",)),
+    ("pancrea", ("pancreas",)),
+    ("cholestas", ("liver", "gallbladder")),
+    ("cholecystit", ("gallbladder",)),
+    ("cholelith", ("gallbladder",)),
+    ("biliary", ("gallbladder", "liver")),
+    ("thyroid", ("thyroid",)),
+    ("hypothyroid", ("thyroid",)),
+    ("hyperthyroid", ("thyroid",)),
+    ("oesophag", ("oesophagus",)),
+    ("esophag", ("oesophagus",)),
+    ("dysphagia", ("oesophagus",)),
+    ("cystit", ("bladder",)),
+    ("urinary retention", ("bladder",)),
+    ("dysuria", ("bladder",)),
+    ("haematuria", ("bladder", "kidneys")),
+    ("splenomegal", ("spleen",)),
     ("hepat", ("liver",)),
     ("liver", ("liver",)),
     ("cirrho", ("liver",)),

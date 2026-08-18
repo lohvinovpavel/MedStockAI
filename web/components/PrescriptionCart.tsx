@@ -28,7 +28,7 @@ import { StockBand } from "@/components/StockBand";
 import { apiFetch } from "@/lib/api";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
-import { BodyImpact, type OrganImpact } from "@/components/BodyImpact";
+import { AnatomyImpact, type OrganImpact } from "@/components/AnatomyImpact";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -221,6 +221,9 @@ export function PrescriptionCart() {
   const [analogueUsedAi, setAnalogueUsedAi] = useState(false);
   const [analogueRationaleUnavailable, setAnalogueRationaleUnavailable] =
     useState(false);
+  // The figure the analogue view draws. Null until an assessment returns it,
+  // and the component says so rather than assuming a sex.
+  const [patientSex, setPatientSex] = useState<string | null>(null);
   const [analogueVerdicts, setAnalogueVerdicts] = useState<Map<string, AnalogueVerdict>>(
     new Map(),
   );
@@ -516,6 +519,7 @@ export function PrescriptionCart() {
         }),
       });
       for (const row of checked?.results ?? []) verdicts.set(row.rxcui, row);
+      if (checked?.sex) setPatientSex(String(checked.sex));
     } catch {
       setAnalogueCheckFailed(true);
     }
@@ -945,12 +949,18 @@ export function PrescriptionCart() {
                                     findings — an empty body would read as "checked
                                     and clear", which is not the same as "no
                                     organ-specific finding". */}
+                                {/* Where this substitute bears on the patient.
+                                    Only rendered when the assessment produced
+                                    organ findings — an empty figure would read
+                                    as "checked and clear", which is not the
+                                    same as "no organ-specific finding". */}
                                 {checked?.organs && checked.organs.length > 0 && (
-                                  <div className="mt-2">
-                                    <BodyImpact
+                                  <div className="mt-3 border-t pt-3">
+                                    <AnatomyImpact
                                       organs={checked.organs}
                                       unmapped={checked.organs_unmapped ?? []}
-                                      compact
+                                      sex={patientSex}
+                                      height={260}
                                     />
                                   </div>
                                 )}

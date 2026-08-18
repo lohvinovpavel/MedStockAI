@@ -64,10 +64,15 @@ def test_an_interaction_shades_the_liver_not_the_target_organ():
     assert organs_for_finding("INTERACTION_MAJOR") == ("liver",)
 
 
-def test_a_duplicate_shades_the_organ_its_class_stacks_on():
+def test_a_duplicate_shades_the_organs_its_class_stacks_on():
+    """A doubled NSAID stacks on three, not two. The oesophagus was added when
+    the organ set widened: reflux and oesophageal ulceration are where a second
+    NSAID shows up before the stomach does, and leaving it out sent those
+    findings to the unmapped list."""
     assert set(organs_for_finding("DUPLICATE_CLASS", drug_class="nsaid")) == {
         "stomach",
         "kidneys",
+        "oesophagus",
     }
     assert organs_for_finding("DUPLICATE_CLASS", drug_class="anticoagulant") == ("blood",)
 

@@ -355,6 +355,11 @@ def post_assess(
         # Quote this back to dispute an answer; it is the key into assessment_log.
         "request_id": request_id,
         "patient_ref": patient.patient_ref,
+        # Which anatomical figure the analogue view draws. Already on the
+        # de-identified vector -- a band-like clinical fact, not an identifier --
+        # and showing a female patient on a male figure is a small dishonesty in
+        # a clinical view that costs nothing to avoid.
+        "sex": patient.sex,
         # So a caller can tell "no label risk applies to this patient" apart from
         # "nobody has approved a profile for this drug yet".
         "risk_profiles_applied": len(profiles),
