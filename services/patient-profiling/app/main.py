@@ -16,7 +16,7 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import DrugRiskProfile, Patient, PrognosisAssumption
+from medstock_shared.models import AssessmentLog, Patient, PrognosisAssumption
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
@@ -37,7 +37,13 @@ from medstock_shared.patient_assess import (
     pgx_for,
     record_assessment,
 )
-from medstock_shared.review_queue import MAX_QUEUE, PROFILE_STATUSES, accept_rate, apply_review, load_queue
+from medstock_shared.review_queue import (
+    MAX_QUEUE,
+    PROFILE_STATUSES,
+    accept_rate,
+    apply_review,
+    load_queue,
+)
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text

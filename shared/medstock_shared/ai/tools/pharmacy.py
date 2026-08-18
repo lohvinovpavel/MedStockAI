@@ -11,23 +11,24 @@ Phase 4 rules out for
 Add it here, for real, once that logic exists somewhere.
 """
 
+import uuid
+
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-import uuid
-
+from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...auth import Principal
 from ...certification import Finding, signal
 from ...db import engine, session_scope
-from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...explore import explore
 from ...forecasting import HORIZON_DAYS
 from ...forecasting import at_risk_skus as _at_risk_skus
 from ...forecasting import latest_run as _latest_run
 from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
-from ...patient_assess import NOT_FOUND, UNAVAILABLE, assess_for_drug as _assess_for_drug
+from ...patient_assess import NOT_FOUND, UNAVAILABLE
+from ...patient_assess import assess_for_drug as _assess_for_drug
 from ...patient_assess import explain_assessment as _explain_assessment
 from ...review_queue import PROFILE_STATUSES, accept_rate
 from ...review_queue import load_queue as _load_queue
