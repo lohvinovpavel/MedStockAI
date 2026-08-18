@@ -41,6 +41,8 @@ from medstock_shared.certification import (
     ndc11,
     parse_fda_date,
     product_ndc_candidates,
+    recalls_for,
+    shortages_for,
     status_for,
 )
 from medstock_shared.models import (
@@ -167,8 +169,8 @@ def news_for(session: Session, ndc: str) -> list[NewsItem]:
 def explore(session: Session, ndc: str) -> dict:
     """Resolve one NDC and persist the verdict. Returns the stored row shape.
 
-    Safe to call twice: the certification row upserts on `ndc` and its findings
-    are replaced, exactly as the scheduled feed does.
+    On-demand exploration consults live status, directory, import alerts, warning letters,
+    news, recalls and shortages without overwriting richer findings.
     """
     key = ndc11(str(ndc))
     product = _directory_record(key)
@@ -181,6 +183,8 @@ def explore(session: Session, ndc: str) -> dict:
         listing_expiration_date=parse_fda_date((product or {}).get("listing_expiration_date")),
         marketing_category=(product or {}).get("marketing_category"),
         finished=(product or {}).get("finished"),
+        recalls=recalls_for(session, key),
+        shortages=shortages_for(session, key),
         import_alerts=import_alerts_for(session, labeler),
         warning_letters=warning_letters_for(session, labeler),
         news=news_for(session, key),

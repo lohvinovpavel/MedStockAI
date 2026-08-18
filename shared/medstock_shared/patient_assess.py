@@ -267,7 +267,7 @@ def assess_for_drug(principal: Principal, patient_id: str, rxcui: str) -> dict:
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_uuid)
-        if row is None or row.hospital_id != principal.hospital_id:
+        if row is None or row.hospital_id != principal.hospital_uuid:
             return {"error": "patient not found"}
         vector = patient_row_to_vector(row)
 

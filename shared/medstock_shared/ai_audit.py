@@ -38,10 +38,32 @@ def query_ai_decisions(
     days: int = 30,
     task_type: str | None = None,
     outcome: str | None = None,
+    request_id: str | None = None,
 ) -> dict:
     """Aggregate, not dump -- a month of copilot turns is far more rows than
     a turn's context can hold. Counts by outcome, the tools called most
     often, an error rate, latency percentiles, and a handful of recent rows."""
+    if request_id:
+        with Session(engine) as session:
+            row = session.scalars(
+                select(AIAuditLog).where(
+                    AIAuditLog.hospital_id == hospital_id,
+                    AIAuditLog.request_id == request_id,
+                )
+            ).first()
+        if row is None:
+            return {"found": False, "request_id": request_id, "message": "No audit record found for this request_id"}
+        return {
+            "found": True,
+            "request_id": row.request_id,
+            "actor_id": row.actor_id,
+            "task_type": row.task_type,
+            "outcome": row.outcome,
+            "latency_ms": row.latency_ms,
+            "tools_called": row.tools_called,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
     since = datetime.now(UTC) - timedelta(days=max(1, days))
     with Session(engine) as session:
         stmt = select(AIAuditLog).where(

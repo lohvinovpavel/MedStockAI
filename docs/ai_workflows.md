@@ -16,50 +16,56 @@ for each workflow below.
 ## 1. What the copilot is, in code
 
 - **Surface:** `POST /copilot/chat` (SSE) in [`services/analogue/app/copilot.py`](../services/analogue/app/copilot.py),
-  gated on the `copilot:chat` permission. It is the only `async` route in the system.
+  gated on the `copilot:chat` permission. Mounted at `/copilot/chat`, `/api/copilot/chat`, and `/api/analogue/copilot/chat`.
 - **Tools:** a registry in [`shared/medstock_shared/ai/tools/registry.py`](../shared/medstock_shared/ai/tools/registry.py).
   Each tool is a plain sync `fn(args, principal) -> dict` bound to **exactly one** permission,
   declared to Gemini only if the caller's role holds that permission, and re-checked in
   `execute()` before it runs.
 - **Tools that exist today** (all in [`tools/pharmacy.py`](../shared/medstock_shared/ai/tools/pharmacy.py)):
-
-  | Tool | Permission | What it reads |
-  |---|---|---|
-  | `search_analogues_rxnorm` | `drug:search` | RxNorm graph + `stock_snapshot`, ranked by on-hand |
-  | `verify_batch_cert` | `certificate:read` | `drug_certification` + `certification_finding` |
-  | `check_stock_by_ndc` | `inventory:read` | `stock_snapshot`, grouped by location |
+  `find_drug_by_name`, `search_analogues_rxnorm`, `check_stock_by_ndc`, `get_stock`,
+  `sweep_shelf_certificates`, `verify_batch_cert`, `check_certificate`, `list_storage_excursions`,
+  `explore_ndc`, `get_patient_regimen`, `assess_patient_for_drug`, `explain_assessment`,
+  `get_forecast`, `list_at_risk_skus`, `check_forecast_staleness`, `query_ai_decisions`,
+  `list_review_queue`, `draft_order`.
 
 - **Hard rule already enforced in the system prompt:** the model answers only from tool results
-  and what the user typed. No tool in the registry writes anything — the copilot may *prepare* an
-  action, never commit one.
+  and what the user typed. `draft_order` creates a draft purchase order under `order:write` (requires review decision approval); other tools are read-only.
 
 ### 1.1 The permission map, as it really is
 
 Taken from `PERMS` in [`shared/medstock_shared/auth.py`](../shared/medstock_shared/auth.py).
 This is what decides which workflows a role can even be offered.
 
-| Permission | pharmacist | physician | director | admin | Endpoints behind it |
+| Permission | pharmacist | physician | director | admin | Endpoints / Tools behind it |
 |---|:--:|:--:|:--:|:--:|:--:|
-| `inventory:read` | ✅ | ✅ | ✅ | ✅ | 5 |
-| `drug:search` | ✅ | ✅ | ✅ | ✅ | 4 |
-| `facility:read` | ✅ | ✅ | ✅ | ✅ | 5 |
-| `certificate:read` | ✅ | ✅ | ✅ | ✅ | 2 |
-| `copilot:chat` | ✅ | ✅ | ✅ | ✅ | 1 |
-| `forecast:read` | ✅ | — | ✅ | **—** | 4 |
-| `forecast:run` | ✅ | — | ✅ | — | 1 |
-| `certification:explore` | ✅ | — | **—** | ✅ | 1 |
-| `patient:read` / `patient:write` | **—** | ✅ | — | ✅ | 3 / 2 |
-| `profile:assess` | ✅ | ✅ | — | — | 3 |
-| `profile:explain` | ✅ | ✅ | — | — | 2 |
-| `profile:review` | ✅ | — | ✅ | ✅ | 1 |
-| `profile:approve` | ✅ | — | — | — | 1 |
-| `queue:read` | ✅ | — | — | — | **0** |
-| `recommendation:approve` | ✅ | — | — | — | **0** |
-| `alert:read` | — | ✅ | — | — | **0** |
-| `dashboard:read` | — | — | ✅ | — | **0** |
-| `audit:read` | — | — | ✅ | ✅ | **0** |
-| `mapping:approve` | — | — | — | ✅ | **0** |
-| `formulary:write` | — | — | — | ✅ | **0** |
+| `inventory:read` | ✅ | ✅ | ✅ | ✅ | Stock & inventory tools / endpoints |
+| `drug:search` | ✅ | ✅ | ✅ | ✅ | `find_drug_by_name`, `search_analogues_rxnorm` |
+| `facility:read` | ✅ | ✅ | ✅ | ✅ | `list_storage_excursions`, warehouse routes |
+| `certificate:read` | ✅ | ✅ | ✅ | ✅ | `verify_batch_cert`, `check_certificate` |
+| `copilot:chat` | ✅ | ✅ | ✅ | ✅ | `POST /copilot/chat` |
+| `copilot:use` | ✅ | ✅ | ✅ | ✅ | General copilot usage grant |
+| `forecast:read` | ✅ | — | ✅ | — | `get_forecast`, `list_at_risk_skus`, `check_forecast_staleness` |
+| `forecast:run` | ✅ | — | ✅ | — | `POST /forecast/runs` |
+| `certification:explore` | ✅ | — | — | ✅ | `explore_ndc`, `POST /certificates/{ndc}/explore` |
+| `patient:read` | — | ✅ | — | — | `get_patient_regimen`, patient endpoints |
+| `patient:write` | — | ✅ | — | — | `PATCH /patients/{id}`, `POST /patients` |
+| `profile:assess` | ✅ | ✅ | — | — | `assess_patient_for_drug`, cart check |
+| `profile:explain` | ✅ | ✅ | — | — | `explain_assessment`, explain routes |
+| `profile:review` | ✅ | — | ✅ | ✅ | `list_review_queue`, risk profile list |
+| `profile:approve` | ✅ | — | — | — | Risk profile approval |
+| `queue:read` | ✅ | — | — | — | Queue routes |
+| `recommendation:approve` | ✅ | — | — | ✅ | Recommendation approvals |
+| `alert:read` | — | ✅ | — | — | Alerts |
+| `dashboard:read` | — | — | ✅ | — | Dashboard routes |
+| `audit:read` | ✅ | — | ✅ | ✅ | `query_ai_decisions`, `/audit` routes |
+| `audit:export` | — | — | ✅ | — | Audit export CSV |
+| `order:read` | ✅ | — | ✅ | ✅ | Purchase orders list |
+| `order:write` | ✅ | — | — | ✅ | `draft_order`, purchase order actions |
+| `batch:write` | ✅ | — | — | ✅ | Batch receipt |
+| `transfer:write` | ✅ | — | ✅ | — | Inter-facility transfer |
+| `par:write` | — | — | — | ✅ | PAR level settings |
+| `mapping:approve` | — | — | — | ✅ | Drug mapping approval |
+| `formulary:write` | — | — | — | ✅ | Formulary import |
 
 Three consequences worth naming before designing anything:
 

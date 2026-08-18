@@ -42,7 +42,7 @@ def _actor(principal: Principal) -> uuid.UUID:
 
 
 def _hospital(principal: Principal) -> uuid.UUID:
-    return uuid.UUID(principal.hospital_id)
+    return principal.hospital_uuid
 
 
 def _owned(session, conversation_id: uuid.UUID, actor: uuid.UUID) -> CopilotConversation:
