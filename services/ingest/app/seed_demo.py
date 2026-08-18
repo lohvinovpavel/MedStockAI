@@ -24,21 +24,23 @@ from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
     Drug,
-    Facility,
     ForecastPoint,
     FormularyItem,
-    Hospital,
     LocationCondition,
     ShortageEvent,
     StockDaily,
     StockSnapshot,
-    StorageLocation,
 )
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .demo_layout import END_DATE, FACILITIES, HOSPITAL_ID, HOSPITAL_NAME, LOCATIONS, data_dir
+from .demo_layout import (
+    END_DATE,
+    data_dir,
+    resolve_or_create_hospital,
+    upsert_registry,
+)
 
 BATCH = 5000
 
@@ -52,62 +54,7 @@ def _read_gz(path: Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
-def _seed_hospital(s: Session) -> None:
-    s.execute(
-        insert(Hospital)
-        .values(id=HOSPITAL_ID, name=HOSPITAL_NAME)
-        .on_conflict_do_update(index_elements=["id"], set_={"name": HOSPITAL_NAME})
-    )
-
-
-def _seed_registry(s: Session) -> tuple[dict[str, int], dict[tuple[str, str], int]]:
-    """Facilities and storage locations; returns (facility ids, location ids)."""
-    for fac in FACILITIES:
-        values = {
-            "hospital_id": HOSPITAL_ID,
-            "code": fac["code"],
-            "name": fac["name"],
-            "type": fac["type"],
-            "lat": fac["lat"],
-            "lon": fac["lon"],
-            "operated": fac["operated"],
-        }
-        s.execute(
-            insert(Facility)
-            .values(**values)
-            .on_conflict_do_update(index_elements=["hospital_id", "code"], set_=values)
-        )
-    fac_ids = {
-        code: fid
-        for fid, code in s.execute(
-            select(Facility.id, Facility.code).where(Facility.hospital_id == HOSPITAL_ID)
-        )
-    }
-    for fac_code, locations in LOCATIONS.items():
-        for code, name, kind in locations:
-            values = {
-                "facility_id": fac_ids[fac_code],
-                "code": code,
-                "name": name,
-                "kind": kind,
-            }
-            s.execute(
-                insert(StorageLocation)
-                .values(**values)
-                .on_conflict_do_update(index_elements=["facility_id", "code"], set_=values)
-            )
-    loc_ids = {}
-    for fac_code, fid in fac_ids.items():
-        for lid, code in s.execute(
-            select(StorageLocation.id, StorageLocation.code).where(
-                StorageLocation.facility_id == fid
-            )
-        ):
-            loc_ids[(fac_code, code)] = lid
-    return fac_ids, loc_ids
-
-
-def _seed_drugs(s: Session, drugs: list[dict]) -> None:
+def _seed_drugs(s: Session, drugs: list[dict], hospital_id: uuid.UUID) -> None:
     """Drug is a global reference table; these are real NDCs with real RxCUIs,
     so upserting them is legitimate ingest — plus the demo storage classes."""
     for row in drugs:
@@ -125,7 +72,7 @@ def _seed_drugs(s: Session, drugs: list[dict]) -> None:
             .values(**values)
             .on_conflict_do_update(index_elements=["ndc"], set_=values)
         )
-        formulary = {"hospital_id": HOSPITAL_ID, "rxcui": row["rxcui"]}
+        formulary = {"hospital_id": hospital_id, "rxcui": row["rxcui"]}
         s.execute(
             insert(FormularyItem)
             .values(**formulary)
@@ -133,10 +80,12 @@ def _seed_drugs(s: Session, drugs: list[dict]) -> None:
         )
 
 
-def _seed_stock(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+def _seed_stock(
+    s: Session, rows: list[dict], fac_ids: dict[str, int], hospital_id: uuid.UUID
+) -> None:
     for row in rows:
         values = {
-            "hospital_id": HOSPITAL_ID,
+            "hospital_id": hospital_id,
             "ndc": row["ndc"],
             "facility_id": fac_ids[row["facility"]],
             "location_id": row["location"],
@@ -152,12 +101,14 @@ def _seed_stock(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
         )
 
 
-def _seed_consumption(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+def _seed_consumption(
+    s: Session, rows: list[dict], fac_ids: dict[str, int], hospital_id: uuid.UUID
+) -> None:
     """Bulk series: delete the demo tenant's slice, reload in batches."""
-    s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == HOSPITAL_ID))
+    s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == hospital_id))
     payload = [
         {
-            "hospital_id": HOSPITAL_ID,
+            "hospital_id": hospital_id,
             "facility_id": fac_ids[row["facility"]],
             "ndc": row["ndc"],
             "rxcui": row["rxcui"],
@@ -171,14 +122,16 @@ def _seed_consumption(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> 
         s.execute(insert(ConsumptionDaily), payload[i : i + BATCH])
 
 
-def _seed_stock_history(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+def _seed_stock_history(
+    s: Session, rows: list[dict], fac_ids: dict[str, int], hospital_id: uuid.UUID
+) -> None:
     """Bulk series: delete the demo tenant's slice, reload in batches — same
     treatment as consumption. Ends exactly at stock_snapshot's quantities so
     the forecasts page's history meets its projection without a jump."""
-    s.execute(delete(StockDaily).where(StockDaily.hospital_id == HOSPITAL_ID))
+    s.execute(delete(StockDaily).where(StockDaily.hospital_id == hospital_id))
     payload = [
         {
-            "hospital_id": HOSPITAL_ID,
+            "hospital_id": hospital_id,
             "facility_id": fac_ids[row["facility"]],
             "ndc": row["ndc"],
             "date": row["date"],
@@ -190,14 +143,16 @@ def _seed_stock_history(s: Session, rows: list[dict], fac_ids: dict[str, int]) -
         s.execute(insert(StockDaily), payload[i : i + BATCH])
 
 
-def _seed_forecast(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+def _seed_forecast(
+    s: Session, rows: list[dict], fac_ids: dict[str, int], hospital_id: uuid.UUID
+) -> None:
     """The canonical demo run (issue #7): delete-and-reload like the other
     bulk series. data_through = END_DATE — pinned, so the artifact stays
     stable as calendar time passes; POST /forecast/runs recomputes live."""
-    s.execute(delete(ForecastPoint).where(ForecastPoint.hospital_id == HOSPITAL_ID))
+    s.execute(delete(ForecastPoint).where(ForecastPoint.hospital_id == hospital_id))
     payload = [
         {
-            "hospital_id": HOSPITAL_ID,
+            "hospital_id": hospital_id,
             "facility_id": fac_ids[row["facility"]],
             "ndc": row["ndc"],
             "run_id": DEMO_RUN_ID,
@@ -272,14 +227,14 @@ def run() -> dict[str, int]:
     stock_history = _read_gz(src / "stock_history.csv.gz")
 
     with Session(engine) as s:
-        _seed_hospital(s)
-        fac_ids, loc_ids = _seed_registry(s)
-        _seed_drugs(s, drugs)
-        _seed_stock(s, stock, fac_ids)
-        _seed_consumption(s, consumption, fac_ids)
+        hospital_id = resolve_or_create_hospital(s)
+        fac_ids, loc_ids = upsert_registry(s, hospital_id)
+        _seed_drugs(s, drugs, hospital_id)
+        _seed_stock(s, stock, fac_ids, hospital_id)
+        _seed_consumption(s, consumption, fac_ids, hospital_id)
         _seed_conditions(s, conditions, loc_ids)
-        _seed_forecast(s, forecast, fac_ids)
-        _seed_stock_history(s, stock_history, fac_ids)
+        _seed_forecast(s, forecast, fac_ids, hospital_id)
+        _seed_stock_history(s, stock_history, fac_ids, hospital_id)
         shortages = _seed_shortages(s, drugs)
         s.commit()
 

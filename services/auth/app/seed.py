@@ -13,12 +13,12 @@ import os
 import secrets
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.models import AppUser, Hospital, Membership
+from medstock_shared.demo_tenant import HOSPITAL_NAME, resolve_or_create_hospital
+from medstock_shared.models import AppUser, Membership
 from sqlalchemy import select
 
 from .security import hash_password
 
-HOSPITAL_NAME = "St Mary's General"
 USERS = [
     ("ann@stmarys.org", "Ann Reyes", "pharmacist"),
     ("ben@stmarys.org", "Ben Okafor", "physician"),
@@ -31,13 +31,7 @@ def main() -> None:
     password = os.environ.get("SEED_PASSWORD") or secrets.token_urlsafe(12)
 
     with SessionLocal() as s:
-        hospital = s.execute(
-            select(Hospital).where(Hospital.name == HOSPITAL_NAME)
-        ).scalar_one_or_none()
-        if hospital is None:
-            hospital = Hospital(name=HOSPITAL_NAME)
-            s.add(hospital)
-            s.flush()
+        hospital_id = resolve_or_create_hospital(s)
 
         created = []
         for email, full_name, role in USERS:
@@ -46,12 +40,12 @@ def main() -> None:
             user = AppUser(email=email, password_hash=hash_password(password), full_name=full_name)
             s.add(user)
             s.flush()
-            s.add(Membership(user_id=user.id, hospital_id=hospital.id, role=role))
+            s.add(Membership(user_id=user.id, hospital_id=hospital_id, role=role))
             created.append(email)
 
         s.commit()
 
-    print(f"hospital: {HOSPITAL_NAME} ({hospital.id})")
+    print(f"hospital: {HOSPITAL_NAME} ({hospital_id})")
     if created:
         # Printed once and never stored. Re-running does not reprint it,
         # because it does not re-create the users.

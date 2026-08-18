@@ -2,7 +2,9 @@
 
 Resolves NDCs via the shared RxNorm client (live ndcs.json, curated fallback when
 empty — aspirin 100 MG Oral Tablet RxCUI 246461 has no current US packs). Re-running
-does not duplicate: unique (hospital_id, ndc, location_id) / (hospital_id, rxcui).
+does not duplicate: unique (hospital_id, ndc, facility_id, location_id) /
+(hospital_id, rxcui). Locations come from the same registry seed_demo uses
+(medstock_shared.demo_tenant) — not a parallel main-pharmacy/icu/ward-3 scheme.
 
   PYTHONPATH=shared python scripts/seed_stock.py
 """
@@ -12,6 +14,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import uuid
 from pathlib import Path
 
 # scripts/ → repo root on sys.path is not enough; shared lives in shared/.
@@ -19,6 +22,13 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
+from medstock_shared.demo_tenant import (
+    FACILITIES,
+    HOSPITAL_NAME,
+    LOCATIONS,
+    OPERATED_CODES,
+    upsert_registry,
+)
 from medstock_shared.models import FormularyItem, Hospital, StockSnapshot
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
@@ -29,23 +39,14 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-# `stock_snapshot.hospital_id` and `formulary.hospital_id` are Text with no
-# foreign key, so seeding into a hospital that does not exist succeeds and
-# writes rows nobody can see — a user only ever sees the hospital named in their
-# token. This script used to default to the literal
-# 00000000-0000-0000-0000-000000000001, which nothing creates: the only place a
-# `hospital` row is made is services/auth/app/seed.py, and it lets Postgres
-# generate the uuid.
-#
-# That default is not a cosmetic problem here. `ingest-certification` certifies
-# `shelf_ndcs()`, which reads stock_snapshot — so an invisible shelf means the
-# daily job certifies drugs nobody can see and every badge on the dashboard sits
-# at "unknown". Same fix as scripts/seed_patients.py: resolve by name, refuse to
-# guess.
-DEFAULT_HOSPITAL_NAME = "St Mary's General"  # keep in step with auth's seed
-LOCATIONS = ("main-pharmacy", "icu", "ward-3")
+# Resolve by name (St Mary's General) and refuse to guess. A fallback UUID
+# used to plant an invisible shelf: ingest-certification certifies
+# shelf_ndcs(), so rows in a hospital nobody's token names make every
+# dashboard badge read "unknown".
 NDC_CAP = 6
 RNG_SEED = 42
+SHELF_FACILITY = "central"
+SHELF_LOCATION = "main-room"
 
 # Real SCD/SBD RxCUIs. `in_formulary` is a subset so UC-1 search boost still shows.
 DRUGS: tuple[dict, ...] = (
@@ -88,26 +89,36 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     {"ndc": "76168080030", "name": "Carmellose Sodium 0.5% Eye Drops", "quantity": 62},
 )
 
-# Optional `quantity` (all locations) and `locations` freeze demo stock; otherwise random.
-# 197603 is on live GET /analogues/212033?mode=full (diflunisal — not aspirin).
-# High band is quantity > 100 so this analogue ranks first in Full.
-# 198479 is aspirin+caffeine: Ingredient can show it; Full hides same-ingredient products.
+# Optional `quantity` (all sites) and `sites` freeze demo stock; otherwise random
+# operated shelves from demo_tenant. 197603 is on live GET /analogues/212033
+# (diflunisal — not aspirin). High band is quantity > 100 so this analogue ranks
+# first in Full. 198479 is aspirin+caffeine: Ingredient can show it; Full hides
+# same-ingredient products.
 ANALOGUE_DRUGS: tuple[dict, ...] = (
     {
         "rxcui": "197603",
         "name": "diflunisal 500 MG Oral Tablet",
         "in_formulary": False,
         "quantity": 180,
-        "locations": ("main-pharmacy",),
+        "sites": ((SHELF_FACILITY, SHELF_LOCATION),),
     },
     {
         "rxcui": "198479",
         "name": "aspirin 400 MG / caffeine 32 MG Oral Tablet",
         "in_formulary": False,
         "quantity": 40,
-        "locations": ("main-pharmacy",),
+        "sites": ((SHELF_FACILITY, SHELF_LOCATION),),
     },
 )
+
+
+def _operated_shelves() -> list[tuple[str, str]]:
+    return [
+        (fac["code"], loc[0])
+        for fac in FACILITIES
+        if fac["operated"]
+        for loc in LOCATIONS[fac["code"]]
+    ]
 
 
 def resolve_ndcs(rxcui: str, rng: random.Random) -> list[str]:
@@ -122,14 +133,16 @@ def resolve_ndcs(rxcui: str, rng: random.Random) -> list[str]:
 
 
 def build_stock_rows(
-    hospital_id: str,
+    hospital_id: uuid.UUID,
     drugs: tuple[dict, ...],
     rng: random.Random,
+    fac_ids: dict[str, int],
     *,
     demo_edges: bool = True,
 ) -> list[dict]:
     rows: list[dict] = []
     aspirin_positive = False
+    shelves = _operated_shelves()
     for drug in drugs:
         ndcs = resolve_ndcs(drug["rxcui"], rng)
         if not ndcs:
@@ -137,12 +150,12 @@ def build_stock_rows(
             continue
         print(f"{drug['rxcui']} {drug['name']}: {len(ndcs)} NDC(s)")
         for ndc in ndcs:
-            if "locations" in drug:
-                chosen = list(drug["locations"])
+            if "sites" in drug:
+                chosen = list(drug["sites"])
             else:
                 loc_count = 1 if rng.random() < 0.65 else 2
-                chosen = rng.sample(LOCATIONS, loc_count)
-            for location_id in chosen:
+                chosen = rng.sample(shelves, loc_count)
+            for facility_code, location_id in chosen:
                 quantity = int(drug["quantity"]) if "quantity" in drug else rng.randint(0, 400)
                 if drug["rxcui"] == "246461" and quantity > 0:
                     aspirin_positive = True
@@ -150,6 +163,7 @@ def build_stock_rows(
                     {
                         "hospital_id": hospital_id,
                         "ndc": ndc,
+                        "facility_id": fac_ids[facility_code],
                         "location_id": location_id,
                         "quantity": quantity,
                     }
@@ -165,17 +179,19 @@ def build_stock_rows(
     return rows
 
 
-def build_shelf_rows(hospital_id: str) -> list[dict]:
-    """The dashboard shelf, one line each at the main pharmacy.
+def build_shelf_rows(hospital_id: uuid.UUID, fac_ids: dict[str, int]) -> list[dict]:
+    """The dashboard shelf, one line each at Central's main room.
 
     No RNG and no RxNorm round-trip: these NDCs are fixed so that what the
     CronJob certifies is exactly what the screen shows.
     """
+    facility_id = fac_ids[SHELF_FACILITY]
     rows = [
         {
             "hospital_id": hospital_id,
             "ndc": drug["ndc"],
-            "location_id": "main-pharmacy",
+            "facility_id": facility_id,
+            "location_id": SHELF_LOCATION,
             "quantity": int(drug["quantity"]),
         }
         for drug in DASHBOARD_SHELF
@@ -185,7 +201,7 @@ def build_shelf_rows(hospital_id: str) -> list[dict]:
     return rows
 
 
-def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list[str]) -> None:
+def upsert(session: Session, hospital_id: uuid.UUID, rows: list[dict], formulary: list[str]) -> None:
     if rows:
         stmt = insert(StockSnapshot).values(rows)
         # uq_stock_hospital_ndc_fac_loc, not uq_stock_hospital_ndc_loc: the
@@ -194,9 +210,6 @@ def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list
         # clinic has a "fridge-1". The old name no longer exists, so this script
         # raised UndefinedObject against any database at current head, which is
         # every environment the runbook tells you to seed.
-        #
-        # These rows carry no facility_id. The constraint is NULLS NOT DISTINCT,
-        # so they still de-duplicate on (hospital_id, ndc, location_id).
         stmt = stmt.on_conflict_do_update(
             constraint="uq_stock_hospital_ndc_fac_loc",
             set_={"quantity": stmt.excluded.quantity, "updated_at": func.now()},
@@ -209,7 +222,7 @@ def upsert(session: Session, hospital_id: str, rows: list[dict], formulary: list
         session.execute(fstmt)
 
 
-def resolve_hospital_id(session: Session, explicit: str | None, name: str) -> str:
+def resolve_hospital_id(session: Session, explicit: str | None, name: str) -> uuid.UUID:
     """The tenant to seed into — named, not assumed.
 
     An explicit `--hospital-id` always wins; tests and one-off environments need
@@ -218,7 +231,7 @@ def resolve_hospital_id(session: Session, explicit: str | None, name: str) -> st
     shelf with rows nobody can see and report success.
     """
     if explicit:
-        return explicit.strip()
+        return uuid.UUID(explicit.strip())
 
     row = session.execute(select(Hospital).where(Hospital.name == name)).scalars().first()
     if row is None:
@@ -227,7 +240,7 @@ def resolve_hospital_id(session: Session, explicit: str | None, name: str) -> st
             "Run the auth seed first (python -m app.seed in services/auth, or "
             "deploy/k8s/seed-job.yaml), or pass --hospital-id explicitly."
         )
-    return str(row.id)
+    return row.id
 
 
 def main() -> int:
@@ -239,7 +252,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--hospital-name",
-        default=DEFAULT_HOSPITAL_NAME,
+        default=HOSPITAL_NAME,
         help="resolve the tenant by name instead of by uuid",
     )
     args = parser.parse_args()
@@ -247,10 +260,11 @@ def main() -> int:
     session = SessionLocal()
     try:
         hospital_id = resolve_hospital_id(session, args.hospital_id, args.hospital_name)
+        fac_ids, _loc_ids = upsert_registry(session, hospital_id)
         rng = random.Random(RNG_SEED)
-        rows = build_stock_rows(hospital_id, DRUGS, rng)
-        rows.extend(build_stock_rows(hospital_id, ANALOGUE_DRUGS, rng, demo_edges=False))
-        rows.extend(build_shelf_rows(hospital_id))
+        rows = build_stock_rows(hospital_id, DRUGS, rng, fac_ids)
+        rows.extend(build_stock_rows(hospital_id, ANALOGUE_DRUGS, rng, fac_ids, demo_edges=False))
+        rows.extend(build_shelf_rows(hospital_id, fac_ids))
         formulary = [d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]]
         upsert(session, hospital_id, rows, formulary)
         session.commit()
@@ -263,7 +277,7 @@ def main() -> int:
         f"upserted {len(rows)} stock line(s) "
         f"({len(DASHBOARD_SHELF)} of them the dashboard shelf), "
         f"{len(formulary)} formulary rxcui(s) "
-        f"for hospital_id={hospital_id} locations={','.join(LOCATIONS)}"
+        f"for hospital_id={hospital_id} facilities={','.join(OPERATED_CODES)}"
     )
     return 0
 

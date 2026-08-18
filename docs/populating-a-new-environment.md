@@ -145,14 +145,13 @@ this table.
 ### Which tenant the rows land in
 
 The seed resolves the hospital **by name** (`St Mary's General`, matching
-`services/auth/app/seed.py`) and exits non-zero if no such hospital exists.
+`services/auth/app/seed.py` and `seed_demo`) and exits non-zero if no such hospital exists.
 
-That is not defensiveness for its own sake. `patient.hospital_id` is `Text`
-with no foreign key, and this script used to default to the literal
-`00000000-0000-0000-0000-000000000001` — an id nothing creates, since the auth
-seed lets Postgres generate one. So the old default wrote its rows, printed
-`seeded 1008`, and left every user staring at an empty picker, because a user
-only ever sees the hospital named in their token. Run the auth seed first, or
+That is not defensiveness for its own sake. This script used to default to the literal
+`00000000-0000-0000-0000-000000000001` — seed_demo's DEMO GENERAL HOSPITAL, an id auth
+never minted. So the old default wrote its rows, printed `seeded 1008`, and left every
+user staring at an empty picker, because a user only ever sees the hospital named in their
+token. Wave 0 collapsed those two names onto one uuid FK. Run the auth seed first, or
 pass `--hospital-id`.
 
 ### The population

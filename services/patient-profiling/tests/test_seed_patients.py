@@ -6,12 +6,15 @@ The first is scale. A demo environment held two patients, so `/demand`, the
 PP-4 forecast and every population panel answered questions about a cohort of
 two and looked broken rather than empty.
 
-The second is worse. `patient.hospital_id` is Text with **no foreign key**, and
-the script defaulted to the literal `00000000-0000-0000-0000-000000000001`.
-Nothing creates a hospital with that id — `services/auth/app/seed.py` lets
-Postgres generate one — so the seed wrote rows, reported success, and every
-user saw an empty picker, because a user only ever sees the hospital in their
-token. A seed that cannot fail is not the same as a seed that works.
+The second is worse. `patient.hospital_id` used to be Text with **no foreign
+key**, and the script defaulted to the literal
+`00000000-0000-0000-0000-000000000001`. Nothing created a hospital with that
+id — DEMO GENERAL HOSPITAL was a second tenant, and auth minted St Mary's
+with a random uuid — so the seed wrote rows, reported success, and every
+user saw an empty picker. Wave 0 made `hospital_id` a uuid FK and collapsed
+those two names onto one hospital; the seed still resolves by name and
+stops if the row is missing, because inventing a tenant is how the empty
+picker comes back.
 """
 
 from __future__ import annotations

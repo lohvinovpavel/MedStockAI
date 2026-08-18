@@ -84,8 +84,9 @@ connection cannot leak the previous request's tenant into the next one.
 3. Migrations run as the table owner; the application connects as `app_role` — which is why
    `FORCE ROW LEVEL SECURITY` is required, not just `ENABLE`.
 4. `audit_log_entry` additionally carries `REVOKE UPDATE, DELETE FROM app_role` (see H1).
-5. `hospital_id` must be `uuid` on every tenant table before policies are written. It is
-   currently `text` on `formulary_item` and `stock_snapshot` — fix in the same migration.
+5. `hospital_id` is `uuid` on every tenant table (wave 0, migration
+   `20260818_hospital_uuid`). RLS policies are still open — do not paper over
+   that with an application `WHERE`.
 
 ## Acceptance criteria
 

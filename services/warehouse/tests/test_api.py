@@ -64,17 +64,17 @@ def seeded():
         ))
         s.add_all([
             StockSnapshot(
-                hospital_id=str(HOSPITAL_ID), ndc=NDC_FRIDGE, facility_id=central.id,
+                hospital_id=HOSPITAL_ID, ndc=NDC_FRIDGE, facility_id=central.id,
                 location_id="t-fridge", quantity=40,
             ),
             StockSnapshot(
-                hospital_id=str(HOSPITAL_ID), ndc=NDC_ROOM, facility_id=central.id,
+                hospital_id=HOSPITAL_ID, ndc=NDC_ROOM, facility_id=central.id,
                 location_id="t-room", quantity=500,
             ),
         ])
         s.add_all([
             ConsumptionDaily(
-                hospital_id=str(HOSPITAL_ID), facility_id=central.id, ndc=NDC_ROOM,
+                hospital_id=HOSPITAL_ID, facility_id=central.id, ndc=NDC_ROOM,
                 rxcui="000000", date=f"2026-08-{day:02d}", qty_consumed=10 + day,
                 stockout=(day == 3),
             )
@@ -100,8 +100,8 @@ def seeded():
     yield ids
 
     with Session(engine) as s:
-        s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == str(HOSPITAL_ID)))
-        s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == str(HOSPITAL_ID)))
+        s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == HOSPITAL_ID))
+        s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == HOSPITAL_ID))
         s.execute(delete(LocationCondition).where(
             LocationCondition.location_id.in_([ids["room"], ids["fridge"]])
         ))

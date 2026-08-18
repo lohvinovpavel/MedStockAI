@@ -187,10 +187,9 @@ class Membership(Base):
 # (services.md §8 #2); not yet enforced, so this is the shape they will
 # filter, not a working guarantee today.
 #
-# hospital_id here is Text, not a FK to hospital.id (UUID) above — the two
-# were modeled independently by different owners in parallel. Flag for
-# whoever owns inventory: worth a follow-up migration once both tables have
-# real rows, not something to silently retype in a merge conflict resolution.
+# hospital_id is uuid FK to hospital.id on every tenant table (wave 0).
+# RLS policies (A4) still open — do not paper over that with an application
+# WHERE.
 
 
 class FormularyItem(Base):
@@ -202,7 +201,9 @@ class FormularyItem(Base):
     __tablename__ = "formulary_item"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     rxcui: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -219,7 +220,9 @@ class StockSnapshot(Base):
     __tablename__ = "stock_snapshot"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     # B1: facility_id carries site identity; location_id survives as the
     # intra-facility shelf code (matches storage_location.code). Nullable
@@ -416,7 +419,9 @@ class Patient(Base):
     __tablename__ = "patient"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False, index=True
+    )
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
     blood_group: Mapped[str | None] = mapped_column(Text)
@@ -670,7 +675,9 @@ class AssessmentLog(Base):
     __tablename__ = "assessment_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     # One id per API call, echoed back to the caller so a clinician can quote it
     # when they disagree with an answer.
     request_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -775,7 +782,9 @@ class ConsumptionDaily(Base):
     __tablename__ = "consumption_daily"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     rxcui: Mapped[str] = mapped_column(Text, nullable=False)
@@ -818,15 +827,15 @@ class ForecastPoint(Base):
 
     `data_through` is the last consumption date the run saw — constant within
     a run. Clients compare it against the newest consumption data to decide
-    that a forecast has been outrun and a re-run is due. `hospital_id` is Text
-    (not uuid, deviating from the E1 sketch) to join stock_snapshot and
-    consumption_daily without casts.
+    that a forecast has been outrun and a re-run is due.
     """
 
     __tablename__ = "forecast_point"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
@@ -865,7 +874,9 @@ class StockDaily(Base):
     __tablename__ = "stock_daily"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
     facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
     ndc: Mapped[str] = mapped_column(Text, nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False)

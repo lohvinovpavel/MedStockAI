@@ -96,7 +96,7 @@ nobody has seen before, live, on stage. `DEMO_SEED=42`, committed, reproducible.
 
 So that nobody — including us, in six months — can mistake demo data for real:
 
-- Hospital name `DEMO GENERAL HOSPITAL`, id `demo-hospital-001`
+- Hospital name `St Mary's General` (same tenant as `ann@stmarys.org`)
 - Every synthetic `patient_ref` prefixed `SYN-`
 - Seeded through a migration or a `seed` CronJob that **refuses to run** unless
   `ENVIRONMENT=demo`
@@ -170,7 +170,7 @@ Nothing in the pipeline. The demo and a real hospital differ in exactly three pl
 |---|---|---|
 | Who de-identifies | our Synthea adapter | the hospital's own gateway |
 | Where the vector comes from | seed job | their EHR |
-| Tenant row | `demo-hospital-001` | theirs |
+| Tenant row | `St Mary's General` | theirs |
 
 Reference data, rules, scoring, audit and RLS are identical. That is the argument for building
 the demo this way rather than the fast way — **the demo is the system, with one tenant whose

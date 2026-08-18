@@ -63,14 +63,14 @@ def seeded():
         for ndc, rxcui, days, qty, on_hand in spec:
             s.add_all(
                 ConsumptionDaily(
-                    hospital_id=str(HOSPITAL_ID), facility_id=fac.id, ndc=ndc, rxcui=rxcui,
+                    hospital_id=HOSPITAL_ID, facility_id=fac.id, ndc=ndc, rxcui=rxcui,
                     date=END - timedelta(days=i), qty_consumed=qty, stockout=False,
                 )
                 for i in range(days)
             )
             s.add(
                 StockSnapshot(
-                    hospital_id=str(HOSPITAL_ID), ndc=ndc, facility_id=fac.id,
+                    hospital_id=HOSPITAL_ID, ndc=ndc, facility_id=fac.id,
                     location_id="tf-room", quantity=on_hand,
                 )
             )
@@ -78,7 +78,7 @@ def seeded():
             # invariant the chart's history/projection boundary rests on.
             s.add_all(
                 StockDaily(
-                    hospital_id=str(HOSPITAL_ID), facility_id=fac.id, ndc=ndc,
+                    hospital_id=HOSPITAL_ID, facility_id=fac.id, ndc=ndc,
                     date=END - timedelta(days=i), qty_on_hand=on_hand + i * qty,
                 )
                 for i in range(min(days, 30))
@@ -99,7 +99,7 @@ def seeded():
             (ForecastPoint, ForecastPoint.hospital_id),
             (StockDaily, StockDaily.hospital_id),
         ]:
-            s.execute(delete(model).where(col == str(HOSPITAL_ID)))
+            s.execute(delete(model).where(col == HOSPITAL_ID))
         s.execute(delete(ShortageEvent).where(ShortageEvent.source_id.like("test-shortage-%")))
         s.execute(delete(Drug).where(Drug.ndc.in_([NDC_FLAT, NDC_SHORT, NDC_DRY])))
         s.execute(delete(Facility).where(Facility.hospital_id == HOSPITAL_ID))
@@ -163,7 +163,7 @@ def test_rerun_same_day_replaces(run):
     with Session(engine) as s:
         today_runs = s.execute(
             select(func.count(func.distinct(ForecastPoint.run_id))).where(
-                ForecastPoint.hospital_id == str(HOSPITAL_ID),
+                ForecastPoint.hospital_id == HOSPITAL_ID,
                 func.date(ForecastPoint.created_at) == func.current_date(),
             )
         ).scalar()
@@ -174,7 +174,7 @@ def test_quantiles_ordered_for_every_row(run):
     with Session(engine) as s:
         bad = s.execute(
             select(func.count()).select_from(ForecastPoint).where(
-                ForecastPoint.hospital_id == str(HOSPITAL_ID),
+                ForecastPoint.hospital_id == HOSPITAL_ID,
                 (ForecastPoint.p10 > ForecastPoint.p50) | (ForecastPoint.p50 > ForecastPoint.p90),
             )
         ).scalar()

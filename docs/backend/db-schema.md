@@ -189,21 +189,22 @@ erDiagram
 
     formulary_item {
         bigint id PK
-        text hospital_id "uq hospital_id rxcui"
+        uuid hospital_id FK "uq hospital_id rxcui"
         text rxcui
         timestamptz updated_at
     }
     stock_snapshot {
         bigint id PK
-        text hospital_id "uq hospital_id ndc location_id"
+        uuid hospital_id FK "uq hospital_id ndc facility_id location_id"
         text ndc
-        text location_id "empty string = hospital-wide bucket; becomes FK to facility"
+        bigint facility_id FK "B1; location_id is the intra-facility shelf code"
+        text location_id
         int quantity
         timestamptz updated_at
     }
     stock_batch {
         bigint id PK
-        text hospital_id
+        uuid hospital_id FK
         text ndc
         bigint location_id FK
         text lot "uq hospital_id ndc location_id lot"
@@ -212,7 +213,7 @@ erDiagram
     }
     par_level {
         bigint id PK
-        text hospital_id "uq hospital_id facility_id ndc"
+        uuid hospital_id FK "uq hospital_id facility_id ndc"
         bigint facility_id FK
         text ndc
         int reorder_point
@@ -243,7 +244,7 @@ erDiagram
 
     supplier {
         bigint id PK
-        text hospital_id
+        uuid hospital_id FK
         text name
         int lead_time_days
         numeric reliability_pct
@@ -258,7 +259,7 @@ erDiagram
     purchase_order {
         bigint id PK
         text ref UK "example PO-2026-0149"
-        text hospital_id
+        uuid hospital_id FK
         bigint facility_id FK
         bigint supplier_id FK
         text status "CHECK draft placed in_transit delivered cancelled"
@@ -277,7 +278,7 @@ erDiagram
     transfer_request {
         bigint id PK
         text ref UK
-        text hospital_id
+        uuid hospital_id FK
         bigint from_facility_id FK
         bigint to_facility_id FK
         text ndc
@@ -286,7 +287,7 @@ erDiagram
     }
     review_decision {
         bigint id PK
-        text hospital_id
+        uuid hospital_id FK
         text entity_type "restock_recommendation or analogue_substitution"
         text entity_ref
         text decision "pending approved or rejected"
@@ -339,7 +340,7 @@ erDiagram
     }
     audit_log_entry {
         bigint id PK
-        text hospital_id "set by session_scope, not by the caller"
+        uuid hospital_id FK "set by session_scope, not by the caller"
         uuid actor_id "set by session_scope; null when the actor is a pipeline"
         text entity_type
         text entity_id
@@ -351,7 +352,7 @@ erDiagram
     }
     copilot_message {
         bigint id PK
-        text hospital_id
+        uuid hospital_id FK
         uuid actor_id FK
         text role "user or assistant"
         text text
@@ -387,9 +388,9 @@ is a **grant**, not a convention — demonstrable in ten seconds at defense.
 
 The proposed tables have a dependency order; taking them out of order means rewriting FKs.
 
-1. **Fix `hospital_id` typing.** It is `Text` on the tenant tables and `UUID` on `hospital` —
-   flagged in `models.py` as parallel-authoring drift. Ten new tables would otherwise inherit
-   the wrong type. Do this first, while both tables are still nearly empty.
+1. **Fix `hospital_id` typing.** ✅ wave 0 (`20260818_hospital_uuid`): every tenant
+   table is `uuid` FK to `hospital.id`. DEMO GENERAL HOSPITAL (all-zeros UUID) is
+   remapped onto St Mary's General. RLS policies (A4) are still open.
 2. `facility` — B1 blocks stock scoping, orders, transfers, and forecasts alike. ✅ done
    (migration `20260817_warehouse`, with `storage_location`, `consumption_daily`,
    `location_condition`, storage-requirement columns on `drug`, and
