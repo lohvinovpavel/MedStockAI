@@ -282,6 +282,65 @@ TASKS: dict[str, AITask] = {
         ),
         validate=_explanation_adds_no_risks,
     ),
+    # --- patient document intake (patient-profiling/app/intake_graph.py) -----
+    # The only tasks here that send PATIENT data to the model. Everything else
+    # reads public labels, which is why prognosis.py can say the BAA question
+    # does not arise; for these it does.
+    "patient_doc_classify": AITask(
+        name="patient_doc_classify",
+        owner="Andrii",
+        prompt=(
+            "What kind of clinical document is this, and what date does it carry?\n\n"
+            'Return JSON: {{"kind": "lab_report"|"discharge_summary"|"note"|"unknown", '
+            '"document_date": "YYYY-MM-DD or empty"}}\n\n'
+            "The date is the date of the RESULT or the discharge, not the date it was "
+            "printed. If the page shows no such date return empty rather than guessing — "
+            "a wrong date decides whether this overwrites a newer measurement.\n\n"
+            "Document: {source_text}"
+        ),
+    ),
+    "patient_doc_labs": AITask(
+        name="patient_doc_labs",
+        owner="Andrii",
+        prompt=(
+            "Read the values off this laboratory report.\n\n"
+            "Return ONLY these fields, omitting any the report does not state:\n"
+            "  egfr_value    the eGFR, exactly as printed (e.g. 32, >60)\n"
+            "  hepatic       normal | impaired, from the LFT panel (ALT/AST/bilirubin/"
+            "albumin). Say impaired only if the panel supports it — a single mildly "
+            "raised enzyme is not impairment.\n"
+            "  sex           F | M, if the report states it\n\n"
+            "Transcribe, do not interpret. If a value is unclear on the page, omit it: a "
+            "guessed digit in an eGFR moves a patient between renal bands and turns a "
+            "dose warning on or off.\n\n"
+            'Return JSON: {{"features": [{{"field": str, "value": str, "quote": str}}]}}\n'
+            "quote is the text on the page the value came from.\n\n"
+            "Report: {source_text}"
+        ),
+        timeout_seconds=90.0,
+    ),
+    "patient_doc_summary": AITask(
+        name="patient_doc_summary",
+        owner="Andrii",
+        prompt=(
+            "Read this clinical document for facts that affect drug safety.\n\n"
+            "Return ONLY these fields, omitting any it does not state:\n"
+            "  egfr_value          eGFR, if a number is given\n"
+            "  hepatic             normal | impaired\n"
+            "  sex                 F | M\n"
+            "  prior_adr_rxcuis    RxCUIs of drugs the patient REACTED to previously. "
+            "Only where the document names a reaction or intolerance — a drug simply "
+            "stopped is not a reaction. Omit the field entirely if you cannot give an "
+            "RxCUI; a drug name in this field is unusable.\n"
+            "  condition_codes     ICD-10 codes for stated diagnoses\n\n"
+            "Do not infer. A patient 'doing well on' a drug has no reaction to it, and a "
+            "family history is not the patient's history.\n\n"
+            'Return JSON: {{"features": [{{"field": str, "value": str|list, "quote": str}}]}}\n'
+            "quote is the sentence the fact came from.\n\n"
+            "Document: {source_text}"
+        ),
+        timeout_seconds=90.0,
+    ),
     # prediction — Mykhailo
     # compliance (extract) — Andrii
 }
