@@ -198,6 +198,13 @@ def explore(session: Session, ndc: str) -> dict:
         "labeler": (product or {}).get("labeler_name"),
         "provenance": "on_demand",
         "ruleset_version": RULESET_VERSION,
+        # Set explicitly. The column carries onupdate=func.now(), which does not
+        # fire for INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert, and
+        # the conflict branch is the database's business, not the ORM's. Without
+        # this a re-check refreshes the findings and the TTL while still
+        # reporting the time of the very first check, which is precisely the
+        # thing the Re-check button exists to change.
+        "computed_at": now,
         "expires_at": now + timedelta(days=TTL_DAYS),
         "raw": {
             "directory": product or {},

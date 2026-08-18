@@ -27,7 +27,7 @@ page and stops there, so a normal run costs a handful of requests and never
 spends any on a 404.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import httpx
 from medstock_shared import engine
@@ -339,6 +339,11 @@ def _product_to_rows(
             "labeler": product.get("labeler_name"),
             "provenance": "scheduled",
             "ruleset_version": RULESET_VERSION,
+            # See the note in compliance/app/explore.py: onupdate does not fire
+            # on an upsert, so a daily job would leave this at the date of the
+            # first run forever -- and a stuck timestamp is indistinguishable
+            # from a feed that quietly stopped.
+            "computed_at": datetime.now(tz=UTC),
             "raw": product,
         }
         finding_rows = [

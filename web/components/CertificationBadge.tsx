@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { cn } from "@/lib/utils";
@@ -268,6 +268,9 @@ export function useCertificateDetail(ndc: string | null) {
   const [detail, setDetail] = useState<CertDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Bumped by reload(). Not folded into `ndc`, because a re-check keeps looking
+  // at the same drug and the effect has to re-run anyway.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!ndc) {
@@ -294,7 +297,32 @@ export function useCertificateDetail(ndc: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [ndc]);
+  }, [ndc, nonce]);
 
-  return { detail, error, loading };
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  return { detail, error, loading, reload };
+}
+
+/**
+ * Re-run the gates against freshly fetched upstream data (COMP-2), for one drug.
+ *
+ * `POST /explore` re-fetches and upserts unconditionally — unlike opening the
+ * dialog, which only explores on a miss or an expired row. That is the whole
+ * point of the button: a pharmacist who has just read a recall notice should
+ * not have to wait out a seven-day TTL to see it reflected here.
+ *
+ * It costs two upstream calls against a shared daily budget, which is why it is
+ * a deliberate click rather than something the dialog does on open.
+ */
+export async function recheckCertification(ndc: string): Promise<void> {
+  const body = await apiFetch("compliance", "/explore", {
+    method: "POST",
+    body: JSON.stringify({ ndc: [ndc] }),
+  });
+  // A per-NDC upstream failure is a 200 with an `errors` entry — the endpoint is
+  // built for batches, where one dead lookup must not lose the answers that did
+  // come back. For a batch of one that would otherwise read as success and the
+  // dialog would redisplay the stale verdict as though it were fresh.
+  const failure = (body?.errors ?? {})[ndc];
+  if (failure) throw new Error(String(failure));
 }

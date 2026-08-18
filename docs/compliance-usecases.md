@@ -179,6 +179,55 @@ The wording lives in `web/lib/certification.ts`, apart from the dialog, because 
 drawer shows the same verdict and two copies would eventually disagree about what green means
 on the same screen.
 
+### 2.5 The gates
+
+One word on a badge is five questions collapsed into one. That is the right default for a
+shelf — eleven drugs cannot show forty findings — but it means "Attention" cannot be told from
+"Attention" without opening the list and inferring the difference from the codes.
+
+So the dialog shows the gates themselves, in pipeline order rather than alphabetically:
+
+| Gate | Asks |
+|---|---|
+| `lifecycle` | Is it still a marketed product? |
+| `approval` | What authority is it sold under? |
+| `enforcement` | Recalls and regulatory action |
+| `supply` | Can it actually be obtained? |
+| `data` | What could we not check? |
+
+Each shows *n/total* rules fired and a word — `pass`, `flagged`, `failed`, `not run`. The word
+carries the verdict, not the dot: green and red sit next to each other here, which is the one
+pair a red/green reader cannot separate.
+
+**`not run` is not `pass`.** An `unknown` or `unavailable` badge renders every gate grey. A row
+of green gates over a grey badge would be the most misleading thing on the page — it would
+claim five checks cleared for a drug nobody looked at.
+
+An `info` finding does not fail its gate. It is a note about what could not be checked, not a
+reason to hold the drug — which is why `data` can read `pass · 1/3`.
+
+### 2.6 Re-checking one drug
+
+`Re-check now`, in the certificate dialog, calls `POST /explore` for that NDC and reloads the
+verdict. Unlike opening the dialog — which explores only on a miss or an expired row — this
+re-fetches unconditionally. That is the point: a pharmacist who has just read a recall notice
+should not have to wait out the seven-day TTL to see it reflected.
+
+It costs two upstream calls against a shared daily budget, so it is a deliberate click rather
+than something the dialog does on open, and it is offered only to roles holding
+`certification:explore` (pharmacist, admin). When the role cannot be confirmed the button is
+still offered and the server decides — same reasoning as `approvalStance` in
+[prognosis-and-procurement.md](prognosis-and-procurement.md) §5.4: gating a control on auth
+being reachable puts auth back in the critical path of a page built not to need it.
+
+A failure leaves the previous verdict on screen under an error toast. Blanking it would imply
+the drug had become unknown when nothing about it changed.
+
+> `POST /explore` answers **200 with an `errors` entry** when an upstream lookup fails, because
+> it is built for batches where one dead lookup must not lose the answers that did come back.
+> A caller passing a single NDC has to check that map, or a failed re-check reads as success
+> and the dialog redisplays the stale verdict as though it were fresh.
+
 ---
 
 ## 3. COMP-2 — exploring a drug we have never seen

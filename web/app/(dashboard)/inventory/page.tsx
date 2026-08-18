@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Clock,
   ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,12 +62,14 @@ import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge
 import { StatTile } from "@/components/dashboard/StatTile";
 import {
   CertificationBadge,
+  recheckCertification,
   useCertificateDetail,
   useCertificationStatuses,
   useRuleset,
   type CertResult,
 } from "@/components/CertificationBadge";
-import { explainCertification } from "@/lib/certification";
+import { explainCertification, exploreStance, gatesFor, type Gate } from "@/lib/certification";
+import { useSession } from "@/lib/session";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory } from "@/lib/inventory-context";
@@ -234,6 +237,49 @@ const SEVERITY_TONE: Record<string, StatusTone> = {
   info: "neutral",
 };
 
+const GATE_STYLE: Record<Gate["verdict"], { dot: string; word: string; box: string }> = {
+  pass: { dot: "bg-emerald-500", word: "pass", box: "border-emerald-200 dark:border-emerald-500/25" },
+  yellow: { dot: "bg-amber-500", word: "flagged", box: "border-amber-300 dark:border-amber-500/35" },
+  red: { dot: "bg-red-500", word: "failed", box: "border-red-300 dark:border-red-500/35" },
+  // Grey and explicitly worded. A row of green gates over a grey badge would be
+  // the most misleading thing on this page: it would claim five checks cleared
+  // for a drug nobody looked at.
+  "not-run": { dot: "bg-muted-foreground/40", word: "not run", box: "border-dashed" },
+};
+
+/** The five questions behind one colour, and which of them this drug got through. */
+function GateStrip({ gates }: { gates: Gate[] }) {
+  if (gates.length === 0) return null;
+  return (
+    <ol className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5">
+      {gates.map((gate) => {
+        const style = GATE_STYLE[gate.verdict];
+        return (
+          <li key={gate.category} className={cn("rounded-md border p-2", style.box)}>
+            <div className="flex items-center gap-1.5">
+              <span className={cn("size-1.5 shrink-0 rounded-full", style.dot)} />
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-wide">
+                {gate.category}
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">{gate.question}</p>
+            {/* The word carries the verdict, not the dot — the colours here are
+                red and green next to each other, which is the one pair a
+                red/green reader cannot separate. */}
+            <p className="mt-1 font-mono text-[10px]">
+              {style.word}
+              <span className="text-muted-foreground">
+                {" · "}
+                {gate.fired.length > 0 ? `${gate.fired.length}/${gate.rules}` : `0/${gate.rules}`}
+              </span>
+            </p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 // The evidence behind one colour (COMP-1), not a stand-in for a scanned PDF.
 // Every finding names the FDA dataset it came from and links to it, because the
 // answer to "why is my drug amber?" has to be checkable by the pharmacist who
@@ -249,8 +295,37 @@ function CertificateDialog({
 }) {
   // Only fetch while the dialog is actually open: on a miss this endpoint
   // triggers COMP-2 exploration upstream, which spends real request budget.
-  const { detail, error, loading } = useCertificateDetail(open && item?.ndc ? item.ndc : null);
+  const { detail, error, loading, reload } = useCertificateDetail(
+    open && item?.ndc ? item.ndc : null,
+  );
   const ruleset = useRuleset();
+  const { user } = useSession();
+  const stance = exploreStance(user?.role);
+  const [rechecking, setRechecking] = useState(false);
+
+  // Re-runs the gates against freshly fetched upstream data, then reloads the
+  // verdict. Two calls rather than one because /explore returns the row it
+  // wrote and /certificates returns the findings behind it — reusing the read
+  // path means the dialog cannot drift from what a reopen would show.
+  async function recheck() {
+    if (!item?.ndc) return;
+    setRechecking(true);
+    try {
+      await recheckCertification(item.ndc);
+      reload();
+      toast.success("Re-checked against the FDA record.");
+    } catch (e) {
+      // Deliberately does not reload on failure: leaving the previous verdict
+      // on screen under an error is honest, whereas blanking it would imply
+      // the drug had become unknown when nothing about it changed.
+      toast.error("Could not re-check", {
+        description: e instanceof Error ? e.message : "upstream lookup failed",
+      });
+    } finally {
+      setRechecking(false);
+    }
+  }
+
   // Built here rather than inline so the wording has one home: the copilot
   // drawer shows the same verdict, and two copies would eventually disagree
   // about what green means on the same screen.
@@ -316,6 +391,9 @@ function CertificateDialog({
                 <dd className="font-mono">{detail.computed_at?.slice(0, 16).replace("T", " ") ?? "—"}</dd>
               </div>
             </dl>
+
+            {/* The five questions behind the one word on the badge. */}
+            <GateStrip gates={gatesFor(detail, ruleset)} />
 
             {/* Why this colour — the part a pharmacist came here for. Stated
                 for green as loudly as for red: an empty findings list reads
@@ -390,10 +468,30 @@ function CertificateDialog({
               </ul>
             )}
 
-            <p className="text-[10px] text-muted-foreground">
-              Ruleset {detail.ruleset_version ?? "—"}
-              {detail.provenance ? ` · ${detail.provenance}` : ""}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2">
+              <p className="text-[10px] text-muted-foreground">
+                Ruleset {detail.ruleset_version ?? "—"}
+                {detail.provenance ? ` · ${detail.provenance}` : ""}
+              </p>
+              {/* Offered when the role cannot be confirmed, same as the
+                  prognosis controls: gating on auth being reachable would put
+                  auth back in the critical path of a page built not to need it.
+                  A 403 comes back as a toast, and the server stays the
+                  authority. */}
+              {stance !== "denied" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={rechecking || loading}
+                  onClick={recheck}
+                >
+                  <RefreshCw className={cn("size-3.5", rechecking && "animate-spin")} />
+                  {rechecking ? "Re-checking…" : "Re-check now"}
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </DialogContent>

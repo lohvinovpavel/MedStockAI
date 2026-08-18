@@ -158,3 +158,100 @@ export function explainCertification(
 
   return { headline, caveat, decisive: [], other: info, checked };
 }
+
+// --- the gates -------------------------------------------------------------
+
+/**
+ * A colour is the output of five independent questions, and the badge collapses
+ * all five into one word. That is the right default — a shelf of eleven drugs
+ * cannot show forty findings — but it means a pharmacist reading "Attention"
+ * cannot tell a supply problem from a regulatory one without opening the list
+ * and inferring it from the codes.
+ *
+ * So the dialog shows the gates themselves: what each one asks, how many rules
+ * it holds, and whether this drug got through. The questions below are the
+ * category comments from `medstock_shared.certification.Category`, kept in the
+ * same words on purpose — two vocabularies for one taxonomy is how a UI starts
+ * quietly disagreeing with the service behind it.
+ */
+export type GateVerdict = "pass" | "yellow" | "red" | "not-run";
+
+export type Gate = {
+  category: string;
+  question: string;
+  rules: number;
+  verdict: GateVerdict;
+  fired: CertFinding[];
+};
+
+/**
+ * Pipeline order, not alphabetical: is this a real product, may it be sold,
+ * has anyone acted against it, can we get it, and what could we not check.
+ * A reader scanning left to right should be walking the argument.
+ */
+const GATE_ORDER = ["lifecycle", "approval", "enforcement", "supply", "data"] as const;
+
+const GATE_QUESTION: Record<string, string> = {
+  lifecycle: "Is it still a marketed product?",
+  approval: "What authority is it sold under?",
+  enforcement: "Recalls and regulatory action",
+  supply: "Can it actually be obtained?",
+  data: "What could we not check?",
+};
+
+export function gatesFor(detail: CertDetail | null, ruleset: Ruleset | null): Gate[] {
+  if (!ruleset) return [];
+
+  const counts = new Map<string, number>();
+  for (const rule of Object.values(ruleset.rules)) {
+    counts.set(rule.category, (counts.get(rule.category) ?? 0) + 1);
+  }
+
+  // Unknown and unavailable are not passes. Nothing ran, and a row of green
+  // gates over a grey badge would be the single most misleading thing on the
+  // page — it would say "five checks cleared" about a drug nobody looked at.
+  const ran = Boolean(detail) && detail!.status !== "unknown";
+
+  const known = new Set<string>(GATE_ORDER);
+  const categories = [
+    ...GATE_ORDER.filter((c) => counts.has(c)),
+    // Anything the service grew that this file has not been taught about yet.
+    // Better to render it unordered and unlabelled than to drop a gate silently.
+    ...[...counts.keys()].filter((c) => !known.has(c)).sort(),
+  ];
+
+  return categories.map((category) => {
+    const fired = (detail?.findings ?? []).filter((f) => f.category === category);
+    const worst = fired.some((f) => f.severity === "red")
+      ? "red"
+      : fired.some((f) => f.severity === "yellow")
+        ? "yellow"
+        : null;
+    return {
+      category,
+      question: GATE_QUESTION[category] ?? category,
+      rules: counts.get(category) ?? 0,
+      // An info-only finding still passes the gate: it is a note about what
+      // could not be checked, not a reason to hold the drug.
+      verdict: !ran ? "not-run" : (worst ?? "pass"),
+      fired,
+    };
+  });
+}
+
+/**
+ * Who may spend a re-check.
+ *
+ * `certification:explore` is narrower than `certificate:read` because each call
+ * is two upstream requests against a shared daily openFDA budget. Same shape as
+ * `approvalStance` in lib/prognosis.ts, and for the same reason: when the role
+ * cannot be confirmed the control is offered and the server decides, because
+ * gating on auth being reachable would put auth back in the critical path of a
+ * page that deliberately does not depend on it.
+ */
+export type ExploreStance = "allowed" | "denied" | "unconfirmed";
+
+export function exploreStance(role: string | undefined): ExploreStance {
+  if (role === undefined) return "unconfirmed";
+  return role === "pharmacist" || role === "admin" ? "allowed" : "denied";
+}

@@ -273,8 +273,13 @@ class DrugCertification(Base):
     # export that cannot say where a colour came from is not evidence.
     provenance: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
     ruleset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # No `onupdate`: every writer of this table upserts, and onupdate does not
+    # fire on INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert and the
+    # conflict branch is the database's business. Leaving it on reads as a
+    # guarantee that this stamp maintains itself, and it does not, so the
+    # writer sets it explicitly. Same trap as DrugRiskProfile.extracted_at.
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     # Only on_demand rows carry a TTL — nothing refreshes them on a schedule.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -564,8 +569,13 @@ class AdrSignal(Base):
     n_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # a+b — all reports naming this drug, so the ratio can be re-derived.
     n_drug_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # No `onupdate`: every writer of this table upserts, and onupdate does not
+    # fire on INSERT .. ON CONFLICT DO UPDATE -- Core sees an insert and the
+    # conflict branch is the database's business. Leaving it on reads as a
+    # guarantee that this stamp maintains itself, and it does not, so the
+    # writer sets it explicitly. Same trap as DrugRiskProfile.extracted_at.
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (UniqueConstraint("rxcui", "reaction", name="uq_adr_signal_natural"),)
