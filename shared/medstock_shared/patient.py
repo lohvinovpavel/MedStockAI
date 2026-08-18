@@ -568,6 +568,15 @@ def _class_of(rxcui: str) -> str | None:
     return DRUG_CLASS.get(str(rxcui))
 
 
+def class_of(rxcui: str) -> str | None:
+    """The therapeutic class of a drug, or None if the map does not know it.
+
+    Public because the organ diagram needs it: a duplicate-class finding shades
+    whichever organ that class stacks on, and the caller has only the rxcui.
+    """
+    return _class_of(rxcui)
+
+
 def _band_index(band: str) -> int | None:
     return EGFR_ORDER.index(band) if band in EGFR_ORDER else None
 

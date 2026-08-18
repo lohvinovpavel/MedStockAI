@@ -17,6 +17,7 @@ from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
 from medstock_shared.models import AssessmentLog, Patient, PrognosisAssumption
+from medstock_shared.organs import impacts as organ_impacts
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
@@ -24,6 +25,7 @@ from medstock_shared.patient import (
     PatientVector,
     assess,
     avoided_ingredient_warnings,
+    class_of,
     patient_row_to_vector,
     plan_demand,
     profile_avoided_ingredients,
@@ -86,6 +88,15 @@ class CartItem(BaseModel):
 class CartCheckBody(BaseModel):
     patient_id: uuid.UUID
     items: list[CartItem] = Field(default_factory=list)
+
+
+class AnalogueCheckBody(BaseModel):
+    patient_id: uuid.UUID
+    candidates: list[CartItem] = Field(default_factory=list)
+    # The cart line these are offered against. Recorded, not used in scoring:
+    # a substitute is assessed on its own merits, not relative to what it
+    # replaces, or a bad line would make a worse one look acceptable.
+    replacing: str | None = Field(default=None, max_length=32)
 
 
 def _norm_codes(codes: list[str] | None) -> list[str]:
@@ -323,10 +334,21 @@ def post_assess(
     profiles = approved_profiles(candidates)
     pgx = pgx_for(candidates)
     adr = adr_signals_for(candidates)
-    results = [
-        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr).as_dict()
+    assessments = [
+        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         for rxcui in candidates
     ]
+    results = [a.as_dict() for a in assessments]
+    # Where on the body each result bears, so the front-end can shade organs
+    # instead of asking a physician to read ten finding codes. Derived from the
+    # findings this assessment produced and nothing else -- a drug's usual
+    # target organ is not shaded unless a finding put it there.
+    for result, assessment in zip(results, assessments, strict=True):
+        shaded, unmapped = organ_impacts(assessment.findings, class_of(result["rxcui"]))
+        result["organs"] = [i.as_dict() for i in shaded]
+        # Named, not hidden: a diagram that omits a finding invites the reader
+        # to believe the organs are the whole story.
+        result["organs_unmapped"] = unmapped
     request_id = record_assessment(principal, patient, results)
     return {
         "ruleset_version": RULESET_VERSION,
@@ -808,6 +830,89 @@ def cart_check(
         # Mirrors /assess. Zero here is meaningful: it distinguishes "no approved
         # profile covers this cart" from "the prognosis stage never ran", which
         # otherwise look identical from a response with no PP-3 findings in it.
+        "risk_profiles_applied": len(profiles),
+        "pgx_guidelines_applied": len(pgx),
+        "adr_signals_applied": len(adr),
+    }
+
+
+@patients.post("/analogue-check")
+def analogue_check(
+    body: AnalogueCheckBody,
+    principal: Principal = Depends(require("patient:read")),
+) -> dict:
+    """Assess analogue candidates against the patient who would receive them.
+
+    The prescribe workspace already narrows analogues by the one ingredient
+    `/cart-check` flagged, then ranks what is left by hospital stock. Nothing on
+    that path looks at the patient again. So the candidate sitting at the top —
+    the one "Replace with analogue" swaps in — is the one there is most of, and
+    it can still carry a CPIC contraindication for this patient's phenotype, an
+    approved label risk matching their age or eGFR, an ADR signal, or an allergy
+    reached through a *different* ingredient than the excluded one.
+
+    Substituting is a prescribing decision, so it gets the same eight stages,
+    the same approved-only profile filter, and the same audit row as the cart it
+    replaces a line in. A substitute assessed more loosely than the drug it
+    replaces would make switching the way to get an unassessed drug to a patient.
+
+    Results come back **in request order**, not ranked. The caller holds the
+    stock figures this service never sees, and ordering candidates is a question
+    about safety *and* supply; answering half of it here and calling it a
+    ranking would hide which half.
+    """
+    candidates = [item.rxcui.strip() for item in body.candidates if item.rxcui.strip()]
+    if not candidates:
+        raise HTTPException(status_code=422, detail="candidates must not be empty")
+    if len(candidates) > MAX_CANDIDATES:
+        raise HTTPException(status_code=400, detail=f"at most {MAX_CANDIDATES} candidates")
+
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        row = session.get(Patient, body.patient_id)
+        if row is None or row.hospital_id != principal.hospital_id:
+            raise HTTPException(status_code=404, detail="patient not found")
+        vector = patient_row_to_vector(row)
+        patient_payload = _patient_dict(row)
+
+    # One lookup for the whole candidate list, as /cart-check does — twenty
+    # analogues must not become sixty queries.
+    profiles = approved_profiles(candidates)
+    pgx = pgx_for(candidates)
+    adr = adr_signals_for(candidates)
+
+    results: list[dict] = []
+    for item in body.candidates:
+        rxcui = item.rxcui.strip()
+        if not rxcui:
+            continue
+        assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
+        results.append(
+            {
+                "rxcui": rxcui,
+                "name": item.name,
+                "verdict": str(assessment.verdict),
+                "score": assessment.score,
+                # Which stages actually ran. A candidate assessed without the
+                # PGx stage is not the same as one that passed it, and only this
+                # tells them apart.
+                "stages_completed": list(assessment.stages_completed),
+                "findings": [_finding_dict(f) for f in assessment.findings],
+            }
+        )
+
+    request_id = record_assessment(principal, vector, results)
+
+    return {
+        "ruleset_version": RULESET_VERSION,
+        "request_id": request_id,
+        "patient": patient_payload,
+        # Echoed so a reader of the audit row can see what was being replaced,
+        # not just what was offered.
+        "replacing": body.replacing.strip() if body.replacing else None,
+        "results": results,
+        # Same three counters as /cart-check, and meaningful for the same reason:
+        # zero distinguishes "no guideline covers these candidates" from "that
+        # stage never ran", which look identical from the findings alone.
         "risk_profiles_applied": len(profiles),
         "pgx_guidelines_applied": len(pgx),
         "adr_signals_applied": len(adr),

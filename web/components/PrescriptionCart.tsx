@@ -28,6 +28,7 @@ import { StockBand } from "@/components/StockBand";
 import { apiFetch } from "@/lib/api";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
+import { BodyImpact, type OrganImpact } from "@/components/BodyImpact";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -85,6 +86,57 @@ type AnalogueHit = {
     nearest_with_stock: { name: string; quantity: number; distance_km: number } | null;
   } | null;
 };
+
+/** One candidate assessed against the patient who would receive it. */
+type AnalogueVerdict = {
+  rxcui: string;
+  verdict: string;
+  score?: number | null;
+  findings: Warning[];
+  // Where on the body this candidate bears, derived server-side from the
+  // findings above. Optional because an older patient-profiling will not send
+  // it, and a missing diagram is better than a guessed one.
+  organs?: OrganImpact[];
+  organs_unmapped?: string[];
+};
+
+// Higher is safer. Mirrors the verdicts patient-profiling returns; a blocked
+// candidate carries no score at all, so ordering has to come from the verdict
+// rather than the number.
+const VERDICT_SAFETY: Record<string, number> = {
+  blocked: 0,
+  red: 1,
+  amber: 2,
+  green: 3,
+};
+
+// A candidate nobody assessed is not a candidate that passed. It sorts below
+// green so an assessed-safe option always outranks an unknown one, and above
+// amber so an unknown is not treated as a finding against it.
+const UNASSESSED_SAFETY = 2.5;
+
+/**
+ * Safest first, then most stock.
+ *
+ * The analogue service ranks purely by hospital quantity, because it never sees
+ * the patient. Once each candidate has been assessed, keeping that order would
+ * put the drug there is most of above the one that is right for this person —
+ * directly under the physician's cursor. Blocked candidates stay in the list
+ * and sort last: dropping them would hide that an obvious substitute was
+ * considered and ruled out, which is a thing worth knowing.
+ */
+function bySafetyThenStock(
+  verdicts: Map<string, AnalogueVerdict>,
+): (a: AnalogueHit, b: AnalogueHit) => number {
+  const safety = (h: AnalogueHit) => {
+    const verdict = verdicts.get(h.rxcui)?.verdict;
+    return verdict === undefined
+      ? UNASSESSED_SAFETY
+      : (VERDICT_SAFETY[verdict] ?? UNASSESSED_SAFETY);
+  };
+  // Descending safety, then descending stock.
+  return (a, b) => safety(b) - safety(a) || (b.quantity ?? 0) - (a.quantity ?? 0);
+}
 
 type CartState = {
   patientId: string | null;
@@ -169,6 +221,12 @@ export function PrescriptionCart() {
   const [analogueUsedAi, setAnalogueUsedAi] = useState(false);
   const [analogueRationaleUnavailable, setAnalogueRationaleUnavailable] =
     useState(false);
+  const [analogueVerdicts, setAnalogueVerdicts] = useState<Map<string, AnalogueVerdict>>(
+    new Map(),
+  );
+  // Distinct from an empty verdict map: "not assessed" and "assessed, nothing
+  // found" must not render the same, or a failed check looks like a clean bill.
+  const [analogueCheckFailed, setAnalogueCheckFailed] = useState(false);
 
   const [prescription, setPrescription] = useState<PrescriptionSnapshot | null>(null);
 
@@ -393,6 +451,8 @@ export function PrescriptionCart() {
     setAnalogues([]);
     setAnalogueUsedAi(false);
     setAnalogueRationaleUnavailable(false);
+    setAnalogueVerdicts(new Map());
+    setAnalogueCheckFailed(false);
     const line = resultsByRxcui.get(item.rxcui);
     const hasContraindication = (line?.warnings?.length ?? 0) > 0;
     const exclude =
@@ -415,14 +475,51 @@ export function PrescriptionCart() {
         "analogue",
         `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}&exclude_ingredient=${encodeURIComponent(exclude)}&facility_id=${facility.id}`,
       );
-      setAnalogues(data.items ?? []);
+      const items: AnalogueHit[] = data.items ?? [];
       setAnalogueUsedAi(Boolean(data.use_ai));
       setAnalogueRationaleUnavailable(Boolean(data.rationale_unavailable));
+
+      // Excluding one ingredient is not a safety check. These candidates have
+      // been narrowed and ranked by stock, and nothing on that path has looked
+      // at the patient — so assess them before offering one as a swap.
+      const verdicts = await checkAnaloguesForPatient(item.rxcui, items);
+      setAnalogueVerdicts(verdicts);
+      setAnalogues(verdicts.size ? [...items].sort(bySafetyThenStock(verdicts)) : items);
     } catch (err) {
       setAnalogueError(err instanceof Error ? err.message : "analogue search failed");
     } finally {
       setAnalogueBusy(false);
     }
+  }
+
+  /**
+   * Assess analogue candidates against the selected patient.
+   *
+   * Failure here degrades to an unannotated list rather than losing the
+   * analogues: the physician still gets the candidates they asked for, and the
+   * UI says the safety check did not run instead of showing nothing and
+   * implying there was nothing to show.
+   */
+  async function checkAnaloguesForPatient(
+    replacing: string,
+    items: AnalogueHit[],
+  ): Promise<Map<string, AnalogueVerdict>> {
+    const verdicts = new Map<string, AnalogueVerdict>();
+    if (!cart.patientId || items.length === 0) return verdicts;
+    try {
+      const checked = await apiFetch("patients", "/analogue-check", {
+        method: "POST",
+        body: JSON.stringify({
+          patient_id: cart.patientId,
+          replacing,
+          candidates: items.map((i) => ({ rxcui: i.rxcui, name: i.name })),
+        }),
+      });
+      for (const row of checked?.results ?? []) verdicts.set(row.rxcui, row);
+    } catch {
+      setAnalogueCheckFailed(true);
+    }
+    return verdicts;
   }
 
   function replaceWithAnalogue(itemId: string, hit: AnalogueHit) {
@@ -771,9 +868,24 @@ export function PrescriptionCart() {
                             avoided ingredient).
                           </p>
                         )}
+                        {analogueCheckFailed && (
+                          <p className="text-xs text-destructive">
+                            These candidates could not be checked against the patient — they are
+                            shown unranked, with no safety verdict.
+                          </p>
+                        )}
                         <ul className="flex flex-col gap-2">
-                          {analogues.map((a) => (
-                            <li key={a.rxcui} className="flex items-start justify-between gap-3 rounded-md border p-2.5">
+                          {analogues.map((a) => {
+                            const checked = analogueVerdicts.get(a.rxcui);
+                            const blocked = checked?.verdict === "blocked";
+                            return (
+                            <li
+                              key={a.rxcui}
+                              className={cn(
+                                "flex items-start justify-between gap-3 rounded-md border p-2.5",
+                                blocked && "border-destructive/40 bg-destructive/5",
+                              )}
+                            >
                               <div className="min-w-0">
                                 <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                                   {a.name}
@@ -793,6 +905,55 @@ export function PrescriptionCart() {
                                       : ""}
                                   </p>
                                 ) : null}
+                                {checked ? (
+                                  <p
+                                    className={cn(
+                                      "text-[11px]",
+                                      blocked
+                                        ? "font-medium text-destructive"
+                                        : "text-muted-foreground",
+                                    )}
+                                  >
+                                    for this patient: {checked.verdict}
+                                    {checked.score != null ? ` · score ${checked.score}` : ""}
+                                    {checked.findings.length
+                                      ? ` · ${checked.findings.length} finding${checked.findings.length === 1 ? "" : "s"}`
+                                      : ""}
+                                  </p>
+                                ) : (
+                                  <p className="text-[11px] text-muted-foreground">
+                                    not assessed for this patient
+                                  </p>
+                                )}
+                                {/* The reasons behind a verdict, not just its colour — the
+                                    same basis the cart line shows for the drug being replaced. */}
+                                {/* Keyed by position as well as code: two risk factors
+                                    from one label share a code, and a bare code would
+                                    collide. */}
+                                {checked?.findings.map((f, i) => (
+                                  <p
+                                    key={`${f.code}-${i}`}
+                                    className="text-[11px] text-muted-foreground"
+                                  >
+                                    {f.severity}: {f.message}
+                                  </p>
+                                ))}
+                                {/* The same findings on a torso. Ten codes make a
+                                    physician assemble the anatomy themselves; the
+                                    shading says "kidneys and liver" at a glance.
+                                    Only rendered when the assessment produced organ
+                                    findings — an empty body would read as "checked
+                                    and clear", which is not the same as "no
+                                    organ-specific finding". */}
+                                {checked?.organs && checked.organs.length > 0 && (
+                                  <div className="mt-2">
+                                    <BodyImpact
+                                      organs={checked.organs}
+                                      unmapped={checked.organs_unmapped ?? []}
+                                      compact
+                                    />
+                                  </div>
+                                )}
                                 {a.reason && <p className="text-xs">{a.reason}</p>}
                                 {a.citation && (
                                   <p className="text-[11px] text-muted-foreground">cite: {a.citation}</p>
@@ -801,13 +962,21 @@ export function PrescriptionCart() {
                               <Button
                                 type="button"
                                 size="sm"
-                                className="h-7 shrink-0 text-xs"
+                                variant={blocked ? "outline" : "default"}
+                                className={cn(
+                                  "h-7 shrink-0 text-xs",
+                                  blocked && "border-destructive/40 text-destructive",
+                                )}
                                 onClick={() => replaceWithAnalogue(item.id, a)}
                               >
-                                Replace with analogue
+                                {/* Still clickable when blocked. /cart-check is warnings-only
+                                    by design and the physician prescribes, not the tool —
+                                    but the label should not pretend this is a routine swap. */}
+                                {blocked ? "Replace anyway" : "Replace with analogue"}
                               </Button>
                             </li>
-                          ))}
+                            );
+                          })}
                         </ul>
                         {!analogueBusy && analogues.length === 0 && !analogueError && (
                           <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
