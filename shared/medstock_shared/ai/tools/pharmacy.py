@@ -128,6 +128,86 @@ def check_stock_by_ndc(args: CheckStockArgs, principal: Principal) -> dict:
     }
 
 
+class SweepShelfArgs(BaseModel):
+    status_filter: str = Field(
+        "attention",
+        description="'attention' for red/yellow only (default), 'all' for every stocked NDC",
+    )
+
+
+# A hospital's whole formulary would blow a turn's context. This is a summary
+# tool, not a bulk export -- see _KEEP_LIMIT above for the same idea applied
+# to search_analogues_rxnorm.
+_SWEEP_LIMIT = 50
+
+
+@tool(
+    permission="inventory:read",
+    description=(
+        "Review the compliance status of every NDC this hospital currently "
+        "holds in stock, and report only the ones that need attention (red "
+        "or yellow, plus anything with no certification record at all). Use "
+        "when the user asks what on the shelf needs attention or has gone "
+        "red, rather than about one drug."
+    ),
+    args=SweepShelfArgs,
+)
+def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        ndcs = [
+            str(ndc)
+            for ndc in session.scalars(
+                select(StockSnapshot.ndc)
+                .where(StockSnapshot.quantity > 0)
+                .distinct()
+            ).all()
+        ]
+    if not ndcs:
+        return {"checked": 0, "flagged": [], "unknown": [], "truncated": False}
+    totals = _stock_totals(principal, ndcs)
+
+    # Reference tables, no hospital_id -- same split verify_batch_cert
+    # documents.
+    with Session(engine) as session:
+        records = {
+            str(r.ndc): r
+            for r in session.execute(
+                select(DrugCertification).where(DrugCertification.ndc.in_(ndcs))
+            ).scalars()
+        }
+        findings_by_ndc: dict[str, list[Finding]] = {}
+        for ndc, code in session.execute(
+            select(CertificationFinding.ndc, CertificationFinding.code).where(
+                CertificationFinding.ndc.in_(ndcs)
+            )
+        ):
+            findings_by_ndc.setdefault(str(ndc), []).append(
+                Finding(code=code, message="", source="")
+            )
+
+    flagged, unknown = [], []
+    for ndc in ndcs:
+        record = records.get(ndc)
+        if record is None:
+            unknown.append(ndc)
+            continue
+        detail = signal(findings_by_ndc.get(ndc, []))
+        status = record.status  # stored colour wins, same as verify_batch_cert
+        if args.status_filter != "all" and status not in ("red", "yellow"):
+            continue
+        flagged.append(
+            {"ndc": ndc, "status": status, "quantity": totals.get(ndc, 0), "codes": detail["codes"]}
+        )
+    flagged.sort(key=lambda row: (row["status"] != "red", -row["quantity"]))
+
+    return {
+        "checked": len(ndcs),
+        "flagged": flagged[:_SWEEP_LIMIT],
+        "unknown": unknown[:_SWEEP_LIMIT],
+        "truncated": len(flagged) > _SWEEP_LIMIT or len(unknown) > _SWEEP_LIMIT,
+    }
+
+
 class VerifyBatchCertArgs(BaseModel):
     ndc: str = Field(description="NDC of the drug/batch to check compliance status for")
 

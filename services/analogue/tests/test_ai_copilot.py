@@ -349,12 +349,66 @@ def test_check_stock_by_ndc_sums_across_locations(monkeypatch):
     }
 
 
+def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
+    from contextlib import contextmanager
+
+    from medstock_shared.ai.tools.pharmacy import SweepShelfArgs, sweep_shelf_certificates
+
+    ndcs = ["red-ndc", "green-ndc", "unknown-ndc"]
+
+    @contextmanager
+    def fake_tenant_scope(*args, **kwargs):
+        session = MagicMock()
+        session.scalars.return_value.all.return_value = ndcs
+        session.execute.return_value.all.return_value = [("red-ndc", 10), ("green-ndc", 5)]
+        yield session
+
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy.session_scope", fake_tenant_scope
+    )
+
+    records = [
+        SimpleNamespace(ndc="red-ndc", status="red"),
+        SimpleNamespace(ndc="green-ndc", status="green"),
+    ]
+    findings = [("red-ndc", "RECALL_CLASS_I")]
+    responses = iter([SimpleNamespace(scalars=lambda: records), findings])
+
+    class _FakeReferenceSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, stmt):
+            return next(responses)
+
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy.Session", lambda engine: _FakeReferenceSession()
+    )
+
+    result = sweep_shelf_certificates(SweepShelfArgs(), PHARMACIST)
+    assert result["checked"] == 3
+    assert result["unknown"] == ["unknown-ndc"]
+    assert [f["ndc"] for f in result["flagged"]] == ["red-ndc"]
+    assert result["flagged"][0]["codes"] == ["RECALL_CLASS_I"]
+    assert result["flagged"][0]["quantity"] == 10
+    # green-ndc never appears anywhere -- neither flagged nor treated as unknown
+    assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
+
+
 def test_declarations_are_scoped_to_the_caller_role():
     """No mocking -- the real registry, populated by the real pharmacy.py."""
     from medstock_shared.ai.tools import declarations_for
 
     names = {d["name"] for d in declarations_for(PHARMACIST)}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert", "check_stock_by_ndc"}
+    assert names == {
+        "search_analogues_rxnorm",
+        "verify_batch_cert",
+        "check_stock_by_ndc",
+        "sweep_shelf_certificates",
+    }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
@@ -366,7 +420,12 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
 
     assert denied_tools_for(PHARMACIST) == []
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert", "check_stock_by_ndc"}
+    assert names == {
+        "search_analogues_rxnorm",
+        "verify_batch_cert",
+        "check_stock_by_ndc",
+        "sweep_shelf_certificates",
+    }
 
 
 def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch, audit_calls):
@@ -393,4 +452,4 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
     assert "don't have permission" in instruction
     # still-granted tools stay callable, not just named in the prompt
     declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
-    assert declared_names == {"search_analogues_rxnorm", "check_stock_by_ndc"}
+    assert declared_names == {"search_analogues_rxnorm", "check_stock_by_ndc", "sweep_shelf_certificates"}

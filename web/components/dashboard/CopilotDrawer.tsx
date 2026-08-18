@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Loader2, Plane, Plus, Repeat2, ShieldCheck, Send, Truck, X, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Loader2, Plane, Plus, Repeat2, ShieldCheck, Send, Siren, Truck, X, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -93,7 +93,18 @@ const QUICK_ACTIONS = [
   { key: "po", label: "Generate PO", icon: FileText },
   { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
   { key: "certificate", label: "Check Certificate", icon: ShieldCheck },
+  { key: "shortage", label: "Shortage Brief", icon: Siren },
 ] as const;
+
+// PH-1 (docs/ai_workflows.md): one question chains the three real copilot
+// tools (check_stock_by_ndc, search_analogues_rxnorm, verify_batch_cert) in
+// one turn instead of four screens. Unlike the other quick actions this goes
+// through streamReply/`/copilot/chat` -- there is no mock reply to write,
+// the tools already exist and the focus context is already injected.
+const SHORTAGE_BRIEF_PROMPT =
+  "For the drug currently in context: report on-hand stock by location, then find " +
+  "substitutes ranked by what we hold, then check the compliance status of the top " +
+  "candidate. Say plainly if any step returns nothing.";
 
 /**
  * One NDC's traffic light, from the same `GET /status` the shelf uses.
@@ -480,12 +491,18 @@ export function CopilotDrawer() {
   }, [messages]);
 
   function runAction(action: string) {
-    if (focus) {
-      setMessages((m) => [...m, { id: id(), role: "user", text: `${QUICK_ACTIONS.find((a) => a.key === action)?.label} — ${focus.label}` }]);
-    } else {
-      setMessages((m) => [...m, { id: id(), role: "user", text: QUICK_ACTIONS.find((a) => a.key === action)?.label ?? action }]);
-    }
+    if (pending) return; // one stream at a time, same rule send() follows
+    const label = QUICK_ACTIONS.find((a) => a.key === action)?.label ?? action;
+    const priorMessages = messages;
+    setMessages((m) => [...m, { id: id(), role: "user", text: focus ? `${label} — ${focus.label}` : label }]);
     setPending(true);
+    // Shortage Brief is the one quick action wired to the real copilot
+    // (docs/ai_workflow_impl_plan.md, PH-1) -- the other three stay on
+    // replyFor()'s mock data until they're wired the same way.
+    if (action === "shortage") {
+      void streamReply(SHORTAGE_BRIEF_PROMPT, priorMessages);
+      return;
+    }
     window.setTimeout(async () => {
       const reply = await replyFor(action, focus, facilityId);
       setMessages((m) => [...m, reply]);
