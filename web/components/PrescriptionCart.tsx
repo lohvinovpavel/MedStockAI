@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { StockBand } from "@/components/StockBand";
 import { apiFetch } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -729,7 +730,13 @@ export function PrescriptionCart() {
                           {analogues.map((a) => (
                             <li key={a.rxcui} className="flex items-start justify-between gap-3 rounded-md border p-2.5">
                               <div className="min-w-0">
-                                <p className="text-sm font-medium">{a.name}</p>
+                                <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                                  {a.name}
+                                  <span className="flex items-center gap-1.5 font-normal">
+                                    <span className="text-xs text-muted-foreground">Shelf</span>
+                                    <StockBand status={a.stock_status} quantity={a.quantity} />
+                                  </span>
+                                </p>
                                 <p className="font-mono text-[11px] text-muted-foreground">RxCUI {a.rxcui}</p>
                                 {a.reason && <p className="text-xs">{a.reason}</p>}
                                 {a.citation && (

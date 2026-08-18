@@ -148,7 +148,8 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         Ingredient: other strengths and brands of the same active ingredient. Full: a
         different ingredient in the same RxClass (ATC when available). Stock is attached
         automatically — in-stock first, each row with High / Normal / Low / Out of stock.
-        Use AI filters the Full list; turn it off to see every candidate.
+        Use AI works only in Full mode and keeps up to 5 substitutes with a
+        reason; turn it off to see every candidate. Ingredient never calls AI.
       </p>
       <Button type="button" size="sm" className="h-8 w-fit text-xs" onClick={() => void load()} disabled={busy}>
         {busy ? "Finding analogues…" : "Find analogues"}
@@ -156,7 +157,14 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
       {rationaleUnavailable ? (
         <Callout tone="warning">
-          Rationale unavailable. Showing the unfiltered Full list.
+          Use AI could not filter this list, so this is every Full candidate — not
+          the top 5. Turn Use AI off for the same unfiltered list, or try again.
+        </Callout>
+      ) : null}
+      {items && !rationaleUnavailable && mode === "full" && useAi ? (
+        <Callout tone="normal">
+          AI kept {items.length} substitute{items.length === 1 ? "" : "s"} (max 5).
+          Each row should include a short reason.
         </Callout>
       ) : null}
       {items ? (
@@ -167,8 +175,9 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         ) : (
           <div className="overflow-hidden rounded-lg border bg-card">
             <p className="border-b px-3 py-2 text-[11px] text-muted-foreground">
-              In-stock first (High → Normal → Low), then Out of stock. Quantity is
-              packs on the shelf. Nothing is selected automatically.
+              {items.length} row{items.length === 1 ? "" : "s"}. In-stock first
+              (High → Normal → Low), then Out of stock. Quantity is packs on the
+              shelf. Nothing is selected automatically.
             </p>
             <Table>
               <TableHeader>
@@ -176,14 +185,19 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
                   <TableHead>Preparation</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Quantity</TableHead>
-                  <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.map((row) => (
                   <TableRow key={row.rxcui}>
                     <TableCell>
-                      <p className="font-medium">{row.name}</p>
+                      <p className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{row.name}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-xs font-normal text-muted-foreground">Shelf</span>
+                          <StockBand status={row.stock_status} quantity={row.quantity} />
+                        </span>
+                      </p>
                       <p className="font-mono text-[11px] text-muted-foreground">
                         RxCUI {row.rxcui} ·{" "}
                         <Link
@@ -203,9 +217,6 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
                     <TableCell className="font-mono text-xs">{row.tty}</TableCell>
                     <TableCell className={cn("tabular-nums", !row.in_stock && "text-muted-foreground")}>
                       {row.quantity}
-                    </TableCell>
-                    <TableCell>
-                      <StockBand status={row.stock_status} quantity={row.quantity} />
                     </TableCell>
                   </TableRow>
                 ))}

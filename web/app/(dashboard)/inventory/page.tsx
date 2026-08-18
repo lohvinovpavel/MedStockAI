@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
@@ -98,6 +98,86 @@ function expiryTone(days: number): StatusTone {
 const OTHER_SKU = "__other__";
 
 type SortKey = "drugName" | "batchNumber" | "stock" | "burn" | "risk" | "expiry";
+
+// Words that appear in RxNorm display names but should not drive the
+// inventory filter — otherwise "Oral Tablet" would match half the shelf.
+const FILTER_NOISE = new Set([
+  "mg",
+  "mcg",
+  "ug",
+  "ml",
+  "g",
+  "l",
+  "iu",
+  "meq",
+  "oral",
+  "tablet",
+  "tablets",
+  "capsule",
+  "capsules",
+  "injection",
+  "injectable",
+  "solution",
+  "suspension",
+  "cream",
+  "ointment",
+  "gel",
+  "patch",
+  "pack",
+  "packs",
+  "film",
+  "coated",
+  "chewable",
+  "delayed",
+  "extended",
+  "release",
+  "and",
+  "with",
+  "for",
+]);
+
+function significantFilterTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[\s/,+()]+/)
+    .map((token) => token.replace(/[^a-z0-9-]/g, ""))
+    .filter((token) => token.length >= 4 && !FILTER_NOISE.has(token) && !/^\d/.test(token));
+}
+
+function itemMatchesInventoryQuery(
+  item: InventoryItem,
+  search: string,
+  rxcui: string | null,
+): boolean {
+  const q = search.trim().toLowerCase();
+  const rid = rxcui?.trim() || null;
+  if (!q && !rid) return true;
+  if (rid && item.analogues.some((option) => option.rxcui === rid)) return true;
+  if (!q) return false;
+  if (
+    item.drugName.toLowerCase().includes(q) ||
+    item.inn.toLowerCase().includes(q) ||
+    item.atcCode.toLowerCase().includes(q)
+  ) {
+    return true;
+  }
+  if (
+    item.analogues.some(
+      (option) =>
+        option.drugName.toLowerCase().includes(q) ||
+        option.inn.toLowerCase().includes(q) ||
+        option.rxcui.toLowerCase() === q,
+    )
+  ) {
+    return true;
+  }
+  const tokens = significantFilterTokens(q);
+  if (tokens.length === 0) return false;
+  const haystack = `${item.drugName} ${item.inn} ${item.analogues
+    .map((option) => `${option.drugName} ${option.inn}`)
+    .join(" ")}`.toLowerCase();
+  return tokens.some((token) => haystack.includes(token));
+}
 
 // Risk sorts by days-of-supply (the number actually driving the badge), not
 // the tone label — "most urgent first" is what a pharmacist wants from this
@@ -524,11 +604,24 @@ export default function InventoryPage() {
   const { facilityId, facility } = useFacility();
   const { itemsFor } = useInventory();
   const [search, setSearch] = useState("");
+  const [rxcuiFilter, setRxcuiFilter] = useState<string | null>(null);
   const [status, setStatus] = useState<"all" | StockRisk>("all");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [certItem, setCertItem] = useState<InventoryItem | null>(null);
   const [sort, setSort] = useState<SortState<SortKey>>(null);
+
+  // Deep-link from Analogues "Check inventory" (?name=&rxcui=). Read
+  // location.search in an effect rather than useSearchParams() — that hook
+  // forces a Suspense boundary that never resumes on this already-"use client"
+  // route (same pattern as Audit / Forecasts).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const name = params.get("name") ?? "";
+    const rxcui = params.get("rxcui");
+    if (name) setSearch(name);
+    if (rxcui) setRxcuiFilter(rxcui);
+  }, []);
 
   const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
 
@@ -568,10 +661,7 @@ export default function InventoryPage() {
 
   const filtered = useMemo(() => {
     return items.filter((item) => {
-      const q = search.trim().toLowerCase();
-      if (q && !(item.drugName.toLowerCase().includes(q) || item.inn.toLowerCase().includes(q) || item.atcCode.toLowerCase().includes(q))) {
-        return false;
-      }
+      if (!itemMatchesInventoryQuery(item, search, rxcuiFilter)) return false;
       if (status !== "all" && stockRisk(item) !== status) return false;
       if (range?.from) {
         const expiry = new Date(item.expiryDate);
@@ -580,7 +670,20 @@ export default function InventoryPage() {
       }
       return true;
     });
-  }, [items, search, status, range]);
+  }, [items, search, rxcuiFilter, status, range]);
+
+  function clearInventoryDeepLink() {
+    if (!rxcuiFilter && !window.location.search) return;
+    setRxcuiFilter(null);
+    if (window.location.search) {
+      router.replace("/inventory", { scroll: false });
+    }
+  }
+
+  function onSearchChange(value: string) {
+    setSearch(value);
+    clearInventoryDeepLink();
+  }
 
   const sorted = useMemo(() => {
     if (!sort) return filtered;
@@ -623,11 +726,25 @@ export default function InventoryPage() {
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Filter by SKU, INN, or ATC code…"
-            className="h-8 w-64 pl-8 text-xs"
+            className="h-8 w-80 pl-8 text-xs"
           />
         </div>
+        {search.trim() || rxcuiFilter ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => {
+              setSearch("");
+              clearInventoryDeepLink();
+            }}
+          >
+            Clear filter
+          </Button>
+        ) : null}
 
         <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
           <SelectTrigger size="sm" className="h-8 w-36 text-xs">
@@ -798,7 +915,11 @@ export default function InventoryPage() {
                   <TableCell colSpan={8} className="py-10 text-center">
                     <SearchX className="mx-auto size-6 text-muted-foreground/50" />
                     <p className="mt-2 text-xs font-medium">No SKUs match the current filters</p>
-                    <p className="text-[11px] text-muted-foreground">Try clearing the status filter or expiry date range.</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {search.trim() || rxcuiFilter
+                        ? "Try clearing the search box, status filter, or expiry date range."
+                        : "Try clearing the status filter or expiry date range."}
+                    </p>
                   </TableCell>
                 </TableRow>
               )}

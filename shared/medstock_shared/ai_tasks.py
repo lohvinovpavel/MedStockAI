@@ -113,12 +113,12 @@ TASKS: dict[str, AITask] = {
         owner="Pavlo",
         prompt=(
             "Given the drug {drug_name} (RxCUI {rxcui}) which is in shortage, filter the "
-            "therapeutic alternatives below. Keep about 5 commonly used substitutes; drop "
-            "the rest. Do not invent rxcui values. Return JSON: "
-            '{{"source_text": str, '
-            '"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
-            "Copy source_text from the Source text section unchanged. Every citation must "
-            "be a verbatim sentence from the source text.\n\n"
+            "therapeutic alternatives below. Keep at most 5 commonly used substitutes; "
+            "drop the rest. Do not invent rxcui values. Do not copy source_text into the "
+            "JSON — the caller already has it. Return only: "
+            '{{"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
+            "items must have 1–5 entries. rationale is one short sentence. citation is a "
+            "verbatim substring of the Source text, at most 80 characters.\n\n"
             "Candidates: {candidates}\nSource text: {source_text}"
         ),
         validate=_citation_must_be_verbatim,

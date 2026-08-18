@@ -12,6 +12,7 @@ so it does not block the event loop.
 import hashlib
 import json
 import logging
+import re
 
 from google import genai
 from sqlalchemy import select
@@ -54,6 +55,36 @@ class _Retryable(Exception):
     """429 only. 5xx is an outage — fail so the caller can degrade this request."""
 
 
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_FENCE_OPEN = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
+_FENCE_CLOSE = re.compile(r"\s*```$")
+
+
+def parse_model_json(text: str | None) -> dict:
+    """Parse Gemini's JSON object. Fence wrappers and a trailing comma are
+    stripped; anything that is not a JSON object still raises JSONDecodeError
+    so ask_ai can fail into the caller's degrade path."""
+    if text is None or not str(text).strip():
+        raise json.JSONDecodeError("empty model response", "", 0)
+    raw = str(text).strip()
+    if raw.startswith("```"):
+        raw = _FENCE_OPEN.sub("", raw)
+        raw = _FENCE_CLOSE.sub("", raw)
+        raw = raw.strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        snippet = _TRAILING_COMMA.sub(r"\1", raw[start : end + 1])
+        obj = json.loads(snippet)
+    if not isinstance(obj, dict):
+        raise json.JSONDecodeError("expected a JSON object", raw, 0)
+    return obj
+
+
 @retry(
     retry=retry_if_exception_type(_Retryable),
     wait=wait_exponential(multiplier=2, min=2, max=30),
@@ -80,7 +111,7 @@ def _generate_json(prompt: str, timeout_seconds: float | None = None) -> dict:
         if status == 429:
             raise _Retryable(str(exc)) from exc
         raise
-    return json.loads(response.text)
+    return parse_model_json(response.text)
 
 
 def _cache_get(task_name: str, key: str) -> dict | None:

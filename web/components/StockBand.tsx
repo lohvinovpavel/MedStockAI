@@ -16,16 +16,25 @@ const TONE: Record<StockStatus, StatusTone> = {
   high: "surplus",
 };
 
+export function coerceStockStatus(value: string | undefined | null): StockStatus {
+  if (value === "none" || value === "low" || value === "normal" || value === "high") {
+    return value;
+  }
+  return "none";
+}
+
 export function StockBand({
   status,
   quantity,
 }: {
-  status: StockStatus;
-  quantity: number;
+  status: StockStatus | string | undefined | null;
+  quantity: number | undefined | null;
 }) {
+  const resolved = coerceStockStatus(status);
+  const qty = typeof quantity === "number" && Number.isFinite(quantity) ? quantity : 0;
   return (
-    <StatusBadge tone={TONE[status]}>
-      {LABELS[status]} · {quantity}
+    <StatusBadge tone={TONE[resolved]}>
+      {LABELS[resolved]} · {qty}
     </StatusBadge>
   );
 }
