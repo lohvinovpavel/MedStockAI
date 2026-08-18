@@ -152,14 +152,25 @@ export function useRuleset() {
 
   useEffect(() => {
     let cancelled = false;
+
     rulesetCache ??= apiFetch("compliance", "/ruleset")
       .then((body) => body as Ruleset)
-      // Null, not a throw: the explanation degrades to the wording that does
-      // not depend on the ruleset, and the dialog still opens.
-      .catch(() => null);
+      .catch(() => {
+        // Cache successes, never failures. Holding on to a rejected fetch means
+        // one blip while compliance restarts costs every green badge its "N
+        // rules evaluated" line for the rest of the session -- and the dialog
+        // would quietly fall back to the weaker wording with nothing on screen
+        // to say why. Clearing it lets the next dialog try again.
+        rulesetCache = null;
+        // Null rather than a throw: the explanation degrades to the wording
+        // that does not depend on the ruleset, and the dialog still opens.
+        return null;
+      });
+
     rulesetCache.then((body) => {
       if (!cancelled) setRuleset(body);
     });
+
     return () => {
       cancelled = true;
     };
