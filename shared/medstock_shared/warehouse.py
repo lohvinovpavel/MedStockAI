@@ -16,7 +16,22 @@ from sqlalchemy.orm import Session
 from .models import Drug, Facility, LocationCondition, StockSnapshot, StorageLocation
 
 
-def excursions(session: Session, facility_id: int | None = None) -> list[dict]:
+def excursions(session: Session, facility_id: int | str | None = None) -> list[dict]:
+    if facility_id is not None and isinstance(facility_id, str):
+        clean_fid = facility_id.removeprefix("fac-").strip()
+        if clean_fid.isdigit():
+            facility_id = int(clean_fid)
+        else:
+            fac_row = session.execute(
+                select(Facility.id).where(
+                    (Facility.code == facility_id)
+                    | (Facility.code == clean_fid)
+                    | (Facility.name.ilike(f"%{facility_id}%"))
+                )
+            ).scalars().first()
+            if fac_row is not None:
+                facility_id = fac_row
+
     temp_breach = or_(
         LocationCondition.temperature_c < Drug.storage_min_c,
         LocationCondition.temperature_c > Drug.storage_max_c,

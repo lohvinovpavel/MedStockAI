@@ -221,13 +221,29 @@ def depletion_fields(verdict: dict) -> dict:
 
 def at_risk_skus(
     session,
-    facility_id: int | None,
+    facility_id: int | str | None,
     within_days: int,
     surge_pct: int,
 ) -> dict:
     """Every stocked NDC whose days-of-supply falls at or under `within_days`
     -- the query behind `GET /at-risk` and the copilot's list_at_risk_skus
     tool, so the two can never disagree."""
+    if facility_id is not None and isinstance(facility_id, str):
+        clean_fid = facility_id.removeprefix("fac-").strip()
+        if clean_fid.isdigit():
+            facility_id = int(clean_fid)
+        else:
+            from .models import Facility
+            fac_row = session.execute(
+                select(Facility.id).where(
+                    (Facility.code == facility_id)
+                    | (Facility.code == clean_fid)
+                    | (Facility.name.ilike(f"%{facility_id}%"))
+                )
+            ).scalars().first()
+            if fac_row is not None:
+                facility_id = fac_row
+
     stock = on_hand(session, None, facility_id)
     run = latest_run(session)
     out: dict = {
@@ -343,6 +359,14 @@ def summarize(
         "basis": None,
         "reason": None,
     }
+
+    if quantity <= 0:
+        out["days_of_supply"] = 0
+        out["days_of_supply_p90"] = 0
+        out["depletion_date"] = data_through.isoformat() if data_through else None
+        out["basis"] = "stockout"
+        out["reason"] = "out_of_stock"
+        return out
 
     surged_mean = scale(trailing_mean, surge_pct) if trailing_mean is not None else None
 

@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
+import { useCopilot } from "@/lib/copilot-context";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -173,11 +174,48 @@ export function PrescriptionCart() {
     saveCart(cart);
   }, [cart, hydrated]);
 
+  const { setFocus } = useCopilot();
+
   const resultsByRxcui = useMemo(() => {
     const map = new Map<string, CartLineResult>();
     for (const row of checkResults) map.set(row.rxcui, row);
     return map;
   }, [checkResults]);
+
+  useEffect(() => {
+    if (!selectedPatient) {
+      setFocus(null);
+      return;
+    }
+    const drug = cart.items[0];
+    const allergies = selectedPatient.allergy_codes?.length
+      ? `Allergies: ${selectedPatient.allergy_codes.join(", ")}`
+      : "No recorded allergies";
+    const conditions = selectedPatient.condition_codes?.length
+      ? `Conditions: ${selectedPatient.condition_codes.join(", ")}`
+      : "";
+    const detail = [
+      `DOB: ${selectedPatient.date_of_birth}`,
+      `Blood: ${selectedPatient.blood_group || "unknown"}`,
+      allergies,
+      conditions,
+      drug ? `Prescribing: ${drug.name} (RxCUI: ${drug.rxcui})` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    setFocus({
+      kind: "patient",
+      patientId: selectedPatient.id,
+      label: `Patient ${selectedPatient.full_name}`,
+      detail,
+      rxcui: drug?.rxcui,
+      drugName: drug?.name,
+    });
+    return () => {
+      setFocus(null);
+    };
+  }, [selectedPatient, cart.items, setFocus]);
 
   // The cart is restored from localStorage as a bare patient id, so on mount
   // there is a selection with no record behind it. Fetch that one patient

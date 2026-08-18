@@ -17,13 +17,13 @@ from sqlalchemy.orm import Session
 
 from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...auth import Principal
-from ...certification import Finding, signal
+from ...certification import RULES, Finding, signal
 from ...db import engine, session_scope
 from ...explore import explore
 from ...forecasting import HORIZON_DAYS
 from ...forecasting import at_risk_skus as _at_risk_skus
 from ...forecasting import latest_run as _latest_run
-from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
+from ...models import CertificationFinding, Drug, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
 from ...patient_assess import NOT_FOUND, UNAVAILABLE, resolve_patient_ref
 from ...patient_assess import assess_for_drug as _assess_for_drug
@@ -93,8 +93,15 @@ def search_analogues_rxnorm(args: SearchAnaloguesArgs, principal: Principal) -> 
 
     items = []
     for c in candidates:
-        qty = sum(totals.get(n, 0) for n in ndc_map.get(c["rxcui"], []))
-        items.append({"rxcui": c["rxcui"], "name": c["name"], **stock_fields(qty)})
+        candidate_ndcs = ndc_map.get(c["rxcui"], [])
+        qty = sum(totals.get(n, 0) for n in candidate_ndcs)
+        items.append({
+            "rxcui": c["rxcui"],
+            "name": c["name"],
+            "ndcs": candidate_ndcs[:3],
+            "primary_ndc": candidate_ndcs[0] if candidate_ndcs else None,
+            **stock_fields(qty),
+        })
     items.sort(key=lambda row: (-row["quantity"], row["name"].lower(), row["rxcui"]))
     return {"items": items[:_KEEP_LIMIT]}
 
@@ -107,13 +114,14 @@ def _ndcs_or_empty(rxcui: str) -> list[str]:
 
 
 class CheckStockArgs(BaseModel):
-    ndc: str = Field(description="NDC of the drug to check on-hand stock for")
+    ndc: str | None = Field(None, description="NDC of the drug to check on-hand stock for")
+    rxcui: str | None = Field(None, description="RxCUI of the drug to check on-hand stock for (if NDC is not known)")
 
 
 @tool(
     permission="inventory:read",
     description=(
-        "Look up this hospital's on-hand stock for one NDC, broken down by "
+        "Look up this hospital's on-hand stock for a drug by NDC or RxCUI, broken down by "
         "storage location. Use when the user asks how much of a drug is in "
         "stock, in addition to whatever is already shown on screen -- this "
         "reads the database directly rather than the page's last snapshot."
@@ -121,12 +129,26 @@ class CheckStockArgs(BaseModel):
     args=CheckStockArgs,
 )
 def check_stock_by_ndc(args: CheckStockArgs, principal: Principal) -> dict:
+    if args.ndc:
+        target_ndcs = [args.ndc]
+    elif args.rxcui:
+        target_ndcs = _ndcs_or_empty(args.rxcui)
+        if not target_ndcs:
+            return {
+                "rxcui": args.rxcui,
+                "total_quantity": 0,
+                "locations": [],
+                "note": "No NDCs found for this RxCUI in RxNorm",
+            }
+    else:
+        return {"error": "must provide either ndc or rxcui"}
+
     with session_scope(principal.hospital_id, principal.user_id) as session:
         rows = session.execute(
             select(StockSnapshot.location_id, StockSnapshot.quantity, StockSnapshot.updated_at)
-            .where(StockSnapshot.ndc == args.ndc)
+            .where(StockSnapshot.ndc.in_(target_ndcs))
         ).all()
-    return {
+    res = {
         "ndc": args.ndc,
         "total_quantity": sum(int(qty or 0) for _, qty, _ in rows),
         "locations": [
@@ -138,6 +160,9 @@ def check_stock_by_ndc(args: CheckStockArgs, principal: Principal) -> dict:
             for location_id, qty, updated_at in rows
         ],
     }
+    if args.rxcui is not None:
+        res["rxcui"] = args.rxcui
+    return res
 
 
 class SweepShelfArgs(BaseModel):
@@ -178,37 +203,68 @@ def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict
         return {"checked": 0, "flagged": [], "unknown": [], "truncated": False}
     totals = _stock_totals(principal, ndcs)
 
+    all_ndc_variants = list({n for ndc in ndcs for n in (ndc, ndc.replace("-", "").strip()) if n})
+
     # Reference tables, no hospital_id -- same split verify_batch_cert
     # documents.
     with Session(engine) as session:
-        records = {
-            str(r.ndc): r
-            for r in session.execute(
-                select(DrugCertification).where(DrugCertification.ndc.in_(ndcs))
-            ).scalars()
-        }
+        records_raw = session.execute(
+            select(DrugCertification).where(DrugCertification.ndc.in_(all_ndc_variants))
+        ).scalars()
+        records: dict[str, DrugCertification] = {}
+        for r in records_raw:
+            records[str(r.ndc)] = r
+            records[str(r.ndc).replace("-", "").strip()] = r
+
+        drug_names: dict[str, str] = {}
+        try:
+            for d in session.execute(
+                select(Drug.ndc, Drug.name).where(Drug.ndc.in_(all_ndc_variants))
+            ):
+                if hasattr(d, "__getitem__"):
+                    drug_names[str(d[0])] = str(d[1] or "")
+                    drug_names[str(d[0]).replace("-", "").strip()] = str(d[1] or "")
+        except Exception:
+            pass
+
         findings_by_ndc: dict[str, list[Finding]] = {}
-        for ndc, code in session.execute(
+        for ndc_val, code in session.execute(
             select(CertificationFinding.ndc, CertificationFinding.code).where(
-                CertificationFinding.ndc.in_(ndcs)
+                CertificationFinding.ndc.in_(all_ndc_variants)
             )
         ):
-            findings_by_ndc.setdefault(str(ndc), []).append(
+            k = str(ndc_val)
+            findings_by_ndc.setdefault(k, []).append(
                 Finding(code=code, message="", source="")
             )
+            k_clean = k.replace("-", "").strip()
+            if k_clean != k:
+                findings_by_ndc.setdefault(k_clean, []).append(
+                    Finding(code=code, message="", source="")
+                )
 
     flagged, unknown = [], []
     for ndc in ndcs:
-        record = records.get(ndc)
+        record = records.get(ndc) or records.get(ndc.replace("-", "").strip())
+        name = drug_names.get(ndc) or drug_names.get(ndc.replace("-", "").strip())
         if record is None:
             unknown.append(ndc)
             continue
-        detail = signal(findings_by_ndc.get(ndc, []))
+        findings_list = findings_by_ndc.get(ndc) or findings_by_ndc.get(ndc.replace("-", "").strip()) or []
+        detail = signal(findings_list)
         status = record.status  # stored colour wins, same as verify_batch_cert
         if args.status_filter != "all" and status not in ("red", "yellow"):
             continue
+        reasons = [RULES[c].explain for c in detail["codes"] if c in RULES] or detail["codes"]
         flagged.append(
-            {"ndc": ndc, "status": status, "quantity": totals.get(ndc, 0), "codes": detail["codes"]}
+            {
+                "ndc": ndc,
+                "name": name,
+                "status": status,
+                "quantity": totals.get(ndc, 0),
+                "reasons": reasons,
+                "codes": detail["codes"],
+            }
         )
     flagged.sort(key=lambda row: (row["status"] != "red", -row["quantity"]))
 
@@ -233,19 +289,42 @@ class VerifyBatchCertArgs(BaseModel):
     args=VerifyBatchCertArgs,
 )
 def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
+    clean_ndc = args.ndc.replace("-", "").strip() if args.ndc else ""
     # drug_certification has no hospital_id/RLS -- reference data, same as
     # compliance's own main.py, which is why this is a plain Session and not
     # session_scope (there is no tenant context to set).
     with Session(engine) as session:
         record = session.execute(
-            select(DrugCertification).where(DrugCertification.ndc == args.ndc)
-        ).scalar_one_or_none()
+            select(DrugCertification).where(
+                (DrugCertification.ndc == args.ndc)
+                | (DrugCertification.ndc == clean_ndc)
+            )
+        ).scalars().first()
+        try:
+            drug = session.execute(
+                select(Drug).where(
+                    (Drug.ndc == args.ndc)
+                    | (Drug.ndc == clean_ndc)
+                )
+            ).scalars().first()
+        except Exception:
+            drug = None
         if record is None:
-            return {"ndc": args.ndc, "status": "unknown", "findings": []}
+            return {
+                "ndc": args.ndc,
+                "name": getattr(drug, "name", None) if drug else None,
+                "status": "unknown",
+                "findings": [],
+                "note": "No FDA certification record is held for this NDC.",
+            }
 
         findings = (
             session.execute(
-                select(CertificationFinding).where(CertificationFinding.ndc == args.ndc)
+                select(CertificationFinding).where(
+                    (CertificationFinding.ndc == record.ndc)
+                    | (CertificationFinding.ndc == args.ndc)
+                    | (CertificationFinding.ndc == clean_ndc)
+                )
             )
             .scalars()
             .all()
@@ -254,6 +333,8 @@ def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
     detail = signal(
         [Finding(code=f.code, message=f.message, source=f.source) for f in findings]
     )
+    detail["name"] = getattr(drug, "name", None) if drug else None
+    detail["reasons"] = [RULES[c].explain for c in detail["codes"] if c in RULES] or detail["codes"]
     # Stored colour wins over the recomputed one -- it is what the last
     # ingest run decided, same rule compliance's GET /status follows.
     detail["status"] = record.status
@@ -262,7 +343,7 @@ def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
 
 
 class StorageExcursionArgs(BaseModel):
-    facility_id: int | None = Field(None, description="Limit to one facility; omit for all")
+    facility_id: int | str | None = Field(None, description="Limit to one facility by ID or code; omit for all")
 
 
 # The model narrates a breach; it does not get to decide the stock is
@@ -379,9 +460,10 @@ class AssessPatientArgs(BaseModel):
         "prior ADR history, and any approved label or pharmacogenomic "
         "findings. Use before answering whether a drug is safe to start on "
         "this patient. The verdict is the rules engine's arithmetic -- "
-        "report it verbatim, never soften, override, or recompute it. If the "
-        "verdict is 'blocked' or the drug is out of stock, "
-        "search_analogues_rxnorm is the natural next call."
+        "report it verbatim, never soften, override, or recompute it. To check "
+        "physical availability/stock of the candidate drug, call "
+        "check_stock_by_ndc(rxcui=...). If the verdict is 'blocked' or the drug "
+        "is out of stock, search_analogues_rxnorm is the natural next call."
     ),
     args=AssessPatientArgs,
 )
@@ -414,7 +496,7 @@ def explain_assessment(args: ExplainAssessmentArgs, principal: Principal) -> dic
 
 
 class AtRiskArgs(BaseModel):
-    facility_id: int | None = Field(None, description="Limit to one facility; omit for all")
+    facility_id: int | str | None = Field(None, description="Limit to one facility by ID or code; omit for all")
     within_days: int = Field(30, ge=1, le=HORIZON_DAYS, description="Only SKUs depleting within this many days")
     surge_pct: int = Field(100, ge=100, le=300, description="100 = baseline demand; >100 = a surge scenario")
 
@@ -436,17 +518,24 @@ def list_at_risk_skus(args: AtRiskArgs, principal: Principal) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
         result = _at_risk_skus(session, args.facility_id, args.within_days, args.surge_pct)
     items = result["items"]
-    return {
+    res = {
         "run_id": result["run_id"],
         "data_through": result["data_through"],
         "checked": len(items),
         "items": items[:_AT_RISK_LIMIT],
         "truncated": len(items) > _AT_RISK_LIMIT,
     }
+    if not result["run_id"]:
+        res["note"] = (
+            "No forecast run has been computed for this hospital yet. "
+            "Depletion estimates cannot be projected without a trained forecast run or consumption history. "
+            "Advise the user that they can trigger a forecast run from the Forecasts page."
+        )
+    return res
 
 
 class ProposeRerunArgs(BaseModel):
-    facility_id: int | None = Field(None, description="Unused today -- forecast runs are hospital-wide")
+    facility_id: int | str | None = Field(None, description="Unused today -- forecast runs are hospital-wide")
 
 
 @tool(

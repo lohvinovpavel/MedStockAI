@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from .security import hash_password
 
+DEMO_HOSPITAL_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 HOSPITAL_NAME = "St Mary's General"
 USERS = [
     ("ann@stmarys.org", "Ann Reyes", "pharmacist"),
@@ -32,10 +33,12 @@ def main() -> None:
 
     with SessionLocal() as s:
         hospital = s.execute(
-            select(Hospital).where(Hospital.name == HOSPITAL_NAME)
+            select(Hospital).where(
+                (Hospital.id == DEMO_HOSPITAL_ID) | (Hospital.name == HOSPITAL_NAME)
+            )
         ).scalar_one_or_none()
         if hospital is None:
-            hospital = Hospital(name=HOSPITAL_NAME)
+            hospital = Hospital(id=DEMO_HOSPITAL_ID, name=HOSPITAL_NAME)
             s.add(hospital)
             s.flush()
 

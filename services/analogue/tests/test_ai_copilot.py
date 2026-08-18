@@ -371,8 +371,9 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
         SimpleNamespace(ndc="red-ndc", status="red"),
         SimpleNamespace(ndc="green-ndc", status="green"),
     ]
+    drug_rows = [("red-ndc", "Red Test Drug"), ("green-ndc", "Green Test Drug")]
     findings = [("red-ndc", "RECALL_CLASS_I")]
-    responses = iter([SimpleNamespace(scalars=lambda: records), findings])
+    responses = iter([SimpleNamespace(scalars=lambda: records), drug_rows, findings])
 
     class _FakeReferenceSession:
         def __enter__(self):
@@ -392,7 +393,9 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert result["checked"] == 3
     assert result["unknown"] == ["unknown-ndc"]
     assert [f["ndc"] for f in result["flagged"]] == ["red-ndc"]
+    assert result["flagged"][0]["name"] == "Red Test Drug"
     assert result["flagged"][0]["codes"] == ["RECALL_CLASS_I"]
+    assert "Class I recall" in result["flagged"][0]["reasons"][0]
     assert result["flagged"][0]["quantity"] == 10
     # green-ndc never appears anywhere -- neither flagged nor treated as unknown
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
@@ -797,3 +800,96 @@ def test_resolve_patient_ref_resolves_silently_for_one_match(monkeypatch):
     monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", lambda p, n: rows)
     result = resolve_patient_ref(PHARMACIST, "Jane Doe")
     assert str(result) == "11111111-1111-1111-1111-111111111111"
+
+
+def test_resolve_patient_ref_cleans_formatted_name_or_id(monkeypatch):
+    from medstock_shared.patient_assess import resolve_patient_ref
+
+    rows = [{"id": "11111111-1111-1111-1111-111111111111", "full_name": "John Doe", "date_of_birth": "1980-01-01"}]
+    monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", lambda p, n: rows if "John" in n else [])
+    result = resolve_patient_ref(PHARMACIST, "patient: John Doe (DOB: 1980-01-01)")
+    assert str(result) == "11111111-1111-1111-1111-111111111111"
+
+
+def test_check_stock_by_ndc_supports_rxcui(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    from medstock_shared.ai.tools.pharmacy import CheckStockArgs, check_stock_by_ndc
+
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy._ndcs_or_empty", lambda rxcui: ["00069406101", "00069406102"]
+    )
+    rows = [
+        ("main-pharmacy", 25, datetime(2026, 8, 18, tzinfo=timezone.utc)),
+        ("icu", 15, datetime(2026, 8, 18, tzinfo=timezone.utc)),
+    ]
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        session = MagicMock()
+        session.execute.return_value.all.return_value = rows
+        yield session
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = check_stock_by_ndc(CheckStockArgs(rxcui="212033"), PHARMACIST)
+    assert result["rxcui"] == "212033"
+    assert result["total_quantity"] == 40
+    assert len(result["locations"]) == 2
+
+
+def test_search_analogues_rxnorm_returns_primary_ndc_for_subsequent_cert_check(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import SearchAnaloguesArgs, search_analogues_rxnorm
+
+    candidates = [
+        {"rxcui": "105798", "name": "Alternative Drug A"},
+        {"rxcui": "212033", "name": "Original Shortage Drug"},
+    ]
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.related_scd_sbd", lambda rxcui: list(candidates))
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy._ndcs_or_empty",
+        lambda rxcui: ["00069406101", "00069406102"] if rxcui == "105798" else ["11111111111"],
+    )
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy._stock_totals",
+        lambda principal, ndcs: {"00069406101": 50, "00069406102": 30},
+    )
+
+    result = search_analogues_rxnorm(SearchAnaloguesArgs(rxcui="212033"), PHARMACIST)
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["rxcui"] == "105798"
+    assert item["primary_ndc"] == "00069406101"
+    assert item["ndcs"] == ["00069406101", "00069406102"]
+    assert item["quantity"] == 80
+    assert item["in_stock"] is True
+
+
+def test_verify_batch_cert_matches_unhyphenated_or_hyphenated_ndc(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import VerifyBatchCertArgs, verify_batch_cert
+
+    record = SimpleNamespace(ndc="00069406101", status="green", ruleset_version="2026.08.2")
+    finding_row = SimpleNamespace(code="ACTIVE_LISTING", message="ok", source="fda")
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, stmt):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(
+                    first=lambda: record,
+                    all=lambda: [finding_row],
+                )
+            )
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.Session", lambda engine: _FakeSession())
+
+    result = verify_batch_cert(VerifyBatchCertArgs(ndc="00069-4061-01"), PHARMACIST)
+    assert result["status"] == "green"
+    assert result["ndc"] == "00069-4061-01"

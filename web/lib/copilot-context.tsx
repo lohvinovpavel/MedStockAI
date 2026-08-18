@@ -23,6 +23,7 @@ export type CopilotFocus =
   // not this hospital's seeded stock, and returns a confident zero.
   | { kind: "sku"; label: string; detail: string; itemId: string; ndc: string }
   | { kind: "alert"; label: string; detail: string }
+  | { kind: "patient"; label: string; detail: string; patientId: string; rxcui?: string; drugName?: string }
   | null;
 
 // A one-shot "do this now" ask fired by a page (e.g. the forecast scenario

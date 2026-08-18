@@ -168,6 +168,13 @@ class PatientAmbiguous(Exception):
         self.candidates = candidates
 
 
+def _clean_patient_name(name: str) -> str:
+    import re
+    cleaned = re.sub(r"^(patient\s*id[:\s]+|patient[:\s]+)", "", name, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)
+    return cleaned.strip()
+
+
 def resolve_patient_ref(principal: Principal, ref: str) -> uuid.UUID | None:
     """A tool arg that may already be a UUID (from a prior tool result, or an
     old habit) or a name the user just typed. Returns None when nothing
@@ -177,6 +184,14 @@ def resolve_patient_ref(principal: Principal, ref: str) -> uuid.UUID | None:
     except ValueError:
         pass
     matches = find_patients_by_name(principal, ref)
+    if not matches:
+        cleaned = _clean_patient_name(ref)
+        if cleaned and cleaned != ref.strip():
+            try:
+                return uuid.UUID(cleaned)
+            except ValueError:
+                pass
+            matches = find_patients_by_name(principal, cleaned)
     if not matches:
         return None
     if len(matches) > 1:
@@ -283,7 +298,7 @@ def assess_for_drug(principal: Principal, patient_id: str, rxcui: str) -> dict:
         "rxcui": rxcui,
         "verdict": str(assessment.verdict),
         "score": assessment.score,
-        "findings": [_finding_dict(f) for f in assessment.findings],
+        "findings": list(warnings),
     }
     request_id = record_assessment(principal, vector, [result])
 

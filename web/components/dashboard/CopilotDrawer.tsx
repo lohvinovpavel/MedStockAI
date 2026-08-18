@@ -16,6 +16,7 @@ import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { useCopilot, type CopilotFocus, type EmergencyPlanRequest } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
+import { useSession } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { forecastFor, inventoryFor, isoPlusDays, parLevel, suppliers } from "@/lib/mock-data";
 import { apiFetch, streamCopilotChat, type CopilotMessage, type PatientCandidate } from "@/lib/api";
@@ -90,25 +91,122 @@ const HISTORY_STORAGE_KEY = "medstock-copilot-history";
 const GREETING: Message = {
   id: "m-greeting",
   role: "assistant",
-  text: "Hi, I'm the AI MedStock Assistant. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages.",
+  text: "Hi, I'm the AI MedStock Assistant. Select a SKU, patient, or alert on the page, or ask me anything about safety, stock, and shortages.",
 };
 
-const QUICK_ACTIONS = [
-  { key: "po", label: "Generate PO", icon: FileText },
-  { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
-  { key: "certificate", label: "Check Certificate", icon: ShieldCheck },
-  { key: "shortage", label: "Shortage Brief", icon: Siren },
-] as const;
+export type QuickAction = {
+  key: string;
+  label: string;
+  icon: typeof FileText;
+  prompt?: string;
+};
 
 // PH-1 (docs/ai_workflows.md): one question chains the three real copilot
 // tools (check_stock_by_ndc, search_analogues_rxnorm, verify_batch_cert) in
-// one turn instead of four screens. Unlike the other quick actions this goes
-// through streamReply/`/copilot/chat` -- there is no mock reply to write,
-// the tools already exist and the focus context is already injected.
+// one turn instead of four screens.
 const SHORTAGE_BRIEF_PROMPT =
   "For the drug currently in context: report on-hand stock by location, then find " +
   "substitutes ranked by what we hold, then check the compliance status of the top " +
   "candidate. Say plainly if any step returns nothing.";
+
+export const ROLE_ACTIONS: Record<string, QuickAction[]> = {
+  physician: [
+    {
+      key: "doc_safety",
+      label: "Safety & Stock Check",
+      icon: ShieldCheck,
+      prompt:
+        "For the current patient and drug in context: run the deterministic safety rules (allergies, duplicate ingredients, renal/hepatic, PGx) and check our on-hand physical stock. If blocked or short, suggest alternatives.",
+    },
+    {
+      key: "doc_regimen",
+      label: "Patient Regimen",
+      icon: FileText,
+      prompt:
+        "Summarise the clinical profile (allergies, conditions, and PGx phenotypes) of the patient currently in context.",
+    },
+    {
+      key: "doc_explain",
+      label: "Explain Verdict",
+      icon: Sparkles,
+      prompt:
+        "Explain the deterministic score contributions and findings of the most recent safety assessment for this patient.",
+    },
+    {
+      key: "analogue",
+      label: "Find Alternatives",
+      icon: Repeat2,
+      prompt:
+        "Find safe therapeutic alternatives in stock for the drug currently in context.",
+    },
+  ],
+  pharmacist: [
+    { key: "shortage", label: "Shortage Brief", icon: Siren, prompt: SHORTAGE_BRIEF_PROMPT },
+    {
+      key: "sweep",
+      label: "Shelf Cert Sweep",
+      icon: ShieldCheck,
+      prompt:
+        "Review the compliance status of every stocked NDC in our hospital and report any red or yellow items needing attention.",
+    },
+    {
+      key: "excursions",
+      label: "Cold-Chain Excursions",
+      icon: AlertTriangle,
+      prompt:
+        "Report any storage condition violations or temperature excursions recorded in telemetry.",
+    },
+    { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
+  ],
+  admin: [
+    {
+      key: "sweep",
+      label: "Shelf Cert Sweep",
+      icon: ShieldCheck,
+      prompt:
+        "Review compliance status of stocked NDCs to ensure no recalled or non-compliant drugs are reordered.",
+    },
+    {
+      key: "excursions",
+      label: "Storage Report",
+      icon: AlertTriangle,
+      prompt:
+        "Report storage condition excursions across facilities before new shipments arrive.",
+    },
+    { key: "po", label: "Generate PO", icon: FileText },
+    { key: "analogue", label: "Find Bio-Equivalent", icon: Repeat2 },
+  ],
+  director: [
+    {
+      key: "risk_digest",
+      label: "Facility Risk Digest",
+      icon: AlertTriangle,
+      prompt:
+        "Provide a cross-facility risk digest: at-risk SKUs depleting soon, storage excursions, and non-compliant certificates.",
+    },
+    {
+      key: "forecast_staleness",
+      label: "Forecast Staleness",
+      icon: Sparkles,
+      prompt:
+        "Check whether this hospital's forecast is stale and report the timestamp of the last forecast run.",
+    },
+    {
+      key: "review_queue",
+      label: "Review Queue",
+      icon: FileText,
+      prompt:
+        "Summarise the label risk-profile review queue: how many are awaiting approval, accept rate, and urgent pending items.",
+    },
+    {
+      key: "audit",
+      label: "AI Decisions",
+      icon: History,
+      prompt:
+        "Summarise this hospital's AI-assisted decisions over the last 30 days.",
+    },
+  ],
+};
 
 /**
  * One NDC's traffic light, from the same `GET /status` the shelf uses.
@@ -442,9 +540,12 @@ function ResponseCardView({
 
 export function CopilotDrawer() {
   const router = useRouter();
+  const { user } = useSession();
   const { open, setOpen, focus, emergencyRequest } = useCopilot();
   const { facilityId, facility } = useFacility();
   const { addOrder } = useOrders();
+  const role = user?.role ?? "pharmacist";
+  const quickActions = ROLE_ACTIONS[role] ?? ROLE_ACTIONS.pharmacist;
   // Below `lg` the panel opens as a Sheet instead of a flex sibling of
   // `main` (there's no room for a fixed 380px column at phone/tablet
   // widths). Branching on a real viewport check — rather than mounting
@@ -494,21 +595,19 @@ export function CopilotDrawer() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  function runAction(action: string) {
+  function runAction(actionKey: string) {
     if (pending) return; // one stream at a time, same rule send() follows
-    const label = QUICK_ACTIONS.find((a) => a.key === action)?.label ?? action;
+    const action = quickActions.find((a) => a.key === actionKey);
+    const label = action?.label ?? actionKey;
     const priorMessages = messages;
     setMessages((m) => [...m, { id: id(), role: "user", text: focus ? `${label} — ${focus.label}` : label }]);
     setPending(true);
-    // Shortage Brief is the one quick action wired to the real copilot
-    // (docs/ai_workflow_impl_plan.md, PH-1) -- the other three stay on
-    // replyFor()'s mock data until they're wired the same way.
-    if (action === "shortage") {
-      void streamReply(SHORTAGE_BRIEF_PROMPT, priorMessages);
+    if (action?.prompt) {
+      void streamReply(action.prompt, priorMessages);
       return;
     }
     window.setTimeout(async () => {
-      const reply = await replyFor(action, focus, facilityId);
+      const reply = await replyFor(actionKey, focus, facilityId);
       setMessages((m) => [...m, reply]);
       setPending(false);
     }, 300);
@@ -599,7 +698,8 @@ export function CopilotDrawer() {
       // Re-added on every turn (not just the first) because focus can change
       // mid-conversation and each call resends the full history from scratch.
       const ndcTag = focus?.kind === "sku" ? ` (NDC ${focus.ndc})` : "";
-      const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag} — ${focus.detail}]\n\n` : "";
+      const patientTag = focus?.kind === "patient" ? ` [Patient ID: ${focus.patientId}]` : "";
+      const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag}${patientTag} — ${focus.detail}]\n\n` : "";
       const history = [...toCopilotHistory(priorMessages), { role: "user" as const, text: contextPrefix + userText }];
       for await (const evt of streamCopilotChat(history, controller.signal)) {
         if (evt.event === "delta") {
@@ -728,7 +828,7 @@ export function CopilotDrawer() {
       )}
 
       <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
-        {QUICK_ACTIONS.map(({ key, label, icon: Icon }) => (
+        {quickActions.map(({ key, label, icon: Icon }) => (
           <Button key={key} variant="outline" size="sm" className="h-7 text-xs" onClick={() => runAction(key)}>
             <Icon data-icon="inline-start" />
             {label}
