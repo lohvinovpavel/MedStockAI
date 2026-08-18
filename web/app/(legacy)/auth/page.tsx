@@ -2,19 +2,11 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useSession } from "@/lib/session";
+import { useSession, sanitizeNextPath } from "@/lib/session";
 
 // Owner: Tymur. Backend: services/auth (Ingress path /api/auth).
 // The token is never touched here — /login sets an httpOnly cookie the
 // browser attaches to every later apiFetch (docs/auth-spec.md §4).
-
-// Only a same-app path is a safe redirect target — anything starting "//" or
-// with a scheme is an open-redirect (e.g. //evil.com parses as protocol-
-// relative). Reject those and fall back to "/".
-function sanitizeNext(next: string | null): string {
-  if (next && next.startsWith("/") && !next.startsWith("//")) return next;
-  return "/";
-}
 
 function AuthForm() {
   const [email, setEmail] = useState("");
@@ -23,7 +15,7 @@ function AuthForm() {
   const [pending, setPending] = useState(false);
   const { user, login } = useSession();
   const router = useRouter();
-  const next = sanitizeNext(useSearchParams().get("next"));
+  const next = sanitizeNextPath(useSearchParams().get("next"));
 
   // Already signed in and landed on /auth anyway — send them on rather than
   // showing a login form.

@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldGroup, FieldLabel, FieldSeparator } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
+import { sanitizeNextPath } from "@/lib/session";
 
 const DEMO_ROLES = [
   { role: "Physician", email: "ben@stmarys.org", icon: Stethoscope },
@@ -33,7 +34,12 @@ export default function LoginPage() {
         body: JSON.stringify({ email: nextEmail, password: nextPassword }),
       });
       toast.success("Signed in.");
-      router.push("/analogue");
+      // Sent here by the dashboard's session gate with ?next=/wherever-they-
+      // were-headed; land there instead of always going to /inventory.
+      // Reading location.search directly (not useSearchParams()) avoids the
+      // Suspense boundary that hook forces on a direct load of this page.
+      const rawNext = new URLSearchParams(window.location.search).get("next");
+      router.push(rawNext ? sanitizeNextPath(rawNext) : "/inventory");
     } catch {
       setError("invalid credentials");
       setPending(false);

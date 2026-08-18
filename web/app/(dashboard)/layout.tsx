@@ -38,18 +38,20 @@ function LiveTelemetry() {
   );
 }
 
-// Persistent dashboard shell: left nav + main content + AI Copilot drawer +
-// status/audit footer. No header at `lg` and above — search lives on the
-// Inventory page and the Copilot drawer has its own open/collapse control.
+// Persistent dashboard shell: left nav + main content + AI MedStock
+// Assistant drawer + status/audit footer. No header at `lg` and above —
+// search lives on the Inventory page and the assistant drawer has its own
+// open/collapse control.
 // Below `lg`, SideNav and CopilotDrawer collapse to nothing inline (there's
 // no room for two fixed side columns on a phone/tablet), so MobileTopBar
 // supplies the only way to reach either — a hamburger Sheet for nav, a
 // button that opens the copilot as a Sheet. Mock-data driven — see
-// lib/mock-data.ts. Session is available (Analogues / Prescribe need it)
-// but does not gate or bounce to /auth — demo-login users have no cookie.
+// lib/mock-data.ts — but the route itself is real-backend gated: an
+// unauthenticated visitor is bounced to /login (same services/auth cookie
+// the legacy scaffold's /auth uses) before any page here renders.
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider redirectToAuth={false}>
+    <SessionProvider authPath="/login">
       <FacilityProvider>
       <InventoryProvider>
       <OrdersProvider>

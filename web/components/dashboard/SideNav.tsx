@@ -220,7 +220,7 @@ export function SideNav() {
 
 // Below `lg`: a slim bar above the nav/main/copilot row carrying the brand,
 // a hamburger that opens the same NavBody in a Sheet, and a shortcut to
-// open the AI Copilot (which supplies its own trigger at `lg` and above).
+// open the AI MedStock Assistant (which supplies its own trigger at `lg` and above).
 export function MobileTopBar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -251,7 +251,7 @@ export function MobileTopBar() {
         <span className="text-sm font-semibold tracking-tight">MedStock AI</span>
       </Link>
 
-      <Button variant="ghost" size="icon" onClick={() => setCopilotOpen(true)} aria-label="Open AI Copilot">
+      <Button variant="ghost" size="icon" onClick={() => setCopilotOpen(true)} aria-label="Open AI MedStock Assistant">
         <Bot />
       </Button>
     </div>

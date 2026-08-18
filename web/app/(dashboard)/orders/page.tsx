@@ -156,7 +156,7 @@ export default function OrdersPage() {
         <StatTile icon={Wallet} label="Committed spend" value={money(committed)} hint="Placed + in transit, all facilities" />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[60%_40%]">
+      <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
         <Card className="gap-3 py-4">
           <CardHeader className="px-4">
             <CardTitle className="text-sm">New purchase order</CardTitle>

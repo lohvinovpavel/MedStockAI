@@ -17,6 +17,15 @@ export type Me = {
 // it's the one page ops needs when login itself is the thing that's broken.
 const PUBLIC_PATHS = ["/auth", "/version"];
 
+// Only a same-app path is a safe redirect target — anything starting "//" or
+// with a scheme is an open-redirect (e.g. //evil.com parses as protocol-
+// relative). Shared by /auth (legacy) and /login (dashboard) so this guard
+// exists in exactly one place rather than two copies drifting apart.
+export function sanitizeNextPath(next: string | null): string {
+  if (next && next.startsWith("/") && !next.startsWith("//")) return next;
+  return "/";
+}
+
 type SessionContextValue = {
   user: Me | null | undefined; // undefined = still checking on first load
   login: (email: string, password: string) => Promise<void>;
@@ -35,11 +44,14 @@ export function useSession() {
 export function SessionProvider({
   children,
   redirectToAuth = true,
+  authPath = "/auth",
 }: {
   children: React.ReactNode;
-  // Legacy scaffold sends logged-out users to /auth. The mock dashboard
-  // must not — demo-login users have no cookie and still need Analogues.
   redirectToAuth?: boolean;
+  // Where a logged-out user is bounced. The legacy scaffold uses its bare
+  // /auth form; the dashboard points this at /login instead, which is the
+  // one styled sign-in page and shares the same backend cookie.
+  authPath?: string;
 }) {
   const [user, setUser] = useState<Me | null | undefined>(undefined);
   const pathname = usePathname();
@@ -70,10 +82,10 @@ export function SessionProvider({
   useEffect(() => {
     if (!redirectToAuth) return;
     if (user !== null) return;
-    if (PUBLIC_PATHS.includes(pathname)) return; // guards /auth against redirecting to itself
+    if (pathname === authPath || PUBLIC_PATHS.includes(pathname)) return; // guards the auth page against redirecting to itself
     const qs = typeof window !== "undefined" ? window.location.search : "";
-    router.replace(`/auth?next=${encodeURIComponent(`${pathname}${qs}`)}`);
-  }, [user, pathname, router, redirectToAuth]);
+    router.replace(`${authPath}?next=${encodeURIComponent(`${pathname}${qs}`)}`);
+  }, [user, pathname, router, redirectToAuth, authPath]);
 
   async function login(email: string, password: string) {
     await apiFetch("auth", "/login", {
@@ -95,7 +107,7 @@ export function SessionProvider({
     }
   }
 
-  const gated = redirectToAuth && user === undefined && !PUBLIC_PATHS.includes(pathname);
+  const gated = redirectToAuth && user === undefined && pathname !== authPath && !PUBLIC_PATHS.includes(pathname);
 
   return (
     <SessionContext.Provider value={{ user, login, logout, refresh }}>

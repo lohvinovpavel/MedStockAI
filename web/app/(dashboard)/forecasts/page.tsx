@@ -224,30 +224,36 @@ export default function ForecastsPage() {
   }
 
   return (
-    <div className="grid gap-4 p-4 lg:grid-cols-[60%_40%]">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Restock & Forecasts</h1>
-            <p className="text-xs text-muted-foreground">Burn-rate history and ML-predicted demand at {facility.name}.</p>
-          </div>
-          <Select value={item.id} onValueChange={selectItem}>
-            <SelectTrigger size="sm" className="h-8 w-56 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {items.map((i) => (
-                  <SelectItem key={i.id} value={i.id}>
-                    {i.drugName}
-                    {!forecastable.has(i.id) && <span className="text-muted-foreground"> (no model)</span>}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+    <div className="flex flex-col gap-4 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Restock & Forecasts</h1>
+          <p className="text-xs text-muted-foreground">Burn-rate history and ML-predicted demand at {facility.name}.</p>
         </div>
+        <Select value={item.id} onValueChange={selectItem}>
+          <SelectTrigger size="sm" className="h-8 w-56 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {items.map((i) => (
+                <SelectItem key={i.id} value={i.id}>
+                  {i.drugName}
+                  {!forecastable.has(i.id) && <span className="text-muted-foreground"> (no model)</span>}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
 
+      {/* Both columns start with a Card (chart / no-forecast placeholder on
+          the left, AI suggestion / dismissed / no-model on the right) so
+          they align at the same top edge — the header row above used to
+          live inside the left column only, pushing its Card down past the
+          right column's Card by that row's height. */}
+      <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+      <div className="flex flex-col gap-3">
         {!forecast ? (
           <Card className="gap-2 py-4">
             <CardContent className="flex flex-col items-center gap-2 px-4 py-16 text-center">
@@ -466,6 +472,7 @@ export default function ForecastsPage() {
           </CardFooter>
         </Card>
         )}
+      </div>
       </div>
     </div>
   );

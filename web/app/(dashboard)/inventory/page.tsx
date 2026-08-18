@@ -443,7 +443,7 @@ export default function InventoryPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">Inventory & Batches</h1>
         <p className="text-xs text-muted-foreground">
@@ -512,15 +512,19 @@ export default function InventoryPage() {
         {filtered.length !== items.length ? " · filters applied" : ""}.
       </p>
 
-      <div className="overflow-hidden rounded-lg border bg-card">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
         {/* Table's own wrapper is `overflow-x-auto`, which forces its
             overflow-y to compute as "auto" too (CSS Overflow §3: if one
             axis is non-visible, "visible" on the other computes to "auto")
-            — that stray, unbounded vertical scrollbox, not main's real
+            — that stray, unbounded vertical scrollbox, not the page's real
             scroll, was what the sticky header was binding to, so it never
             actually stuck. Bounding its height via containerClassName makes
-            it a real scroll container the header can stick within. */}
-          <Table containerClassName="max-h-[32rem] overflow-auto">
+            it a real scroll container the header can stick within.
+            Filling the remaining page height (rather than a fixed max-h)
+            means this is the page's only scroll container — a fixed cap
+            plus the page's own overflow-y-auto produced two independently
+            scrolling bars stacked at the same edge. */}
+          <Table containerClassName="h-full overflow-auto">
             <TableHeader className="sticky top-0 z-10 border-b bg-card">
               <TableRow>
                 <TableHead>Drug Name & Form</TableHead>
