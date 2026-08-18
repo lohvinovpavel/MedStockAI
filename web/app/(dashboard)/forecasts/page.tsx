@@ -79,6 +79,7 @@ const chartConfig: ChartConfig = {
   actual: { label: "Actual usage", color: "var(--chart-2)" },
   forecast: { label: "Forecast p50", color: "var(--chart-1)" },
   band: { label: "p10–p90 band", color: "var(--chart-1)" },
+  stock: { label: "Projected stock", color: "var(--chart-3)" },
 };
 
 // Surge tiers driving the badge tone — 100% is the stored run's baseline,
@@ -185,17 +186,27 @@ export default function ForecastsPage() {
 
   const chartData = useMemo(() => {
     if (!forecast) return [];
+    // Stock burn-down: current on-hand minus cumulative forecast usage —
+    // the decreasing curve that hits zero at the red depletion marker. The
+    // usage lines answer "how fast is it going", this one answers "how much
+    // is left". Clipped at zero: shelves don't go negative.
+    const onHand = forecast.depletion?.quantity ?? null;
+    let remaining = onHand;
     const rows = [
-      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined })),
-      ...forecast.forecast.map((p) => ({ date: p.date.slice(5), actual: null, forecast: p.p50, band: [p.p10, p.p90] as [number, number] })),
+      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined, stock: null as number | null })),
+      ...forecast.forecast.map((p) => {
+        if (remaining != null) remaining = Math.max(0, remaining - p.p50);
+        return { date: p.date.slice(5), actual: null, forecast: p.p50, band: [p.p10, p.p90] as [number, number], stock: remaining };
+      }),
     ];
-    // Bridge point: give the forecast series (and its band) the last actual
-    // value at the boundary date, so the dashed line grows out of the tip of
-    // the solid one instead of starting a day later across a gap.
+    // Bridge point: give the forecast series (and its band, and the
+    // burn-down's starting stock) the boundary date's values, so the dashed
+    // lines grow out of the tip of the solid one instead of starting a day
+    // later across a gap.
     const boundary = forecast.history.length - 1;
     if (boundary >= 0 && forecast.forecast.length > 0) {
       const lastActual = forecast.history[boundary].quantity;
-      rows[boundary] = { ...rows[boundary], forecast: lastActual, band: [lastActual, lastActual] };
+      rows[boundary] = { ...rows[boundary], forecast: lastActual, band: [lastActual, lastActual], stock: onHand };
     }
     return rows;
   }, [forecast]);
@@ -334,10 +345,15 @@ export default function ForecastsPage() {
                     <CartesianGrid vertical={false} strokeDasharray="3 3" />
                     <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} interval={6} />
                     <YAxis tickLine={false} axisLine={false} width={36} fontSize={10} />
+                    {/* The burn-down lives on its own axis: stock on hand is an
+                        order of magnitude above daily usage, and on the usage
+                        axis it would flatten every other line. */}
+                    <YAxis yAxisId="stock" orientation="right" tickLine={false} axisLine={false} width={40} fontSize={10} />
                     <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
                     <Area dataKey="band" stroke="none" fill="var(--color-forecast)" fillOpacity={0.15} isAnimationActive={false} connectNulls />
                     <Line dataKey="actual" stroke="var(--color-actual)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
                     <Line dataKey="forecast" stroke="var(--color-forecast)" strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
+                    <Line yAxisId="stock" dataKey="stock" stroke="var(--color-stock)" strokeWidth={2} strokeDasharray="2 2" dot={false} isAnimationActive={false} connectNulls={false} />
                     {todayLabel && (
                       <ReferenceLine x={todayLabel} stroke="var(--muted-foreground)" strokeDasharray="2 2" strokeWidth={1}
                         label={{ value: "Data through", position: "insideBottomLeft", fill: "var(--muted-foreground)", fontSize: 10 }} />
