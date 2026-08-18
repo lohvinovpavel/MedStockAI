@@ -16,10 +16,12 @@
 
 ## Goal
 
-`stock_snapshot.location_id` is a bare `Text` column where `''` means "hospital-wide". The UI
-already models six named sites with types and distances (`web/lib/mock-data.ts`), the sidebar
-switches between the four operated ones, and eight other features key on `facility_id`. Give
-the concept a table before anything else is built on top of it.
+`stock_snapshot.location_id` used to be a bare `Text` column where `''` meant "hospital-wide".
+Give facilities a table (`code`, type, geo, `operated`) before anything else keys on
+`facility_id`. Wave 1: the sidebar reads `GET /facilities?operated=true` and stores `code`;
+mock inventory/orders/shortage keys were renamed to those codes. Distances in the sidebar
+are haversine from the **selected** site (`web/lib/geo.ts`). The inventory **table** stays
+mock until B2 `/items` and B4.
 
 ## API
 
@@ -87,11 +89,11 @@ RLS policy per A4.
 
 ## Acceptance criteria
 
-- [ ] `GET /facilities?operated=true` returns exactly the four switchable sites.
-- [ ] `GET /facilities/2?from=3` reports a non-zero distance; `?from=2` reports 0.
-- [ ] Every existing `stock_snapshot` row has a non-null `facility_id` after migration.
-- [ ] A cross-tenant `GET /facilities/{id}` returns 404, not another hospital's row.
-- [ ] `POST /api/inventory/batches` against a non-operated facility returns 422.
+- [x] `GET /facilities?operated=true` returns exactly the four switchable sites.
+- [x] `GET /facilities/{id}?from=` reports a non-zero distance; `?from=` same id reports 0.
+- [x] Every existing `stock_snapshot` row has a non-null `facility_id` after migration.
+- [ ] A cross-tenant `GET /facilities/{id}` returns 404, not another hospital's row. (A4)
+- [ ] `POST /api/inventory/batches` against a non-operated facility returns 422. (B4)
 
 ## Out of scope
 

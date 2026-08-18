@@ -56,7 +56,8 @@ previous wave lands.
 
 | Wave | Specs | Why here |
 |---|---|---|
-| 0 | `hospital_id` uuid migration (A4) | ✅ landed (`20260818_hospital_uuid`). RLS policies still open |
+| 0 | `hospital_id` uuid migration (A4) | ✅ landed (`20260818_hospital_uuid`). RLS still open except H1's two tables |
+| 1 | B1 UI cutover, **H1** | ✅ landed. Sidebar reads `GET /warehouse/facilities`; audit trigger on `review_decision` |
 | 1 | B1 UI cutover, **H1** | ✅ landed. Sidebar reads `GET /warehouse/facilities`; audit trigger on `review_decision` |
 | 2 | A4 policies, **B2** `/items`, **B4**, **B5** | Real stock table, real thresholds, tenant isolation |
 | 3 | B3, B6, C5 | Reads on top of real stock. E1 already ships; inventory still mocks days-of-supply |

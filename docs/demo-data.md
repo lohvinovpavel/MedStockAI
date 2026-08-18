@@ -131,7 +131,11 @@ Order matters, because tenant data references real reference data:
 3. Build a formulary from real NDCs actually present in `drug`
 4. Load stock levels and **3 years of daily usage history** (`consumption_daily`) —
    `prediction` needs multi-winter history for annual seasonality to be learnable — plus
-   90 days of hourly storage-condition telemetry (`location_condition`)
+   90 days of hourly storage-condition telemetry (`location_condition`).
+   `seed_demo` then overlays the 11 dashboard-page NDCs from
+   `shared/medstock_shared/demo_shelf.py` (cloned consumption from a same-class donor) so
+   Warehouse charts are not empty for the SKUs the inventory mock shows. `scripts/seed_stock.py`
+   upserts those same NDCs onto the right shelf (`location_for`: insulin → fridge).
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly

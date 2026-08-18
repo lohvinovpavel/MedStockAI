@@ -13,9 +13,9 @@ services and tables that have to exist behind them.
 
 | # | Flow | Actor | Entry point | Steps (start → end) | End state |
 |---|---|---|---|---|---|
-| 1 | Sign in | Any | `/` landing CTA | Landing → `/login` → email + password → OTP step → submit code | Toast "Signed in" → `/inventory` |
-| 2 | Demo role sign-in | Pharmacist / Procurement / Clinical Director | `/login` | Click "Demo Login as {role}" | Toast with role → `/inventory` (role is cosmetic — no gating) |
-| 3 | Switch facility | Any | Sidebar bottom dropdown | Open dropdown → pick one of 4 `operated` facilities | `FacilityProvider` updates → inventory list, KPIs, analogue availability, shortage "this facility", audit SKU picker all re-derive |
+| 1 | Sign in | Any | `/` landing CTA | Landing → `/login` → email + password → OTP step (UI-only, A2 unused) → submit | Toast "Signed in" → that role's `HOME_ROUTE` |
+| 2 | Demo role sign-in | Pharmacist / Procurement / Clinical Director | `/login` | Click "Demo Login as {role}" | Toast with role → that role's `HOME_ROUTE` (`/inventory`, `/orders`, `/audit`). Nav and pages are gated by `PAGE_ROLES`; endpoints still 403 on their own `PERMS` |
+| 3 | Switch facility | Any | Sidebar bottom dropdown | Open dropdown → pick one of 4 `operated` facilities from `GET /warehouse/facilities?operated=true` | `FacilityProvider` stores B1 `code`; inventory/orders/shortage mock tables re-key; sidebar distances are haversine from the **selected** site |
 | 4 | Triage inventory | Pharmacist | `/inventory` | Search by SKU/INN/ATC → filter status → filter expiry date range → click row | Row selected, Copilot focus set to that SKU |
 | 5 | Receive a batch | Pharmacist | `/inventory` → **Receive Batch** | Dialog → drug, batch no., qty → Save | Toast "Batch received"; session overlay on `mock-data.ts` mutates the table (not Postgres) |
 | 6 | Verify certificate | Compliance | Row `⋯` → **View certificate** | Dialog → authority, number, status, expiry | Dialog closed; no state change |
@@ -30,7 +30,7 @@ services and tables that have to exist behind them.
 | 15 | Track order history | Procurement | `/orders` history table | Filter by status → read PO ref, date, facility, supplier, qty, total, source badge | Lifecycle visible: `draft → placed → in_transit → delivered` (`cancelled` terminal) |
 | 16 | Triage a shortage | Clinical Director | `/shortages` | Pick alert → facility matrix with coverage tone (stockout/critical/normal/surplus) → filter by name | Surplus donors identified, distances relative to active facility |
 | 17 | Inter-facility transfer | Clinical Director | `/shortages` transfer card | Select source facility (surplus only) → qty → **Request transfer** | Dispatch reference + timestamp rendered |
-| 18 | Audit & compliance trail | Compliance | `/audit` or deep link from flow 8 | Pick SKU → chronological entries (human confirmations, ML pipeline runs, OCR cert verification) → **Export** | Toast "exported to compliance archive" |
+| 18 | Audit & compliance trail | Compliance | `/audit` or deep link from flow 8 | Timeline from `GET /audit` (empty until a `review_decision` is written). SKU picker is still mock inventory; certificate badge and DecisionTrail are live. **Export** | Toast only — D3 CSV is not built |
 | 19 | Ask the Copilot | Any | Right drawer, any page | Free text, or quick action **Generate PO** / **Find Bio-Equivalent** / **Check Certificate** — scoped to current focus if a row is selected | Structured card: `po` \| `analogues` \| `certificate` \| `emergency` |
 
 ---
@@ -75,3 +75,4 @@ until the inventory table has `stock_batch` (B4). The sidebar already reads B1.
 - Flows 13/15 have no path to `in_transit` / `delivered` — those statuses appear only in seeded mock rows.
 - Flow 17's transfer never becomes an order and never moves stock.
 - Flow 12's AI restock card is still mock; E3 surge does not drive it (`docs/specs/UX-04`).
+- Flow 18's timeline is live `GET /audit` but empty until F1 writes `review_decision`. Export is still a toast (D3).

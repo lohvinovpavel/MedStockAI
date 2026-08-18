@@ -259,7 +259,7 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 | `auth` | Tymur | `/api/auth` | Authenticate and authorize users; issue and rotate tokens. Holds the **private** signing key; everyone else holds the public one. | `POST /login` · `POST /logout` · `GET /me` |
 | `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. | `GET /stock?rxcui=` · `GET /exposure` · `POST /formulary/import` (CSV) |
 | `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
-| `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /export/compliance.csv` |
+| `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /audit` · `GET /export/compliance.csv` (D3, not built) |
 | `patient-profiling` | Andrii | `/api/patients` | Substitution safety for one patient (contraindications, allergies, interactions, label-derived prognosis), cohort demand and the PP-4 forecast, the demo patient CRUD behind the prescription cart, and the PP-5 queue where a pharmacist rules on extracted risk profiles. | `POST /assess` · `POST /demand` · `POST /forecast` · `GET /ruleset` · `GET /risk-profiles` · `POST /risk-profiles/{id}/review` · `GET\|POST /patients` · `GET\|PATCH /patients/{id}` · `POST /cart-check` |
 | `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
 | `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure (B1 facility registry), storage locations, stock placement, recorded consumption history, and storage-condition monitoring — hourly temperature/humidity telemetry checked against per-drug storage requirements, violations computed on read. Also hosts the connector admin endpoints (planned). | `GET /facilities` · `GET /locations` · `GET /stock` · `GET /consumption` · `GET /locations/{id}/conditions` · `GET /excursions` · `POST /connectors/{id}/propose-spec` (planned) |
@@ -525,12 +525,13 @@ schedule caught by `startingDeadlineSeconds`.
    unverified placeholders (`ponytail:` comments in `services/ingest/app/*.py`), there is no
    migration for the four reference tables yet, and `rxnorm.py` has no real RXCUI seed list.
    Do not point the CronJobs at a live schedule until those are resolved.
-2. **RLS policies are not written.** `session_scope()` sets `app.hospital_id`, but no
-   `CREATE POLICY` exists yet, and the app role must not own the tables — an owner ignores
-   its own policies. First migration. (The old cross-tenant claim problem this item used to
-   mention — the `ai-handler` runner claiming a `job` row before it knew the hospital — no
-   longer applies: there is no runner, and `ai_cache` was deliberately designed without
-   `hospital_id` in the first place, so there's no cross-tenant claim to admit a policy for.)
+2. **RLS policies are not written on most tenant tables.** `session_scope()` sets
+   `app.hospital_id` / `app.actor_id` / `app.actor_system`. H1 ENABLE/FORCE RLS on
+   `review_decision` and `audit_log_entry` only; the rest still leak across tenants.
+   The app role must not own the tables — an owner ignores its own policies. (The old
+   cross-tenant claim problem this item used to mention — the `ai-handler` runner claiming
+   a `job` row before it knew the hospital — no longer applies: there is no runner, and
+   `ai_cache` was deliberately designed without `hospital_id`.)
 3. **Stock data source for the MVP** — CSV, synthetic generator, or a self-written mock
    distributor API. Days-of-supply is the core metric and no public feed provides it. Blocks
    the `formulary_item` / `stock_snapshot` schema.

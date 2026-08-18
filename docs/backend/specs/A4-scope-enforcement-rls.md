@@ -1,37 +1,32 @@
 # A4 — Scope enforcement and row-level security
 
-**Services:** all seven · **Flows:** every · **Status:** ⚠️ `PERMS` exists, RLS policies do not
+**Services:** all seven · **Flows:** every · **Status:** ⚠️ `PERMS` exists; FORCE RLS on `review_decision` + `audit_log_entry` only (H1). The rest of the tenant tables are still open.
 
 ## Goal
 
 Two halves of one guarantee. The scope half exists: `require("inventory:read")` in
-`shared/medstock_shared/auth.py`, with `PERMS` mapping role → scopes. The tenant half does
-not: `models.py` states outright that there is "no application `WHERE hospital_id`" and that
-RLS plus `session_scope` are meant to be the filter — but no policy has been created. Today a
-mistake in one service's query leaks another hospital's rows.
+`shared/medstock_shared/auth.py`, with `PERMS` mapping role → scopes. The tenant half is
+partial: H1 ENABLE/FORCE RLS on `review_decision` and `audit_log_entry`. Every other tenant
+table still has no `CREATE POLICY`, so a mistake in one service's query can still leak
+another hospital's rows.
 
 ## Current scope matrix
 
-```python
-PERMS = {
-  "pharmacist": {"queue:read", "recommendation:approve", "inventory:read", "drug:search"},
-  "physician":  {"alert:read", "inventory:read", "drug:search"},
-  "director":   {"dashboard:read", "audit:read", "inventory:read", "drug:search"},
-  "admin":      {"mapping:approve", "formulary:write", "audit:read", "inventory:read", "drug:search"},
-}
-```
+`PERMS` lives in `shared/medstock_shared/auth.py` — copy it from there, not from this file.
+Wave 1 additions that this spec's original sketch did not have: `facility:read` on all four
+roles; `forecast:read` / `forecast:run` on pharmacist and director; `audit:read` on
+**pharmacist** (so `GET /audit` matches `PAGE_ROLES`). D3 export must not assume
+`audit:read` is director/admin-only.
 
-## Scopes to add
+## Scopes still to add
 
 | Scope | Roles | Used by |
 |---|---|---|
-| `facility:read` | all four | B1 |
 | `batch:write` | pharmacist, admin | B4 |
 | `par:write` | admin | B5 |
 | `order:read` | pharmacist, director, admin | F4 |
 | `order:write` | pharmacist, admin | F3 |
 | `transfer:write` | pharmacist, director | G2 |
-| `forecast:read` | pharmacist, physician, director | E1–E3 |
 | `copilot:use` | all four | I1 |
 
 `membership.role`'s CHECK constraint and the `PERMS` keys must stay in sync. A role present in
@@ -40,7 +35,8 @@ a confusing outage. Add a startup assertion comparing the two.
 
 ## Row-level security
 
-Every tenant table (see the registry in [db-schema.md](../db-schema.md)) gets:
+H1 already applied this pattern to `review_decision` and `audit_log_entry`. Every other
+tenant table (see the registry in [db-schema.md](../db-schema.md)) still needs:
 
 ```sql
 ALTER TABLE stock_snapshot ENABLE ROW LEVEL SECURITY;
@@ -68,7 +64,9 @@ reference tables (`drug`, `rxnorm_edge`, `drug_price`, `shortage_event`, `drug_c
 One context manager in `shared/medstock_shared/db.py`, already the intended entry point:
 
 ```python
-with session_scope(principal) as s:      # SET LOCAL app.hospital_id / app.actor_id
+with session_scope(p.hospital_id, p.user_id) as s:
+    ...
+with session_scope(hospital_id, "", actor_system="ingest"):
     ...
 ```
 
@@ -85,8 +83,10 @@ connection cannot leak the previous request's tenant into the next one.
    `FORCE ROW LEVEL SECURITY` is required, not just `ENABLE`.
 4. `audit_log_entry` additionally carries `REVOKE UPDATE, DELETE FROM app_role` (see H1).
 5. `hospital_id` is `uuid` on every tenant table (wave 0, migration
-   `20260818_hospital_uuid`). RLS policies are still open — do not paper over
-   that with an application `WHERE`.
+   `20260818_hospital_uuid`). FORCE RLS is on `review_decision` and
+   `audit_log_entry` only (H1). Do not paper over the rest with an application
+   `WHERE`. `GET /audit` SETs `LOCAL ROLE app_role` because docker/CI connect as
+   a superuser that would otherwise bypass FORCE RLS.
 
 ## Acceptance criteria
 

@@ -104,17 +104,27 @@ counts above before concluding a feed is broken.
 
 ## 5. Locally, without Kubernetes
 
+Warehouse, forecasts, and the facility switcher need the demo tenant **before** the
+ingest feeds. Without `seed_demo` those screens are empty even if alembic has run.
+
 ```bash
 export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medstock
-uv run alembic upgrade head
+# this repo uses `.venv/bin/python`; `uv` is optional
+.venv/bin/alembic upgrade head
+
+SEED_PASSWORD=devpassword123 (cd services/auth && ../../.venv/bin/python -m app.seed)
+ENVIRONMENT=demo (cd services/ingest && ../../.venv/bin/python -m app.seed_demo)
+.venv/bin/python scripts/seed_stock.py
+.venv/bin/python scripts/seed_certification.py
+.venv/bin/python scripts/seed_patients.py --count 200
 
 cd services/ingest
-uv run python -m app.cpic
-uv run python -m app.faers --formulary --limit 25
-uv run python -m app.import_alerts
-uv run python -m app.warning_letters
-uv run python -m app.news --shelf
-uv run python -m app.prognosis --formulary --limit 20   # needs GEMINI_API_KEY
+../../.venv/bin/python -m app.cpic
+../../.venv/bin/python -m app.faers --formulary --limit 25
+../../.venv/bin/python -m app.import_alerts
+../../.venv/bin/python -m app.warning_letters
+../../.venv/bin/python -m app.news --shelf
+../../.venv/bin/python -m app.prognosis --formulary --limit 20   # needs GEMINI_API_KEY
 ```
 
 Both scrapers take `--dry-run`, which parses and reports without writing —

@@ -395,7 +395,7 @@ The proposed tables have a dependency order; taking them out of order means rewr
 
 1. **Fix `hospital_id` typing.** ✅ wave 0 (`20260818_hospital_uuid`): every tenant
    table is `uuid` FK to `hospital.id`. DEMO GENERAL HOSPITAL (all-zeros UUID) is
-   remapped onto St Mary's General. RLS policies (A4) are still open.
+   remapped onto St Mary's General. RLS (A4) is still open except H1's two tables.
 2. `facility` — B1 blocks stock scoping, orders, transfers, and forecasts alike. ✅ done
    (migration `20260817_warehouse`, with `storage_location`, `consumption_daily`,
    `location_condition`, storage-requirement columns on `drug`, and

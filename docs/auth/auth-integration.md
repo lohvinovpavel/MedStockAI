@@ -151,12 +151,12 @@ That is rare — most routes want one.
 
 ### The permission map, as it stands today
 
-| Role | Permissions |
+| Role | Permissions (abridged — `auth.py` is source of truth) |
 |---|---|
-| `pharmacist` | `inventory:read`, `queue:read`, `recommendation:approve` |
-| `physician` | `alert:read`, `inventory:read` |
-| `director` | `audit:read`, `dashboard:read`, `inventory:read` |
-| `admin` | `audit:read`, `formulary:write`, `inventory:read`, `mapping:approve` |
+| `pharmacist` | `inventory:read`, `queue:read`, `recommendation:approve`, `facility:read`, `forecast:read`, `forecast:run`, `audit:read`, `certificate:read`, `certification:explore`, `profile:*` |
+| `physician` | `alert:read`, `inventory:read`, `drug:search`, `facility:read`, `patient:*`, `certificate:read`, `profile:assess`, `profile:explain` |
+| `director` | `audit:read`, `dashboard:read`, `inventory:read`, `facility:read`, `forecast:read`, `forecast:run`, `certificate:read`, `profile:review` |
+| `admin` | `audit:read`, `formulary:write`, `inventory:read`, `mapping:approve`, `facility:read`, `patient:*`, `certificate:read`, `certification:explore`, `profile:review` |
 
 Verified behaviour of `require("queue:read")`: `pharmacist` → `200`, and `physician`, `director`,
 `admin` → `403`. Note that `admin` is **not** a superuser — it holds four specific permissions and
@@ -175,13 +175,15 @@ with session_scope(p.hospital_id, p.user_id) as s:
     s.query(FormularyItem).all()      # no WHERE hospital_id — do not write one
 ```
 
-**Row-level security policies do not exist yet.** `session_scope()` sets `app.hospital_id` and
-`app.actor_id`, but no `CREATE POLICY` has been written (`services.md` §8 open item #2), so nothing
-reads them and cross-tenant rows are *not* filtered today.
+**Row-level security is partial.** H1 ENABLE/FORCE RLS on `review_decision` and
+`audit_log_entry`. `session_scope()` sets `app.hospital_id`, `app.actor_id`, and
+`app.actor_system`, but no `CREATE POLICY` has been written on the other tenant tables
+(`services.md` §8 open item #2), so cross-tenant rows are *not* filtered there today.
 
-Write your queries as though RLS were on — no manual `WHERE hospital_id` — because that is what
-makes the policies work the day they land. But do not demo tenant isolation as a working feature,
-and do not build a feature whose correctness depends on it right now.
+Write your queries as though RLS were on — no manual `WHERE hospital_id` — because that is
+what makes the policies work the day they land. Do not demo tenant isolation as a working
+feature except on the two H1 tables, and do not build a feature whose correctness depends
+on it right now.
 
 Use `session_scope`, not `engine.connect()`. The raw engine is fine for `/readyz` (`SELECT 1`) and
 nothing else.

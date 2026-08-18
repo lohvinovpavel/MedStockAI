@@ -68,8 +68,10 @@ CREATE TRIGGER audit_review_decision AFTER INSERT OR UPDATE ON review_decision
   FOR EACH ROW EXECUTE FUNCTION write_audit_entry();
 ```
 
-Attach the same trigger to: `review_decision`, `purchase_order`, `stock_batch`,
-`transfer_request`, `par_level`, `formulary_item`, `drug_certification`.
+Wave 1 attaches the trigger **only** to `review_decision`. Attach the same trigger to
+`purchase_order`, `stock_batch`, `transfer_request`, `par_level`, `formulary_item`, and
+`drug_certification` when those writers go through `session_scope` with an actor — seeds
+that write formulary/certification without one would abort on the CHECK.
 
 ## Append-only is a grant
 
@@ -100,12 +102,12 @@ in zero. This is demonstrable in ten seconds at defense: connect as `app_role`, 
 
 ## Acceptance criteria
 
-- [ ] `DELETE FROM audit_log_entry` as `app_role` raises insufficient privilege.
-- [ ] `UPDATE` as `app_role` raises insufficient privilege.
-- [ ] Approving a recommendation produces an audit row with no application code calling `audit()`.
-- [ ] A write inside `session_scope` with no actor configured rolls back the whole transaction.
-- [ ] A CronJob write produces a row with `actor_system` set and `actor_id` null.
-- [ ] Flow 18's timeline is served entirely from this table — no fixture data remains.
+- [x] `DELETE FROM audit_log_entry` as `app_role` raises insufficient privilege.
+- [x] `UPDATE` as `app_role` raises insufficient privilege.
+- [x] Inserting a `review_decision` produces an audit row with no application code calling `audit()`. F1's approve endpoint is still open — until it writes this table the live trail stays empty.
+- [x] A write inside `session_scope` with no actor configured rolls back the whole transaction.
+- [x] A CronJob write produces a row with `actor_system` set and `actor_id` null.
+- [x] Flow 18's timeline is served entirely from this table — no fixture data remains.
 
 ## Out of scope
 
