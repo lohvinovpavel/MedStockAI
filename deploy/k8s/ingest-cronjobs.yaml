@@ -250,3 +250,70 @@ spec:
             resources:
               requests: { cpu: 50m, memory: 64Mi }
               limits: { memory: 256Mi }
+---
+# Tier 3: CPIC gene-drug guidelines -> pgx_guideline.
+# Weekly. CPIC publishes on a slow cadence and the API is keyless, so this is
+# cheap; it runs before the prognosis job so both reference feeds are current
+# before anything reads them.
+#
+# Without this job pgx_guideline stays empty and stage 8 silently never runs —
+# the tier would be built, tested and permanently invisible.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-cpic
+spec:
+  schedule: "0 5 * * 0"   # Sundays 05:00, an hour before prognosis
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: cpic
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.cpic", "--formulary"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }
+---
+# Tier 1: FAERS disproportionality -> adr_signal.
+# Weekly, and deliberately bounded. openFDA allows 1 000 requests/day per IP
+# shared across every feed (services.md §7) and this costs one call per drug
+# plus two fixed, so --limit keeps a formulary sweep from eating the budget the
+# daily certification pass depends on.
+#
+# Same point as ingest-cpic: without this, adr_signal stays empty and stage 7a
+# never fires.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-faers
+spec:
+  schedule: "0 7 * * 0"   # Sundays 07:00, after prognosis, well clear of the daily passes
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: faers
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.faers", "--formulary", "--limit", "40"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }

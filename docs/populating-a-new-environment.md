@@ -1,0 +1,113 @@
+# Populating a new environment
+
+`alembic upgrade head` creates every table **empty**. No reference data is
+committed to the repository, and that is deliberate — FDA listings, CPIC
+guidelines and FAERS ratios change under us, so they are fetched by feeds rather
+than frozen into git.
+
+The consequence is the thing this page exists for: **a freshly migrated
+environment shows an empty Prognosis Review queue, no pharmacogenomic findings,
+no import-alert or warning-letter badges, and no population signal** — and the
+weekly CronJobs will not fix that until their schedule comes round, which for
+the Sunday and Monday jobs can be six days away.
+
+Run the feeds once, by hand, after migrating.
+
+---
+
+## 1. What fills what
+
+| Table | Filled by | Schedule | Key needed |
+|---|---|---|---|
+| `drug_certification`, `certification_finding` | `ingest-certification` | daily 05:00 | — |
+| `import_alert` | `ingest-import-alerts` | Mondays 04:00 | — |
+| `warning_letter` | `ingest-warning-letters` | Mondays 04:30 | — |
+| `news_signal` | `ingest-news` | daily 06:30 | — |
+| `pgx_guideline` (Tier 3) | `ingest-cpic` | Sundays 05:00 | — |
+| `adr_signal` (Tier 1) | `ingest-faers` | Sundays 07:00 | — |
+| `drug_risk_profile` (PP-3) | `ingest-prognosis` | Sundays 06:00 | **`GEMINI_API_KEY`** |
+| `assessment_log` | written by `/assess` and `/cart-check` | on use | — |
+
+Only the prognosis feed needs a model. Everything else is keyless: openFDA,
+CPIC, accessdata.fda.gov and a news index.
+
+---
+
+## 2. Run them once, in this order
+
+```bash
+kubectl -n medstock apply -f deploy/k8s/migrate-job.yaml
+kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
+
+kubectl -n medstock apply -f deploy/k8s/seed-stock-job.yaml
+kubectl -n medstock wait --for=condition=complete job/seed-stock --timeout=300s
+
+for feed in certification cpic faers import-alerts warning-letters news prognosis; do
+  kubectl -n medstock create job "now-$feed" --from="cronjob/ingest-$feed"
+done
+```
+
+Order matters in one place only: `seed-stock` before `certification`, because
+the certification pass certifies what is on the shelf and a shelf that is not
+there yet certifies nothing. The rest are independent.
+
+---
+
+## 3. What "working" looks like afterwards
+
+```sql
+SELECT 'pgx_guideline'     t, count(*) FROM pgx_guideline
+UNION ALL SELECT 'adr_signal',    count(*) FROM adr_signal
+UNION ALL SELECT 'import_alert',  count(*) FROM import_alert
+UNION ALL SELECT 'warning_letter',count(*) FROM warning_letter
+UNION ALL SELECT 'drug_risk_profile', count(*) FROM drug_risk_profile;
+```
+
+For scale, one full local run produced 252 CPIC rows, 76 FAERS signals for a
+single drug, 2 285 import-alert firms and 989 warning letters.
+
+---
+
+## 4. The queue will still look empty, and that is the gate working
+
+`ingest-prognosis` writes every extracted profile as `awaiting_approval`. Until
+a pharmacist rules on one, `approved_profiles()` returns nothing and **no PP-3
+finding appears in any assessment** — by design
+([prognosis-and-procurement.md](prognosis-and-procurement.md) §1.3, gate 3).
+
+So after seeding you should expect:
+
+- **Prognosis Review** — rows to review, accept rate `—` (not `0%`; nothing has
+  been ruled on, and a rate over no decisions is unknown rather than zero).
+- **An assessment** — Tier 1 and Tier 3 findings, but no `PROGNOSIS_RISK` until
+  someone approves a profile.
+
+That is the difference between "the feed did not run" and "nobody has approved
+anything yet", and the two look identical from the outside. Check the table
+counts above before concluding a feed is broken.
+
+---
+
+## 5. Locally, without Kubernetes
+
+```bash
+export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medstock
+uv run alembic upgrade head
+
+cd services/ingest
+uv run python -m app.cpic --formulary
+uv run python -m app.faers --formulary --limit 25
+uv run python -m app.import_alerts
+uv run python -m app.warning_letters
+uv run python -m app.news --shelf
+uv run python -m app.prognosis --formulary --limit 20   # needs GEMINI_API_KEY
+```
+
+Both scrapers take `--dry-run`, which parses and reports without writing —
+worth using first, because a layout change upstream shows up there as zero rows
+rather than as an empty table nobody questions.
+
+**`GEMINI_API_KEY`, not `GOOGLE_API_KEY`.** `ai.py` passes
+`settings.gemini_api_key` explicitly, so a key under the other spelling leaves
+it empty and every `ask_ai()` call fails with no useful message. See
+`.env.example`.
