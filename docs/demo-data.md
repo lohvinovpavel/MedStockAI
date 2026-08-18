@@ -136,17 +136,19 @@ Order matters, because tenant data references real reference data:
    90 days of hourly storage-condition telemetry (`location_condition`).
    `seed_demo` then overlays the 11 dashboard-page NDCs from
    `shared/medstock_shared/demo_shelf.py` — same NDC, name, quantity, lot and
-   expiry as `web/lib/mock-data.ts`, plus B5 par levels so `/inventory` status
-   is a real claim. Depth per site follows the mock `inventoryFor()` profile
+   expiry the dashboard has always shown, plus B5 par levels so `/inventory` status
+   is a real claim. Depth per site follows `FACILITY_SHELF_PROFILE`
    (clinics omit ICU SKUs; warehouse is bulk). Consumption is cloned from a
    same-class donor so Warehouse charts are not empty for those SKUs.
    `scripts/seed_stock.py` upserts the same shelf (and UC-2 analogue NDCs)
    after clearing leftover lots, so a second run cannot stack quantities.
    Wave 3 also plants `shortage_event` rows for Norepinephrine, Ceftriaxone
-   and Heparin (the mock shortage alerts) so B3 `uncovered` is a real claim.
+   and Heparin so B3 `uncovered` is a real claim.
    Wave 4 plants partner-site `stock_snapshot` / trailing consumption for
    those three SKUs (St. Luke, Mercy — matching `PARTNER_SHORTAGE_STOCK`) and
-   the four mock suppliers plus per-SKU unit costs so G1 and F2 are live.
+   the four suppliers plus per-SKU unit costs so G1 and F2 are live.
+   Wave 5 plants `purchase_order` rows (`PO-2026-0141` … `PO-2026-0148`) from
+   `DEMO_ORDERS` so `/orders` matches the old demo after a regen.
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly

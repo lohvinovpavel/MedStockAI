@@ -11,9 +11,8 @@ import { useSession } from "@/lib/session";
  * that file is the security boundary (every real endpoint 403s on its own,
  * see lib/prognosis.ts's approvalStance for the pattern). This one only
  * decides what the UI *shows*: which nav tabs and pages a role sees, and
- * which buttons on mock-data pages (orders/copilot —
- * lib/mock-data.ts, no backend yet) are offered. Hiding a button here is a
- * courtesy; a role with no cookie at all still can't reach anything real.
+ * which action buttons are offered. Hiding a button here is a courtesy;
+ * every real endpoint still 403s on its own PERMS grant.
  */
 export type Role = "pharmacist" | "physician" | "director" | "admin";
 
@@ -24,9 +23,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   physician: "Doctor",
 };
 
-// Pages backed by a real service (inventory, analogue, warehouse, audit,
-// shortages) mirror that service's PERMS grant; orders still have no backend,
-// so that row is the product call from docs/rbac-matrix.md.
+// Pages backed by a real service mirror that service's PERMS grant.
 const PAGE_ROLES: Record<string, Role[]> = {
   "/inventory": ["pharmacist", "physician", "director", "admin"],
   "/analogue": ["pharmacist", "physician", "director", "admin"],
@@ -58,7 +55,7 @@ export function canAccessPage(role: string | undefined, path: string): boolean {
 export const CAN: Record<string, Role[]> = {
   receiveBatch: ["pharmacist", "admin"],
   placeOrder: ["admin"],
-  requestTransfer: ["pharmacist", "admin"],
+  requestTransfer: ["pharmacist", "director"],
   actOnForecast: ["pharmacist", "admin"],
   // forecast:run in shared PERMS: triggering a forecast run (issue #7).
   runForecast: ["pharmacist", "director"],

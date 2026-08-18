@@ -688,6 +688,8 @@ export default function InventoryPage() {
         label: item.name ?? item.ndc,
         detail: `Lot ${item.lot ?? "—"} · ${item.quantity} on hand · expires ${item.earliest_expiry ?? "—"}`,
         itemId: item.ndc,
+        ndc: item.ndc,
+        rxcui: item.rxcui ?? null,
       });
     }
   }

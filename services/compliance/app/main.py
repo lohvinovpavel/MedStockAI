@@ -7,10 +7,12 @@ required: the colour is not secret, but the endpoint is not public either.
 """
 
 import os
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from medstock_shared.auth import Principal, require
 from medstock_shared.certification import (
     RULESET_VERSION,
@@ -20,7 +22,14 @@ from medstock_shared.certification import (
     signal,
 )
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import AuditLogEntry, CertificationFinding, DrugCertification
+from medstock_shared.models import (
+    AppUser,
+    AuditLogEntry,
+    CertificationFinding,
+    Drug,
+    DrugCertification,
+    Membership,
+)
 from sqlalchemy import case, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
@@ -330,3 +339,132 @@ def get_audit(
                 for row in rows
             ]
         }
+
+
+_EXPORT_COLUMNS = (
+    "occurred_at",
+    "actor",
+    "actor_role",
+    "entity_type",
+    "entity_id",
+    "action",
+    "drug_name",
+    "ndc",
+    "certification_status",
+    "ruleset_version",
+    "finding_codes",
+    "ai_dedupe_key",
+    "source",
+)
+
+
+def _csv_cell(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text[:1] in {"=", "+", "-", "@"}:
+        text = "'" + text
+    if any(ch in text for ch in (',', '"', '\n', '\r')):
+        text = '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def _ndc_from_audit(row: AuditLogEntry) -> str | None:
+    for blob in (row.after, row.before):
+        if not isinstance(blob, dict):
+            continue
+        if blob.get("ndc"):
+            return str(blob["ndc"])
+        payload = blob.get("payload")
+        if isinstance(payload, dict) and payload.get("ndc"):
+            return str(payload["ndc"])
+        entity_ref = blob.get("entity_ref")
+        if entity_ref and str(entity_ref).isdigit():
+            return str(entity_ref)
+    return None
+
+
+@app.get("/export/compliance.csv")
+def export_compliance_csv(
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
+    ndc: str | None = Query(None),
+    facility_id: int | None = Query(None),
+    principal: Principal = Depends(require("audit:export")),
+) -> StreamingResponse:
+    """D3: streamed CSV of the H1 trail. Pharmacist `audit:read` is not enough."""
+    end = to or datetime.now(UTC)
+    start = from_ or (end - timedelta(days=90))
+
+    def generate():
+        yield ",".join(_EXPORT_COLUMNS) + "\n"
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            stmt = (
+                select(AuditLogEntry)
+                .where(AuditLogEntry.occurred_at >= start, AuditLogEntry.occurred_at <= end)
+                .order_by(AuditLogEntry.occurred_at.asc(), AuditLogEntry.id.asc())
+                .execution_options(yield_per=200, stream_results=True)
+            )
+            emails: dict[str, str] = {}
+            roles: dict[str, str] = {}
+            for row in session.scalars(stmt):
+                extracted = _ndc_from_audit(row)
+                if ndc and extracted != ndc:
+                    continue
+                if facility_id is not None:
+                    blob = row.after if isinstance(row.after, dict) else {}
+                    fac = blob.get("facility_id") or (blob.get("payload") or {}).get("facility_id")
+                    if fac is not None and int(fac) != facility_id:
+                        continue
+                actor_key = str(row.actor_id) if row.actor_id else ""
+                if actor_key and actor_key not in emails:
+                    user = session.get(AppUser, row.actor_id)
+                    emails[actor_key] = user.email if user else actor_key
+                    membership = session.get(Membership, (row.actor_id, row.hospital_id))
+                    roles[actor_key] = membership.role if membership else ""
+                actor = emails.get(actor_key) or row.actor_system or "pipeline"
+                actor_role = roles.get(actor_key) or row.actor_system or "system"
+                cert_status = ""
+                ruleset_version = ""
+                finding_codes = ""
+                drug_name = ""
+                source = "current"
+                if extracted:
+                    drug = session.scalar(select(Drug).where(Drug.ndc == extracted))
+                    drug_name = drug.name if drug else ""
+                    cert = session.scalar(
+                        select(DrugCertification).where(DrugCertification.ndc == extracted)
+                    )
+                    if cert:
+                        cert_status = cert.status
+                        ruleset_version = cert.ruleset_version
+                    codes = list(
+                        session.scalars(
+                            select(CertificationFinding.code)
+                            .where(CertificationFinding.ndc == extracted)
+                            .order_by(CertificationFinding.code)
+                        )
+                    )
+                    finding_codes = "|".join(codes)
+                cells = [
+                    row.occurred_at.isoformat() if row.occurred_at else "",
+                    actor,
+                    actor_role,
+                    row.entity_type,
+                    row.entity_id,
+                    row.action,
+                    drug_name,
+                    extracted or "",
+                    cert_status,
+                    ruleset_version,
+                    finding_codes,
+                    row.ai_dedupe_key or "",
+                    source,
+                ]
+                yield ",".join(_csv_cell(c) for c in cells) + "\n"
+
+    filename = f"compliance-{start.date().isoformat()}-{end.date().isoformat()}.csv"
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+

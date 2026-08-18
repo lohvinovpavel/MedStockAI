@@ -34,20 +34,22 @@ and what not to change, rather than restating shipped code.
 | [C6](C6-substitution-safety.md) | Substitution safety check | `patient-profiling` | ✅ |
 | [D1](D1-certificate-status.md) | Certificate status | `compliance` | ✅ |
 | [D2](D2-on-demand-exploration.md) | On-demand exploration | `compliance` | ✅ |
-| [D3](D3-compliance-export.md) | Compliance export | `compliance` | ❌ |
+| [D3](D3-compliance-export.md) | Compliance export | `compliance` | ✅ |
+
 | [E1](E1-demand-forecast.md) | Demand forecast | `prediction` | ✅ |
 | [E2](E2-days-of-supply-at-risk.md) | Days of supply / at-risk | `prediction` | ✅ |
 | [E3](E3-surge-scenario.md) | Surge scenario | `prediction` | ✅ |
-| [F1](F1-restock-recommendation.md) | Restock recommendation | `prediction` + `inventory` | ❌ |
+| [F1](F1-restock-recommendation.md) | Restock recommendation | `prediction` + `inventory` | ✅ |
+
 | [F2](F2-supplier-catalog.md) | Supplier and catalog | `warehouse` | ✅ |
-| [F3](F3-purchase-order-lifecycle.md) | Purchase order lifecycle | `inventory` | ❌ |
-| [F4](F4-order-history.md) | Order history query | `inventory` | ❌ |
+| [F3](F3-purchase-order-lifecycle.md) | Purchase order lifecycle | `inventory` | ✅ |
+| [F4](F4-order-history.md) | Order history query | `inventory` | ✅ |
 | [G1](G1-shortage-matrix.md) | Shortage matrix | `inventory` | ✅ |
-| [G2](G2-inter-facility-transfer.md) | Inter-facility transfer | `warehouse` | ❌ |
+| [G2](G2-inter-facility-transfer.md) | Inter-facility transfer | `warehouse` | ✅ |
 | [H1](H1-append-only-audit-log.md) | Append-only audit log | Postgres trigger | ✅ |
-| [H2](H2-ai-decision-provenance.md) | AI decision provenance | `shared/ai.py` | ❌ |
-| [I1](I1-copilot-tool-calling.md) | Copilot chat with tool calling | copilot gateway | ❌ |
-| [I2](I2-copilot-persistence.md) | Copilot conversation persistence | copilot gateway | ❌ |
+| [H2](H2-ai-decision-provenance.md) | AI decision provenance | `shared/ai.py` | ✅ |
+| [I1](I1-copilot-tool-calling.md) | Copilot chat with tool calling | copilot gateway | ✅ |
+| [I2](I2-copilot-persistence.md) | Copilot conversation persistence | copilot gateway | ✅ |
 
 ## Build order
 
@@ -59,10 +61,10 @@ previous wave lands.
 | 0 | `hospital_id` uuid migration (A4) | ✅ landed (`20260818_hospital_uuid`) |
 | 1 | B1 UI cutover, **H1** | ✅ landed. Sidebar reads `GET /warehouse/facilities`; audit trigger on `review_decision` |
 | 2 | A4 policies, **B2** `/items`, **B4**, **B5** | ✅ landed (`20260818_wave2_stock`). Inventory table is live |
-| 3 | B3, B6, C5 | ✅ landed (`20260818_wave3`). Formulary CSV, exposure KPIs, analogue overlay on live `stock_snapshot`. Remaining mock after wave 4 is orders/copilot |
-| 4 | **F2**, G1 | ✅ landed (`20260818_wave4`). Pricing catalog + shortage matrix live. Remaining mock is orders/copilot. E2/E3 already live on `/forecasts`. Wave 4 as asked is G1+F2 only; F1/F3/F4/G2 stay wave 5. |
-| 5 | **F1**, **F3**, F4, G2 | The order pipeline, end to end |
-| 6 | D3, H2, I1, I2 | Export, provenance, copilot |
+| 3 | B3, B6, C5 | ✅ landed (`20260818_wave3`). Formulary CSV, exposure KPIs, analogue overlay on live `stock_snapshot` |
+| 4 | **F2**, G1 | ✅ landed (`20260818_wave4`). Pricing catalog + shortage matrix live. E2/E3 already live on `/forecasts`. |
+| 5 | **F1**, **F3**, F4, G2 | ✅ landed (`20260818_wave5`). Orders persist; transfers move stock; F1 is computed-on-read |
+| 6 | D3, H2, I1, I2 | ✅ landed (`20260818_wave6`). Export, provenance fingerprints, copilot gateway. `mock-data.ts` removed |
 
 Bold entries are on the critical path — every wave after them is blocked until they land.
 

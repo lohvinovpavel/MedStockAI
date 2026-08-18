@@ -24,6 +24,7 @@ spec:
       - { path: "/api/patients(/|$)(.*)",   pathType: ImplementationSpecific, backend: { service: { name: patient-profiling, port: { number: 8000 } } } }
       - { path: "/api/prediction(/|$)(.*)", pathType: ImplementationSpecific, backend: { service: { name: prediction,        port: { number: 8000 } } } }
       - { path: "/api/warehouse(/|$)(.*)",  pathType: ImplementationSpecific, backend: { service: { name: warehouse,         port: { number: 8000 } } } }
+      - { path: "/api/copilot(/|$)(.*)",    pathType: ImplementationSpecific, backend: { service: { name: analogue,          port: { number: 8000 } } } }
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

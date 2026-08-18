@@ -71,11 +71,16 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def dedupe_key(task: str, payload: dict) -> str:
-    """Stable hash of the question. Same question, same key, same answer --
-    this is what makes retries free and re-asking cheap."""
+def dedupe_key(task: str, payload: dict, prompt_version: str = "", model: str = "") -> str:
+    """Stable hash of the question plus which prompt/model answered it (H2).
+
+    Editing a prompt and bumping `prompt_version` (or pinning a new model)
+    must miss cache — the previous answer is history, not a current reply.
+    """
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(f"{task}\x00{canonical}".encode()).hexdigest()
+    return hashlib.sha256(
+        f"{task}\x00{prompt_version}\x00{model}\x00{canonical}".encode()
+    ).hexdigest()
 
 
 class AIError(RuntimeError):
@@ -123,10 +128,14 @@ def parse_model_json(text: str | None) -> dict:
     stop=stop_after_attempt(3),
     reraise=True,
 )
-def _generate_json(prompt: str, timeout_seconds: float | None = None) -> dict:
+def _generate_json(
+    prompt: str,
+    timeout_seconds: float | None = None,
+    model: str | None = None,
+) -> dict:
     try:
         response = _get_client().models.generate_content(
-            model=settings.gemini_model,
+            model=model or settings.gemini_model,
             contents=prompt,
             config={
                 "response_mime_type": "application/json",
@@ -177,9 +186,14 @@ def ask_ai(
     `ai_audit_log` row is written per call, regardless of outcome.
     """
     task = TASKS[task_name]
-    key = dedupe_key(task_name, payload)
+    model_name = task.model or settings.gemini_model
+    key = dedupe_key(task_name, payload, task.prompt_version, model_name)
     request_id = request_id or uuid.uuid4().hex
     started = time.monotonic()
+
+    from ..db import bind_ai_dedupe_key
+
+    bind_ai_dedupe_key(key)
 
     def _audit(outcome: str) -> None:
         write_audit(
@@ -189,7 +203,7 @@ def ask_ai(
             task_type=task_name,
             dedupe_key=key,
             prompt_version=task.prompt_version,
-            model_name=settings.gemini_model,
+            model_name=model_name,
             outcome=outcome,
             latency_ms=_elapsed_ms(started),
         )
@@ -205,7 +219,9 @@ def ask_ai(
         raise AIError(f"circuit breaker open for task {task_name!r}")
 
     try:
-        result = _generate_json(task.prompt.format(**payload), task.timeout_seconds)
+        result = _generate_json(
+            task.prompt.format(**payload), task.timeout_seconds, model=model_name
+        )
         # Validate citations against the caller's source, not Gemini's echo.
         if isinstance(result, dict) and payload.get("source_text"):
             result = {**result, "source_text": payload["source_text"]}
@@ -215,6 +231,6 @@ def ask_ai(
         _audit("error")
         raise AIError(str(exc)) from exc
 
-    cache_put(task_name, task.prompt_version, settings.gemini_model, key, result)
+    cache_put(task_name, task.prompt_version, model_name, key, result)
     _audit("live")
     return result

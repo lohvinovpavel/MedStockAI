@@ -39,6 +39,7 @@ from medstock_shared.rxnorm import (
     ndcs_for_rxcui,
 )
 from medstock_shared.seed_wave4 import apply_partner_shortage, apply_suppliers
+from medstock_shared.seed_wave5 import apply_orders
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
@@ -69,8 +70,8 @@ DRUGS: tuple[dict, ...] = (
     {"rxcui": "200801", "name": "furosemide 20 MG Oral Tablet [Lasix]", "in_formulary": False},
 )
 
-# The SKUs the dashboard shelf shows (web/lib/mock-data.ts). The NDC list is
-# pinned by services/compliance/tests/test_demo_shelf.py against demo_shelf.py
+# The SKUs the dashboard shelf shows. The NDC list is pinned by
+# services/compliance/tests/test_demo_shelf.py against demo_shelf.py
 # (imported above) so seed_demo can plant the same rows with consumption.
 
 # Optional `quantity` (all sites) and `sites` freeze demo stock; otherwise random
@@ -348,6 +349,7 @@ def main() -> int:
         upsert(session, hospital_id, rows, formulary)
         partners = apply_partner_shortage(session, hospital_id, fac_ids)
         suppliers = apply_suppliers(session, hospital_id)
+        orders = apply_orders(session, hospital_id, fac_ids)
         for row in demo_shortage_rows():
             session.execute(
                 insert(ShortageEvent)
@@ -369,7 +371,8 @@ def main() -> int:
         f"{len(formulary)} formulary rxcui(s), "
         f"{len(demo_shortage_rows())} shortage event(s), "
         f"{partners} partner shortage row(s), "
-        f"{suppliers} supplier(s) "
+        f"{suppliers} supplier(s), "
+        f"{orders} purchase order(s) "
         f"for hospital_id={hospital_id} facilities={','.join(OPERATED_CODES)}"
     )
     return 0

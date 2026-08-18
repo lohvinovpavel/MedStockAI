@@ -20,6 +20,7 @@ export type ShelfItem = {
   target_qty: number | null;
   suggested_qty: number | null;
   in_formulary?: boolean;
+  rxcui?: string | null;
 };
 
 export type ReceivedBatch = {

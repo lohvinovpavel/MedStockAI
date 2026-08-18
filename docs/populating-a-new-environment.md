@@ -108,8 +108,9 @@ Warehouse, forecasts, and the facility switcher need the demo tenant **before** 
 ingest feeds. Without `seed_demo` those screens are empty even if alembic has run.
 `seed_demo` + `seed_stock` also plant `stock_batch` / `par_level` for the 11
 dashboard SKUs (wave 2 inventory table), a default formulary (wave 3),
-the three mock-aligned `shortage_event` rows B3/G1 join, partner-site
-stock for the shortage matrix, and the F2 supplier catalog.
+the three `shortage_event` rows B3/G1 join, partner-site
+stock for the shortage matrix, the F2 supplier catalog, and wave 5
+purchase orders (`PO-2026-0141`…`0148`) so `/orders` is populated after regen.
 
 ```bash
 export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medstock

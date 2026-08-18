@@ -1,6 +1,6 @@
 # D3 — Compliance export
 
-**Service:** `compliance` · **Flow:** 18 · **Status:** ❌ (specified in `docs/services.md` §3, not built)
+**Service:** `compliance` · **Flow:** 18 · **Status:** ✅ (wave 6)
 **Depends on:** H1 · **Scope:** director-only on the client (`CAN.exportAudit`). Do **not** reuse `audit:read` alone — pharmacist holds that grant for H1 `GET /audit`.
 
 ## Goal
@@ -45,12 +45,12 @@ On-screen trail is H1 (`GET /api/compliance/audit`), not this spec. Export reads
 
 ## Acceptance criteria
 
-- [ ] Export of a 50,000-row range completes without the process RSS tracking row count.
-- [ ] Every row has a non-empty actor column, human or system.
-- [ ] A cell starting with `=` is neutralised in the output.
-- [ ] Two exports of the same range are byte-identical (deterministic ORDER BY).
-- [ ] Requesting a range outside the caller's tenant returns their rows only, via RLS.
-- [ ] A `pharmacist` role gets 403 on the CSV even though they hold `audit:read` (H1 page). Use a narrower scope (`audit:export`) or an explicit role check — `audit:read` is no longer director/admin-only.
+- [x] Export of a 50,000-row range completes without the process RSS tracking row count.
+- [x] Every row has a non-empty actor column, human or system.
+- [x] A cell starting with `=` is neutralised in the output.
+- [x] Two exports of the same range are byte-identical (deterministic ORDER BY).
+- [x] Requesting a range outside the caller's tenant returns their rows only, via RLS.
+- [x] A `pharmacist` role gets 403 on the CSV even though they hold `audit:read` (H1 page). Use a narrower scope (`audit:export`) or an explicit role check — `audit:read` is no longer director/admin-only.
 
 ## Out of scope
 

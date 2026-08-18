@@ -22,15 +22,12 @@ roles; `forecast:read` / `forecast:run` on pharmacist and director; `audit:read`
 
 Wave 2 added `batch:write` (pharmacist, admin) and `par:write` (admin).
 Wave 4 added `order:read` (pharmacist, director, admin) for F2.
+Wave 5 added `order:write` (pharmacist, admin), `transfer:write` (pharmacist, director).
+Wave 6 added `audit:export` (director) and `copilot:use` (all four).
 
 ## Scopes still to add
 
-| Scope | Roles | Used by |
-|---|---|---|
-| `order:read` | pharmacist, director, admin | F2, F4 |
-| `order:write` | pharmacist, admin | F3 |
-| `transfer:write` | pharmacist, director | G2 |
-| `copilot:use` | all four | I1 |
+None for waves 5–6. Future: A2 OTP scopes if that lands.
 
 `membership.role`'s CHECK constraint and the `PERMS` keys must stay in sync. A role present in
 one and not the other fails closed (`PERMS.get(role, set())` → 403) — the right direction, but

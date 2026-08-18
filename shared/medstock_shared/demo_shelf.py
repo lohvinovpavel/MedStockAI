@@ -1,23 +1,26 @@
-"""NDCs the inventory dashboard shows (web/lib/mock-data.ts).
+"""NDCs the inventory dashboard shows.
 
 One list so seed_stock, seed_demo and COMP-1 cannot drift. Warehouse needs
 `drug` + `stock_snapshot` + a consumption series for these or the picker
 shows unnamed rows with empty charts. `storage_class` places each SKU on
 the right shelf (insulin in a fridge, not the main room).
 
-Wave 2: `quantity` / `lot` / `expiry_days` are the mock inventory row.
+Wave 2: `quantity` / `lot` / `expiry_days` are the live inventory row.
 `par_reorder` / `par_target` make B5 status a real claim — the four
 critical story SKUs (ceftriaxone, norepinephrine, insulin, heparin) sit
-at or below reorder. Facility profiles copy `inventoryFor()` so switching
-site changes depth the same way the mock table did.
+at or below reorder. Facility profiles copy the old per-site depth so
+switching site still changes coverage the same way.
 
 Wave 3: `rxcui` is the clinical id B6 writes to `formulary_item` and B3
-joins through. Values come from mock analogue RxCUIs / the B6 spec
+joins through. Values come from analogue RxCUIs / the B6 spec
 example (norepinephrine 1049640). Demo NDCs often have no live RxNorm
 pack list, so resolvers union this map with `ndcs_for_rxcui`.
 
-Wave 4: partner-site stock for the three shortage SKUs and the four mock
-suppliers (unit costs, lead times) so G1/F2 match `web/lib/mock-data.ts`.
+Wave 4: partner-site stock for the three shortage SKUs and the four
+suppliers (unit costs, lead times) so G1/F2 stay live.
+
+Wave 5: `DEMO_ORDERS` plants the purchase-order history `/orders` used
+to keep in browser memory (PO-2026-0141 … 0148).
 """
 
 from __future__ import annotations
@@ -27,8 +30,8 @@ from datetime import date, timedelta
 from .demo_tenant import FACILITIES, location_for
 
 # storage_min/max and humidity match warehouse CLASS_RANGES / seed_demo drugs.csv.
-# `id` matches mock-data.ts inventory ids so FACILITY_SHELF_PROFILE.absent
-# can name the same rows the mock omitted per site.
+# `id` is a stable shelf-row key so FACILITY_SHELF_PROFILE.absent
+# can name the same rows omitted per site.
 DASHBOARD_SHELF: tuple[dict, ...] = (
     {
         "id": "inv-001",
@@ -197,7 +200,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     },
 )
 
-# Mirrors web/lib/mock-data.ts FACILITY_PROFILE.stockFactor / absent.
+# Per-site depth: clinics omit ICU SKUs; warehouse is bulk.
 # burnFactor stays on the mock (orders/forecasts/shortages still read it).
 FACILITY_SHELF_PROFILE: dict[str, dict] = {
     "central": {"stock_factor": 1.0, "absent": ()},
@@ -290,7 +293,7 @@ PARTNER_SHORTAGE_STOCK: dict[str, dict[str, dict]] = {
     },
 }
 
-# Mock web/lib/mock-data.ts `suppliers` — catalog keyed by shelf `id`.
+# Demo suppliers — catalog keyed by shelf `id`.
 # Pack size 1 / min 1 so later F3 can consume these unit costs as the mock did.
 DEMO_SUPPLIERS: tuple[dict, ...] = (
     {
@@ -364,6 +367,107 @@ DEMO_SUPPLIERS: tuple[dict, ...] = (
             "inv-009": "2.9500",
             "inv-010": "8.6000",
         },
+    },
+)
+
+# Seeded purchase orders so /orders matches the old in-memory demo after regen.
+# Dates are offsets from today. unit_cost is taken from DEMO_SUPPLIERS at seed time.
+DEMO_ORDERS: tuple[dict, ...] = (
+    {
+        "ref": "PO-2026-0148",
+        "facility": "central",
+        "supplier": "EuroPharm Wholesale AG",
+        "shelf_id": "inv-005",
+        "quantity": 120,
+        "status": "in_transit",
+        "source": "ai_suggestion",
+        "created_days_ago": 2,
+        "expected_days": 1,
+        "note": "Expedited against FDA national backorder.",
+    },
+    {
+        "ref": "PO-2026-0147",
+        "facility": "central",
+        "supplier": "PharmaSource Global Ltd.",
+        "shelf_id": "inv-003",
+        "quantity": 300,
+        "status": "in_transit",
+        "source": "manual",
+        "created_days_ago": 3,
+        "expected_days": 2,
+        "note": None,
+    },
+    {
+        "ref": "PO-2026-0146",
+        "facility": "riverside",
+        "supplier": "Meditech Distribution Co.",
+        "shelf_id": "inv-001",
+        "quantity": 220,
+        "status": "placed",
+        "source": "manual",
+        "created_days_ago": 4,
+        "expected_days": 3,
+        "note": None,
+    },
+    {
+        "ref": "PO-2026-0145",
+        "facility": "central",
+        "supplier": "PharmaSource Global Ltd.",
+        "shelf_id": "inv-010",
+        "quantity": 180,
+        "status": "delivered",
+        "source": "ai_suggestion",
+        "created_days_ago": 12,
+        "expected_days": -6,
+        "note": "Generated from 91.5% confidence forecast.",
+    },
+    {
+        "ref": "PO-2026-0144",
+        "facility": "warehouse-north",
+        "supplier": "Nordic Medical Supply",
+        "shelf_id": "inv-006",
+        "quantity": 1400,
+        "status": "delivered",
+        "source": "manual",
+        "created_days_ago": 16,
+        "expected_days": -4,
+        "note": None,
+    },
+    {
+        "ref": "PO-2026-0143",
+        "facility": "westend",
+        "supplier": "Meditech Distribution Co.",
+        "shelf_id": "inv-004",
+        "quantity": 90,
+        "status": "delivered",
+        "source": "manual",
+        "created_days_ago": 21,
+        "expected_days": -13,
+        "note": None,
+    },
+    {
+        "ref": "PO-2026-0142",
+        "facility": "central",
+        "supplier": "EuroPharm Wholesale AG",
+        "shelf_id": "inv-007",
+        "quantity": 60,
+        "status": "cancelled",
+        "source": "manual",
+        "created_days_ago": 24,
+        "expected_days": -20,
+        "note": "Cancelled — EMA certificate lapsed before dispatch.",
+    },
+    {
+        "ref": "PO-2026-0141",
+        "facility": "riverside",
+        "supplier": "PharmaSource Global Ltd.",
+        "shelf_id": "inv-009",
+        "quantity": 500,
+        "status": "delivered",
+        "source": "ai_suggestion",
+        "created_days_ago": 29,
+        "expected_days": -23,
+        "note": None,
     },
 )
 

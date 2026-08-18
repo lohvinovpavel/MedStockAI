@@ -87,6 +87,7 @@ export default function ShortagesPage() {
   const [rows, setRows] = useState<CoverageRowLive[]>([]);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [rowsLoading, setRowsLoading] = useState(false);
+  const [coverageTick, setCoverageTick] = useState(0);
   const [search, setSearch] = useState("");
   const [transferFrom, setTransferFrom] = useState<string | undefined>();
   const [transferQty, setTransferQty] = useState(1);
@@ -146,7 +147,7 @@ export default function ShortagesPage() {
     return () => {
       cancelled = true;
     };
-  }, [alertId, facilityPk]);
+  }, [alertId, facilityPk, coverageTick]);
 
   const alert = alerts.find((a) => a.id === alertId) ?? null;
   const currentRow = rows.find((r) => r.is_current);
@@ -219,16 +220,38 @@ export default function ShortagesPage() {
         kind: "alert",
         label: a.drug_name,
         detail: `${a.source} shortage · ${alertSeverity(a)} · ${a.note ?? a.status ?? ""}`,
+        ndc: a.ndc,
       });
     }
   }
 
-  function requestTransfer() {
-    if (!transferFrom) return;
-    const ref = `TR-${Math.floor(1000 + Math.random() * 9000)}`;
-    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    setDispatch({ ref, time });
-    toast.success(`Transfer ${ref} dispatched to logistics.`);
+  async function requestTransfer() {
+    if (!transferFrom || !alert) return;
+    const src = rows.find((r) => r.facility.code === transferFrom);
+    if (!src) return;
+    try {
+      const created = (await apiFetch("warehouse", "/transfers", {
+        method: "POST",
+        body: JSON.stringify({
+          from_facility_id: src.facility.id,
+          to_facility_id: facilityPk,
+          ndc: alert.ndc,
+          quantity: transferQty,
+          shortage_id: alert.id,
+          partner_source: !src.facility.operated,
+        }),
+      })) as { id: number; ref: string };
+      const dispatched = (await apiFetch("warehouse", `/transfers/${created.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "dispatched" }),
+      })) as { ref: string };
+      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      setDispatch({ ref: dispatched.ref, time });
+      setCoverageTick((n) => n + 1);
+      toast.success(`Transfer ${dispatched.ref} dispatched to logistics.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Transfer failed.");
+    }
   }
 
   return (
@@ -408,7 +431,7 @@ export default function ShortagesPage() {
                   </Callout>
                 )}
 
-                <Button size="sm" className="h-8 text-xs" disabled={!transferFrom} onClick={requestTransfer}>
+                <Button size="sm" className="h-8 text-xs" disabled={!transferFrom} onClick={() => void requestTransfer()}>
                   <Truck data-icon="inline-start" />
                   Request {transferQty} units transfer
                 </Button>

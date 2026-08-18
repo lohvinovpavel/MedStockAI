@@ -37,6 +37,7 @@ from medstock_shared.models import (
     StockSnapshot,
 )
 from medstock_shared.seed_wave4 import apply_partner_shortage, apply_suppliers
+from medstock_shared.seed_wave5 import apply_orders
 from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -486,6 +487,7 @@ def run() -> dict[str, int]:
         partners = apply_partner_shortage(s, hospital_id, fac_ids)
         shortages = _seed_shortages(s, drugs)
         suppliers = apply_suppliers(s, hospital_id)
+        orders = apply_orders(s, hospital_id, fac_ids)
         s.commit()
 
     return {
@@ -501,6 +503,7 @@ def run() -> dict[str, int]:
         "partner_shortage_rows": partners,
         "shortages": shortages,
         "suppliers": suppliers,
+        "orders": orders,
     }
 
 

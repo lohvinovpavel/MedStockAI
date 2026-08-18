@@ -1,6 +1,6 @@
 # I2 — Copilot conversation persistence
 
-**Service:** copilot gateway · **Flow:** 19 · **Status:** ❌ · **Depends on:** H1, I1 · **Scope:** `copilot:use`
+**Service:** copilot gateway · **Flow:** 19 · **Status:** ✅ (wave 6, `20260818_wave6`) · **Depends on:** H1, I1 · **Scope:** `copilot:use`
 
 ## Goal
 
@@ -75,11 +75,11 @@ RLS per A4 on both tables.
 
 ## Acceptance criteria
 
-- [ ] Reloading the page restores the visible conversation in order.
-- [ ] Another user in the same tenant cannot read the conversation by id.
-- [ ] Deleting sets `deleted_at` and the conversation disappears from the list but remains readable by id for audit.
-- [ ] An assistant message created via `ask_ai` has a non-null `ai_dedupe_key`.
-- [ ] A 200-message conversation paginates without loading all rows.
+- [x] Reloading the page restores the visible conversation in order.
+- [x] Another user in the same tenant cannot read the conversation by id.
+- [x] Deleting sets `deleted_at` and the conversation disappears from the list but remains readable by id for audit.
+- [x] An assistant message created via `ask_ai` has a non-null `ai_dedupe_key`.
+- [x] A 200-message conversation paginates without loading all rows.
 
 ## Out of scope
 

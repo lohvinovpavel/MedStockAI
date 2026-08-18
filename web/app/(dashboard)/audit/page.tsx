@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Bot, Download, ScrollText, Server, Stethoscope } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { useFacility } from "@/lib/facility-context";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
 import { apiFetch } from "@/lib/api";
-import { formatAuditTimestamp, inventoryFor } from "@/lib/mock-data";
+import { formatAuditTimestamp } from "@/lib/dates";
 import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
 import { DecisionTrail } from "@/components/dashboard/DecisionTrail";
 import { cn } from "@/lib/utils";
@@ -45,25 +45,47 @@ function actorLabel(row: AuditRow): string {
   return row.actor_system || "Clinician";
 }
 
+type ShelfSku = {
+  ndc: string;
+  name: string | null;
+  quantity: number;
+  lot: string | null;
+  rxcui?: string | null;
+};
+
 export default function AuditPage() {
   const { setFocus } = useCopilot();
   const { user } = useSession();
-  const { facilityId, facility } = useFacility();
-  const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
+  const { facility } = useFacility();
+  const [items, setItems] = useState<ShelfSku[]>([]);
 
   const [skuParam, setSkuParam] = useState<string | null>(null);
   useEffect(() => {
     setSkuParam(new URLSearchParams(window.location.search).get("sku"));
   }, []);
-  const validSkuParam = skuParam && items.some((i) => i.id === skuParam) ? skuParam : null;
-
-  const [itemId, setItemId] = useState(validSkuParam ?? items[0]?.id);
 
   useEffect(() => {
-    if (validSkuParam) setItemId(validSkuParam);
-  }, [validSkuParam]);
+    let cancelled = false;
+    apiFetch("inventory", `/items?facility_id=${facility.id}&limit=200`)
+      .then((body: { items: ShelfSku[] }) => {
+        if (!cancelled) setItems(body.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [facility.id]);
 
-  const item = items.find((i) => i.id === itemId) ?? items[0];
+  const validSkuParam = skuParam && items.some((i) => i.ndc === skuParam) ? skuParam : null;
+  const [itemId, setItemId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setItemId(validSkuParam ?? items[0]?.ndc);
+  }, [validSkuParam, items]);
+
+  const item = items.find((i) => i.ndc === itemId) ?? items[0];
   const certification = useCertificationStatuses(item?.ndc ? [item.ndc] : []);
 
   const [entries, setEntries] = useState<AuditRow[]>([]);
@@ -91,9 +113,11 @@ export default function AuditPage() {
     if (!item) return;
     setFocus({
       kind: "sku",
-      label: item.drugName,
+      label: item.name ?? item.ndc,
       detail: `Audit trail · ${entries.length} logged events`,
-      itemId: item.id,
+      itemId: item.ndc,
+      ndc: item.ndc,
+      rxcui: item.rxcui ?? null,
     });
   }, [item, entries.length, setFocus]);
 
@@ -111,14 +135,14 @@ export default function AuditPage() {
             <span className="font-medium text-foreground">{facility.name}</span>.
           </p>
         </div>
-        <Select value={item.id} onValueChange={setItemId}>
+        <Select value={item.ndc} onValueChange={setItemId}>
           <SelectTrigger size="sm" className="h-8 w-64 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectGroup>
               {items.map((i) => (
-                <SelectItem key={i.id} value={i.id}>{i.drugName}</SelectItem>
+                <SelectItem key={i.ndc} value={i.ndc}>{i.name ?? i.ndc}</SelectItem>
               ))}
             </SelectGroup>
           </SelectContent>
@@ -128,9 +152,9 @@ export default function AuditPage() {
       <Card className="gap-3 py-4">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 px-4">
           <div>
-            <p className="text-sm font-medium">{item.drugName}</p>
+            <p className="text-sm font-medium">{item.name ?? item.ndc}</p>
             <p className="font-mono text-xs tabular-nums text-muted-foreground">
-              Batch {item.batchNumber} · {item.currentStock} {item.unit} on hand
+              Lot {item.lot ?? "—"} · {item.quantity} on hand
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -140,7 +164,29 @@ export default function AuditPage() {
                 variant="outline"
                 size="sm"
                 className="h-8 gap-1.5 text-xs"
-                onClick={() => toast.success(`Audit trail for ${item.drugName} exported to compliance archive.`)}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const params = new URLSearchParams();
+                      if (item.ndc) params.set("ndc", item.ndc);
+                      params.set("facility_id", String(facility.id));
+                      const res = await fetch(`/api/compliance/export/compliance.csv?${params}`, {
+                        credentials: "include",
+                      });
+                      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `compliance-${item.ndc}.csv`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      toast.success(`Exported compliance trail for ${item.name ?? item.ndc}.`);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Export failed.");
+                    }
+                  })();
+                }}
               >
                 <Download data-icon="inline-start" />
                 Export Audit Trail
@@ -159,8 +205,8 @@ export default function AuditPage() {
             Event history
           </CardTitle>
           <CardDescription className="text-xs">
-            Newest first · rows written by the database trigger on <span className="font-mono">review_decision</span>.
-            Export still archives locally until D3.
+            Newest first · rows written by the database trigger on <span className="font-mono">review_decision</span>,
+            purchase orders, and transfers. Export is a streamed CSV (D3).
           </CardDescription>
         </CardHeader>
         <CardContent className="px-4">

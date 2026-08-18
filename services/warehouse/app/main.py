@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 
 from .pricing import adjust_quantity, quote_totals
+from .transfers import transfers
 
 app = FastAPI(title="warehouse")
 api = APIRouter()
@@ -452,3 +453,5 @@ def quote(
 
 app.include_router(api)
 app.include_router(api, prefix="/api/warehouse")
+app.include_router(transfers)
+app.include_router(transfers, prefix="/api/warehouse")

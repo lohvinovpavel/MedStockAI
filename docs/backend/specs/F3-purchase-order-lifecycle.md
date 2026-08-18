@@ -1,6 +1,6 @@
 # F3 — Purchase order lifecycle
 
-**Service:** `inventory` · **Flows:** 12, 13, 14, 15 · **Status:** ❌ — entirely `OrdersProvider` in browser memory
+**Service:** `inventory` · **Flows:** 12, 13, 14, 15 · **Status:** ✅ (wave 5, `20260818_wave5`) — Postgres, not React memory
 **Depends on:** B1, B4, F2, H1 · **Scope:** `order:write`
 
 ## Goal
@@ -99,13 +99,13 @@ Any other transition is 409 with the current status in the body.
 
 ## Acceptance criteria
 
-- [ ] `draft → delivered` directly is rejected with 409.
-- [ ] `delivered` creates one `stock_batch` per line and the snapshot reflects it.
-- [ ] Deleting a `placed` order is rejected; cancelling it succeeds.
-- [ ] Two concurrent creates produce two distinct refs (sequence, not read-modify-write).
-- [ ] The same `Idempotency-Key` twice produces one order.
-- [ ] An `ai_suggestion` order without `review_decision_id` is rejected by the DB constraint.
-- [ ] Order total after a `supplier_catalog` price change is unchanged.
+- [x] `draft → delivered` directly is rejected with 409.
+- [x] `delivered` creates one `stock_batch` per line and the snapshot reflects it.
+- [x] Deleting a `placed` order is rejected; cancelling it succeeds.
+- [x] Two concurrent creates produce two distinct refs (sequence, not read-modify-write).
+- [x] The same `Idempotency-Key` twice produces one order.
+- [x] An `ai_suggestion` order without `review_decision_id` is rejected by the DB constraint.
+- [x] Order total after a `supplier_catalog` price change is unchanged.
 
 ## Out of scope
 

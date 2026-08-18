@@ -28,6 +28,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from app.availability import overlay_availability
 from app.copilot import copilot
+from app.gateway import gateway
 
 app = FastAPI(title="analogue")
 drugs = APIRouter()
@@ -440,3 +441,4 @@ app.include_router(drugs, prefix="/api/analogue")
 
 app.include_router(copilot)
 app.include_router(copilot, prefix="/api/analogue")
+app.include_router(gateway, prefix="/api/copilot")

@@ -4,14 +4,12 @@
 **Blocks:** B4, D3, F1, F3, G2 · **Scope:** `audit:read`
 
 > Implementation deviations: the trigger is attached to `review_decision` (wave 1)
-> plus `stock_batch` and `par_level` (wave 2) and `formulary_item` (wave 3). `purchase_order` and `transfer_request`
-> do not exist yet. Seeds set `app.actor_system` so the CHECK does not abort them.
-> RLS FORCE on remaining tenant tables is A4 wave 2. `session_scope` SETs
+> plus `stock_batch` and `par_level` (wave 2), `formulary_item` (wave 3), and
+> `purchase_order` + `transfer_request` (wave 5). Seeds set `app.actor_system` so the CHECK
+> does not abort them. RLS FORCE on remaining tenant tables is A4 wave 2. `session_scope` SETs
 > `LOCAL ROLE app_role` because docker/CI connect as a superuser that would
-> otherwise bypass FORCE RLS. F1 writers are still open — the table exists so
-> the trigger has a subject; the `/audit` timeline is empty until a recommendation
-> is stored. Pharmacist holds `audit:read` to match `PAGE_ROLES` and the rbac
-> matrix (D3 export stays director).
+> otherwise bypass FORCE RLS. Pharmacist holds `audit:read` to match `PAGE_ROLES` and the rbac
+> matrix (D3 export stays director, `audit:export`).
 
 ## Goal
 

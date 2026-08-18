@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -1146,4 +1147,168 @@ class AuditLogEntry(Base):
         ),
         Index("ix_audit_entity", "hospital_id", "entity_type", "entity_id", "occurred_at"),
         Index("ix_audit_time", "hospital_id", "occurred_at"),
+    )
+
+
+class PurchaseOrder(Base):
+    """F3 purchase order. Totals are SUM(line.qty * unit_cost) + shipping;
+    unit_cost is copied from F2 at create and never re-joined.
+    """
+
+    __tablename__ = "purchase_order"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ref: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    supplier_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("supplier.id"), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    review_decision_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("review_decision.id")
+    )
+    shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expected_delivery: Mapped[date | None] = mapped_column(Date)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','placed','in_transit','delivered','cancelled')",
+            name="ck_purchase_order_status",
+        ),
+        CheckConstraint(
+            "source IN ('ai_suggestion','manual')",
+            name="ck_purchase_order_source",
+        ),
+        CheckConstraint(
+            "source = 'manual' OR review_decision_id IS NOT NULL",
+            name="ck_purchase_order_ai_has_decision",
+        ),
+        UniqueConstraint("hospital_id", "ref", name="uq_purchase_order_hospital_ref"),
+        Index("ix_purchase_order_status_created", "hospital_id", "status", "created_at"),
+        Index(
+            "uq_purchase_order_idempotency",
+            "hospital_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+
+class PurchaseOrderLine(Base):
+    """One NDC on a purchase order. RLS via the parent order's hospital."""
+
+    __tablename__ = "purchase_order_line"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("purchase_order.id", ondelete="CASCADE"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_purchase_order_line_qty"),
+        UniqueConstraint("purchase_order_id", "ndc", name="uq_purchase_order_line_ndc"),
+    )
+
+
+class TransferRequest(Base):
+    """G2 inter-facility movement. Stock moves on dispatch/receive, not here."""
+
+    __tablename__ = "transfer_request"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ref: Mapped[str] = mapped_column(Text, nullable=False)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    from_facility_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("facility.id"), nullable=False
+    )
+    to_facility_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("facility.id"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="requested")
+    shortage_id: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    reserved_lots: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_transfer_request_qty"),
+        CheckConstraint(
+            "status IN ('requested','dispatched','received','cancelled')",
+            name="ck_transfer_request_status",
+        ),
+        CheckConstraint(
+            "from_facility_id <> to_facility_id",
+            name="ck_transfer_request_distinct_facilities",
+        ),
+        UniqueConstraint("hospital_id", "ref", name="uq_transfer_request_hospital_ref"),
+    )
+
+
+class CopilotConversation(Base):
+    """I2: one actor's copilot thread. Soft-deleted via deleted_at."""
+
+    __tablename__ = "copilot_conversation"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    facility_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("facility.id"))
+    title: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CopilotMessage(Base):
+    """I2: one turn in a copilot conversation. Tool rows store a summary only."""
+
+    __tablename__ = "copilot_message"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("copilot_conversation.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    card: Mapped[dict | None] = mapped_column(JSONB)
+    tool_name: Mapped[str | None] = mapped_column(Text)
+    ai_dedupe_key: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user','assistant','tool')", name="ck_copilot_message_role"),
+        Index("ix_copilot_msg", "conversation_id", "created_at"),
     )

@@ -38,17 +38,19 @@ boundary is real, the data boundary is not). This is the schema behind the featu
 | `par_level` | tenant | `inventory` | ✅ B5 |
 | `supplier` | tenant | `warehouse` | ✅ F2 |
 | `supplier_catalog` | tenant | `warehouse` | ✅ F2 |
-| `purchase_order` | tenant | `inventory` | ❌ F3 |
-| `purchase_order_line` | tenant | `inventory` | ❌ F3 |
-| `transfer_request` | tenant | `warehouse` | ❌ G2 |
-| `review_decision` | tenant | `inventory` | ✅ H1 table; F1 writers still open |
+| `purchase_order` | tenant | `inventory` | ✅ F3 |
+| `purchase_order_line` | tenant | `inventory` | ✅ F3 |
+| `transfer_request` | tenant | `warehouse` | ✅ G2 |
+| `review_decision` | tenant | `inventory` | ✅ H1 + F1 |
+
 | `forecast_point` | tenant | `prediction` | ✅ E1 |
 | `stock_daily` | tenant | `prediction` | ✅ issue #7 — on-hand history for the stock chart |
 | `patient` | tenant | `patient-profiling` | ✅ |
 | `assessment_log` | tenant | `patient-profiling` | ✅ |
 | `drug_risk_profile` | reference | `patient-profiling` | ✅ |
 | `audit_log_entry` | tenant, append-only | Postgres trigger; read by `compliance` | ✅ H1 |
-| `copilot_message` | tenant | copilot gateway | ❌ I2 |
+| `copilot_conversation` | tenant | analogue / copilot | ✅ I2 |
+| `copilot_message` | tenant | analogue / copilot | ✅ I2 |
 | `ai_cache` | neither — global cache | `shared/ai.py` | ✅ |
 
 Three classes, per `docs/services.md` §1.1: **reference** tables are global with no

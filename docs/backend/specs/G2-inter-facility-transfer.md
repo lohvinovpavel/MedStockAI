@@ -1,6 +1,6 @@
 # G2 — Inter-facility transfer
 
-**Service:** `warehouse` · **Flow:** 17 · **Status:** ❌ — a toast that changes nothing
+**Service:** `warehouse` · **Flow:** 17 · **Status:** ✅ (wave 5, `20260818_wave5`)
 **Depends on:** B1, B4, G1, H1 · **Scope:** `transfer:write`
 
 ## Goal
@@ -85,12 +85,12 @@ requested ──dispatch──▶ dispatched ──receive──▶ received
 
 ## Acceptance criteria
 
-- [ ] Dispatch reduces source stock and does not yet increase destination stock.
-- [ ] Receive increases destination stock with the source's lot and expiry preserved.
-- [ ] Dispatching more than the source holds returns 422 and moves nothing.
-- [ ] Cancelling a dispatched transfer restores source quantity exactly.
-- [ ] `from_facility_id = to_facility_id` is rejected by the database.
-- [ ] Two concurrent dispatches of the same batch cannot both succeed (row lock test).
+- [x] Dispatch reduces source stock and does not yet increase destination stock.
+- [x] Receive increases destination stock with the source's lot and expiry preserved.
+- [x] Dispatching more than the source holds returns 422 and moves nothing.
+- [x] Cancelling a dispatched transfer restores source quantity exactly.
+- [x] `from_facility_id = to_facility_id` is rejected by the database.
+- [x] Two concurrent dispatches of the same batch cannot both succeed (row lock test).
 
 ## Out of scope
 

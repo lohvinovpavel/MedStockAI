@@ -9,6 +9,7 @@ export const SERVICES = {
   patients: "/api/patients", // patient-profiling
   prediction: "/api/prediction",
   warehouse: "/api/warehouse",
+  copilot: "/api/copilot",
 } as const;
 
 export type ServiceName = keyof typeof SERVICES;

@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from .orders import orders, recommendations
 
 app = FastAPI(title="inventory")
 api = APIRouter()
@@ -319,6 +320,11 @@ def list_items(
 
         rows = session.execute(stmt).all()
         formulary_ndcs = _formulary_ndc_set(session)
+        ndcs = list({row.ndc for row in rows})
+        rxcui_by_ndc: dict[str, str | None] = {}
+        if ndcs:
+            for ndc, raw in session.execute(select(Drug.ndc, Drug.raw).where(Drug.ndc.in_(ndcs))):
+                rxcui_by_ndc[str(ndc)] = str((raw or {}).get("rxcui") or "") or None
 
     payload: list[dict] = []
     for row in rows:
@@ -349,6 +355,7 @@ def list_items(
                 "target_qty": row.target_qty,
                 "suggested_qty": suggested,
                 "in_formulary": row.ndc in formulary_ndcs,
+                "rxcui": rxcui_by_ndc.get(row.ndc),
             }
         )
 
@@ -1013,5 +1020,9 @@ def shortage_coverage(
         }
 
 
+app.include_router(orders)
+app.include_router(orders, prefix="/api/inventory")
+app.include_router(recommendations)
+app.include_router(recommendations, prefix="/api/inventory")
 app.include_router(api)
 app.include_router(api, prefix="/api/inventory")

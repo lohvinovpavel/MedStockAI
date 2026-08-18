@@ -93,6 +93,9 @@ PERMS: dict[str, set[str]] = {
         "audit:read",
         "batch:write",
         "order:read",
+        "order:write",
+        "transfer:write",
+        "copilot:use",
     },
     "physician": {
         "alert:read",
@@ -108,6 +111,7 @@ PERMS: dict[str, set[str]] = {
         "profile:explain",
         "certificate:read",
         "copilot:chat",
+        "copilot:use",
     },
     "director": {
         "dashboard:read",
@@ -123,6 +127,9 @@ PERMS: dict[str, set[str]] = {
         "forecast:read",
         "forecast:run",
         "order:read",
+        "transfer:write",
+        "audit:export",
+        "copilot:use",
     },
     "admin": {
         "mapping:approve",
@@ -140,6 +147,9 @@ PERMS: dict[str, set[str]] = {
         "batch:write",
         "par:write",
         "order:read",
+        "order:write",
+        "recommendation:approve",
+        "copilot:use",
     },
 }
 

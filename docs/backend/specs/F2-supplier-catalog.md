@@ -5,8 +5,8 @@
 ## Goal
 
 Flow 14's estimate panel — unit cost × quantity + shipping, lead time, expected delivery —
-recomputes live when the supplier changes. All of it comes from a hardcoded array in
-`web/lib/mock-data.ts`. F1 and F3 both need the same numbers, so they belong in one table.
+recomputes live when the supplier changes. Numbers live in `supplier` / `supplier_catalog`
+(wave 4). F1 and F3 both read the same tables.
 
 ## API
 

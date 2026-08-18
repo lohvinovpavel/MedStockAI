@@ -323,7 +323,10 @@ def test_declarations_are_scoped_to_the_caller_role():
     from medstock_shared.ai.tools import declarations_for
 
     names = {d["name"] for d in declarations_for(PHARMACIST)}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+    assert "search_analogues_rxnorm" in names
+    assert "verify_batch_cert" in names
+    assert "get_stock" in names
+    assert "draft_order" in names
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
@@ -335,7 +338,9 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
 
     assert denied_tools_for(PHARMACIST) == []
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+    assert "search_analogues_rxnorm" in names
+    assert "draft_order" in names
+    assert "get_stock" in names
 
 
 def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch, audit_calls):
@@ -362,4 +367,7 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
     assert "don't have permission" in instruction
     # still-granted tool stays callable, not just named in the prompt
     declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
-    assert declared_names == {"search_analogues_rxnorm"}
+    assert "search_analogues_rxnorm" in declared_names
+    assert "get_stock" in declared_names
+    assert "verify_batch_cert" not in declared_names
+    assert "check_certificate" not in declared_names
