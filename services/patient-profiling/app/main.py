@@ -9,19 +9,28 @@ unchanged for the rules engine).
 
 import os
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import DrugRiskProfile, Patient
+from medstock_shared.models import (
+    AdrSignal,
+    AssessmentLog,
+    DrugRiskProfile,
+    Patient,
+    PgxGuideline,
+    PrognosisAssumption,
+)
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
     WEIGHTS,
+    AdrSignalRow,
     PatientVector,
+    PgxRecommendation,
     RiskProfile,
     assess,
     avoided_ingredient_warnings,
@@ -31,7 +40,7 @@ from medstock_shared.patient import (
 )
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -50,6 +59,8 @@ class PatientCreate(BaseModel):
     blood_group: str | None = None
     allergy_codes: list[str] = Field(default_factory=list)
     condition_codes: list[str] = Field(default_factory=list)
+    # "GENE:phenotype", as the lab reports it. Tier 3 input.
+    pgx_phenotypes: list[str] = Field(default_factory=list)
 
 
 class PatientUpdate(BaseModel):
@@ -58,6 +69,7 @@ class PatientUpdate(BaseModel):
     blood_group: str | None = None
     allergy_codes: list[str] | None = None
     condition_codes: list[str] | None = None
+    pgx_phenotypes: list[str] | None = None
 
 
 class CartItem(BaseModel):
@@ -79,6 +91,26 @@ def _norm_codes(codes: list[str] | None) -> list[str]:
             continue
         seen.add(code)
         out.append(code)
+    return out
+
+
+def _norm_phenotypes(values: list[str] | None) -> list[str]:
+    """Dedupe and trim, but **do not lowercase**, unlike `_norm_codes`.
+
+    CPIC's vocabulary is mixed case ("Poor Metabolizer", "*57:01 positive") and
+    these strings are shown to a clinician verbatim; flattening them would make
+    a guideline value look like something we made up. Matching is casefolded on
+    both sides, so storage case never affects whether a rule fires.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw).strip()
+        key = value.casefold()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
     return out
 
 
@@ -105,6 +137,7 @@ def _patient_dict(row: Patient) -> dict:
         "blood_group": row.blood_group,
         "allergy_codes": list(row.allergy_codes or []),
         "condition_codes": list(row.condition_codes or []),
+        "pgx_phenotypes": list(row.pgx_phenotypes or []),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -203,10 +236,281 @@ def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
     ]
 
 
+REVIEW_ACTIONS = {"approve": "approved", "reject": "rejected"}
+PROFILE_STATUSES = ("awaiting_approval", "approved", "rejected")
+MAX_QUEUE = 200
+
+
+class ReviewBody(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    note: str = Field(default="", max_length=2000)
+
+
+def review_update(action: str, actor: str, note: str, now: datetime) -> dict:
+    """The columns a ruling writes. Pure, so the rule that a rejection records
+    its reviewer just as an approval does is testable without a database."""
+    return {
+        "status": REVIEW_ACTIONS[action],
+        "reviewed_by": actor,
+        "reviewed_at": now,
+        "review_note": note.strip(),
+    }
+
+
+def _profile_dict(row: DrugRiskProfile) -> dict:
+    return {
+        "id": row.id,
+        "rxcui": str(row.rxcui),
+        "reaction": row.reaction,
+        "seriousness": row.seriousness,
+        # The reviewable basis. A queue that showed a verdict without the
+        # factors and the quote would be asking for a signature on nothing.
+        "risk_factors": list(row.risk_factors or []),
+        "citation": row.citation or "",
+        "section": row.section or "",
+        "spl_id": row.spl_id,
+        "status": row.status,
+        "reviewed_by": row.reviewed_by,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
+        "review_note": row.review_note or "",
+        "extracted_at": row.extracted_at.isoformat() if row.extracted_at else None,
+    }
+
+
+def accept_rate(counts: dict[str, int]) -> float | None:
+    """Approved as a share of everything ruled on — docs §5.4's number, the one
+    that says whether extraction is good enough to trust.
+
+    Profiles still awaiting review are excluded on purpose. Counting them as
+    failures would make the rate start at zero and climb as reviewing happens,
+    which measures the reviewer's progress rather than the model's accuracy.
+    `None` while nothing has been ruled on, because a rate over no decisions is
+    not 0.0 — it is unknown, and the two must not print the same.
+    """
+    ruled = counts.get("approved", 0) + counts.get("rejected", 0)
+    return round(counts.get("approved", 0) / ruled, 3) if ruled else None
+
+
+def load_queue(status: str, rxcui: str | None, limit: int) -> tuple[list[dict], dict[str, int]]:
+    """The queue and the tally behind it. Separated from the endpoint so the
+    response shape can be tested without a Postgres to point at."""
+    with Session(engine) as session:
+        query = select(DrugRiskProfile)
+        if status != "all":
+            query = query.where(DrugRiskProfile.status == status)
+        if rxcui:
+            query = query.where(DrugRiskProfile.rxcui == str(rxcui))
+        # Oldest first: a queue that shows the newest extraction first leaves
+        # the backlog sitting at the bottom for ever.
+        rows = session.scalars(query.order_by(DrugRiskProfile.extracted_at).limit(limit)).all()
+        # Over the whole table, not the page — this is what the accept rate is
+        # computed from, and a rate over one page of 50 is not the accept rate.
+        tally = session.execute(
+            select(DrugRiskProfile.status, func.count()).group_by(DrugRiskProfile.status)
+        ).all()
+    counts = {s: 0 for s in PROFILE_STATUSES} | {str(s): int(n) for s, n in tally}
+    return [_profile_dict(r) for r in rows], counts
+
+
+def apply_review(profile_id: int, updates: dict) -> tuple[str, dict] | None:
+    """Write a ruling. Returns (status before, the row after), or None if there
+    is no such profile."""
+    with Session(engine) as session:
+        row = session.get(DrugRiskProfile, profile_id)
+        if row is None:
+            return None
+        previous = row.status
+        for column, value in updates.items():
+            setattr(row, column, value)
+        session.commit()
+        session.refresh(row)
+        return previous, _profile_dict(row)
+
+
+@patients.get("/risk-profiles")
+def list_risk_profiles(
+    status: str = "awaiting_approval",
+    rxcui: str | None = None,
+    limit: int = 50,
+    _: Principal = Depends(require("profile:review")),
+) -> dict:
+    """The review queue: what a model has proposed and nobody has ruled on yet.
+
+    `status=all` shows every profile, which is what makes an approval auditable
+    after the fact rather than only actionable before it.
+
+    Unlike `approved_profiles`, a missing table is a **503 here, not an empty
+    list**. On the request path an absent migration should degrade to "no
+    prognosis" and let the deterministic stages answer. On this path an empty
+    list reads as "nothing to review" — a reviewer would close the page and the
+    backlog would be invisible — so the failure has to be loud.
+    """
+    if status != "all" and status not in PROFILE_STATUSES:
+        raise HTTPException(
+            status_code=422, detail=f"status must be 'all' or one of {PROFILE_STATUSES}"
+        )
+    limit = max(1, min(int(limit), MAX_QUEUE))
+
+    try:
+        items, counts = load_queue(status, rxcui, limit)
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="risk profile table unavailable") from exc
+
+    return {
+        "status": status,
+        "limit": limit,
+        "items": items,
+        "counts": counts,
+        "accept_rate": accept_rate(counts),
+    }
+
+
+@patients.post("/risk-profiles/{profile_id}/review")
+def review_risk_profile(
+    profile_id: int,
+    body: ReviewBody,
+    principal: Principal = Depends(require("profile:approve")),
+) -> dict:
+    """Gate 3 of docs/prognosis-and-procurement.md §1.3, and the only way a
+    profile ever reaches a screen.
+
+    Re-ruling on a profile that was already decided is allowed, and deliberately
+    so: a label changes, or an approval turns out to have been wrong, and
+    withdrawing it must not require a database edit. The status it had before
+    comes back in the response, so an approval being overturned is visible
+    rather than inferred.
+    """
+    updates = review_update(body.action, principal.user_id, body.note, datetime.now(UTC))
+    try:
+        ruled = apply_review(profile_id, updates)
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="risk profile table unavailable") from exc
+    if ruled is None:
+        raise HTTPException(status_code=404, detail="risk profile not found")
+
+    previous, profile = ruled
+    return {"previous_status": previous, "profile": profile}
+
+
+def record_assessment(
+    principal: Principal, vector: PatientVector, results: list[dict]
+) -> str:
+    """Write the decision trail row, and return the request id.
+
+    **Fails the request if it cannot write.** An assessment that reaches a
+    clinician without a corresponding audit row is exactly the hole
+    docs/services.md §1.3 claims does not exist — and it is a silent hole, since
+    the answer looks identical either way. Answering unaudited is the worse
+    failure of the two, so this refuses rather than degrades.
+
+    Note the contrast with `approved_profiles`, which swallows a missing table:
+    that one degrades a *feature*, this one would falsify a *guarantee*.
+    """
+    request_id = str(uuid.uuid4())
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        session.add(
+            AssessmentLog(
+                hospital_id=principal.hospital_id,
+                request_id=request_id,
+                actor_id=principal.user_id,
+                feature_hash=vector.feature_hash(),
+                ruleset_version=RULESET_VERSION,
+                # The verdict and why, not the whole finding text — enough to
+                # reconstruct what the clinician was shown.
+                result={
+                    "assessments": [
+                        {
+                            "rxcui": r.get("rxcui"),
+                            "verdict": r.get("verdict"),
+                            "score": r.get("score"),
+                            # Code, weight, source and stage per finding — enough
+                            # for /explain to rebuild the score decomposition
+                            # without re-running anything.
+                            #
+                            # Deliberately **not** the finding's message. Those
+                            # embed the patient's own band values ("eGFR 30-44,
+                            # age 75-89"), and writing them here in clear would
+                            # put more of the vector into the audit table than
+                            # the feature hash beside it deliberately withholds.
+                            "findings": [
+                                {
+                                    "code": f.get("code"),
+                                    "weight": f.get("weight"),
+                                    "source": f.get("source"),
+                                    "stage": f.get("stage"),
+                                }
+                                for f in (r.get("findings") or [])
+                            ],
+                        }
+                        for r in results
+                    ]
+                },
+            )
+        )
+    return request_id
+
+
+def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
+    """CPIC guidelines for these drugs (Tier 3).
+
+    Degrades to "no guidelines" if the table is missing, like
+    `approved_profiles` and for the same reason: an unseeded feed should cost
+    the pharmacogenomic stage, not the whole assessment. Stage 8 simply does
+    not run, and `stages_completed` says so.
+    """
+    if not rxcuis:
+        return []
+    try:
+        with Session(engine) as session:
+            rows = session.scalars(
+                select(PgxGuideline).where(PgxGuideline.rxcui.in_(rxcuis))
+            ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        PgxRecommendation(
+            rxcui=str(r.rxcui),
+            gene=r.gene,
+            phenotype=r.phenotype,
+            recommendation=r.recommendation or "",
+            implication=r.implication or "",
+            classification=r.classification or "",
+            evidence_level=r.evidence_level or "",
+            action_required=bool(r.action_required),
+        )
+        for r in rows
+    ]
+
+
+def adr_signals_for(rxcuis: list[str]) -> list[AdrSignalRow]:
+    """Precomputed FAERS ratios for these drugs (Tier 1).
+
+    Degrades to "no signals" if the table is missing, like the other two feed
+    readers: an unseeded feed costs stage 7a, not the assessment.
+    """
+    if not rxcuis:
+        return []
+    try:
+        with Session(engine) as session:
+            rows = session.scalars(select(AdrSignal).where(AdrSignal.rxcui.in_(rxcuis))).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        AdrSignalRow(
+            rxcui=str(r.rxcui),
+            reaction=r.reaction,
+            prr=float(r.prr or 0),
+            ror=float(r.ror or 0),
+            n_reports=int(r.n_reports or 0),
+        )
+        for r in rows
+    ]
+
+
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
-    _: Principal = Depends(require("inventory:read")),
+    principal: Principal = Depends(require("profile:assess")),
 ) -> dict:
     """One patient, one or more candidate drugs.
 
@@ -220,21 +524,224 @@ def post_assess(
         raise HTTPException(status_code=400, detail=f"at most {MAX_CANDIDATES} candidates")
 
     profiles = approved_profiles(candidates)
-    results = [assess(patient, rxcui, risk_profiles=profiles).as_dict() for rxcui in candidates]
+    pgx = pgx_for(candidates)
+    adr = adr_signals_for(candidates)
+    results = [
+        assess(patient, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr).as_dict()
+        for rxcui in candidates
+    ]
+    request_id = record_assessment(principal, patient, results)
     return {
         "ruleset_version": RULESET_VERSION,
+        # Quote this back to dispute an answer; it is the key into assessment_log.
+        "request_id": request_id,
         "patient_ref": patient.patient_ref,
         # So a caller can tell "no label risk applies to this patient" apart from
         # "nobody has approved a profile for this drug yet".
         "risk_profiles_applied": len(profiles),
+        # Same distinction for Tier 3: zero means no CPIC guideline covers these
+        # drugs, not that the genotype was ignored.
+        "pgx_guidelines_applied": len(pgx),
+        "adr_signals_applied": len(adr),
         "results": results,
+    }
+
+
+# Worst first — a batch is as serious as its most serious line.
+_VERDICT_RANK = ("blocked", "red", "amber", "green")
+
+
+def _worst_verdict(result: dict) -> str | None:
+    """The gravest verdict in one assessment batch.
+
+    A blocked line has no score, so it cannot be ranked by number; ranking by
+    name keeps "one of these four drugs is contraindicated" from being filed
+    under the green of the other three.
+    """
+    seen = {
+        str(a.get("verdict") or "").lower()
+        for a in (result.get("assessments") or [])
+        if a.get("verdict")
+    }
+    return next((v for v in _VERDICT_RANK if v in seen), None)
+
+
+def _band_for(score: int | None) -> dict | None:
+    """Which band turned this score into this verdict, and what the next one is.
+
+    "You are 4 points below amber" is a different conversation from "you are
+    just inside it", and neither is visible from a colour.
+    """
+    if score is None:
+        return None
+    applied = next((t, v) for t, v in reversed(BANDS) if score >= t)
+    above = [(t, v) for t, v in BANDS if t > score]
+    return {
+        "from_score": applied[0],
+        "verdict": str(applied[1]),
+        "next_verdict": str(above[0][1]) if above else None,
+        "points_to_next": (above[0][0] - score) if above else None,
+    }
+
+
+@patients.get("/assessments")
+def list_assessments(
+    limit: int = 25,
+    principal: Principal = Depends(require("profile:explain")),
+) -> dict:
+    """The decision trail, newest first — every assessment this hospital made.
+
+    `/explain/{request_id}` could always explain a decision, but only if you
+    already knew its id, which nothing told you. That made the audit trail
+    §1.3 describes real in the database and unreachable from anywhere else.
+    This is the index that closes it.
+
+    Scoped to the caller's hospital, and it carries **no patient identifier** —
+    the same property the table is built on. What a reader gets is who asked,
+    when, what came back, and a request id to ask why.
+    """
+    limit = max(1, min(int(limit), 200))
+    try:
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            rows = session.scalars(
+                select(AssessmentLog)
+                .where(AssessmentLog.hospital_id == principal.hospital_id)
+                .order_by(AssessmentLog.created_at.desc())
+                .limit(limit)
+            ).all()
+            items = [
+                {
+                    "request_id": r.request_id,
+                    "actor_id": r.actor_id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "ruleset_version": r.ruleset_version,
+                    # A summary, not the decision: enough to pick a row to open.
+                    "drugs": [
+                        a.get("rxcui") for a in (dict(r.result or {}).get("assessments") or [])
+                    ],
+                    # The worst verdict in the batch is what a reader scans for.
+                    "verdict": _worst_verdict(dict(r.result or {})),
+                }
+                for r in rows
+            ]
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="assessment log unavailable") from exc
+
+    return {"items": items, "limit": limit, "current_ruleset_version": RULESET_VERSION}
+
+
+@patients.get("/explain/{request_id}")
+def explain(
+    request_id: str,
+    principal: Principal = Depends(require("profile:explain")),
+) -> dict:
+    """Why a logged assessment said what it said.
+
+    This is the use-cases doc's PP-3 — "pharmacist asks why" — and the reason
+    §6 gives for the FDA CDS exclusion holding: criterion (d) requires that a
+    professional can independently review the *basis* of a recommendation, and
+    a bare risk score with no reviewable basis does not qualify.
+
+    §7 sketched this around SHAP contributions, because it assumed a Tier 2
+    model. There is no model on this path: every stage is deterministic, so the
+    contributions are not estimated, they are **the arithmetic itself**. Each
+    finding's weight, its share of the total, the band that turned the total
+    into a colour, and how far the score sits from the next band.
+
+    **The stored ruleset version is checked against the current one.** If they
+    differ, this says so and refuses to pretend, because explaining a
+    six-month-old decision with today's weights is exactly the lie §7 warns
+    about — and it is a lie that would look like a perfectly good answer.
+    """
+    try:
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            row = session.scalars(
+                select(AssessmentLog)
+                .where(
+                    AssessmentLog.request_id == request_id,
+                    AssessmentLog.hospital_id == principal.hospital_id,
+                )
+                .limit(1)
+            ).first()
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such assessment")
+            logged = {
+                "request_id": row.request_id,
+                "actor_id": row.actor_id,
+                "feature_hash": row.feature_hash,
+                "ruleset_version": row.ruleset_version,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "result": dict(row.result or {}),
+            }
+    except HTTPException:
+        raise
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="assessment log unavailable") from exc
+
+    current = logged["ruleset_version"] == RULESET_VERSION
+    explained = []
+    for entry in logged["result"].get("assessments") or []:
+        findings = entry.get("findings") or []
+        total = sum(int(f.get("weight") or 0) for f in findings)
+        explained.append(
+            {
+                "rxcui": entry.get("rxcui"),
+                "verdict": entry.get("verdict"),
+                "score": entry.get("score"),
+                "band": _band_for(entry.get("score")),
+                "contributions": [
+                    {
+                        "code": f.get("code"),
+                        "weight": f.get("weight"),
+                        "stage": f.get("stage"),
+                        "source": f.get("source"),
+                        # Of the points that were scored, how much came from
+                        # here. Zero-weight findings are informational and say so
+                        # rather than dividing by a total they never joined.
+                        "share": (
+                            round(int(f.get("weight") or 0) / total, 3) if total else None
+                        ),
+                    }
+                    for f in sorted(findings, key=lambda x: -int(x.get("weight") or 0))
+                ],
+                # A blocked assessment has no score at all: a hard gate ends the
+                # pipeline and no number is produced, because a number beside an
+                # absolute contraindication invites someone to weigh it against
+                # a discount.
+                "blocked": entry.get("score") is None,
+            }
+        )
+
+    return {
+        "request_id": logged["request_id"],
+        "assessed_by": logged["actor_id"],
+        "assessed_at": logged["created_at"],
+        "feature_hash": logged["feature_hash"],
+        "ruleset_version": logged["ruleset_version"],
+        "current_ruleset_version": RULESET_VERSION,
+        # The honesty flag. False means the weights below are the ones that
+        # actually produced this answer, but they are no longer the ones the
+        # system would use today.
+        "explained_with_original_ruleset": current,
+        "caveat": None
+        if current
+        else (
+            f"This assessment ran under ruleset {logged['ruleset_version']}; the current "
+            f"ruleset is {RULESET_VERSION}. The contributions below are the ones that "
+            "produced this answer and do not describe how the same patient would be "
+            "assessed today."
+        ),
+        "assessments": explained,
+        # So a reader can check a weight against the published table rather than
+        # taking these numbers on trust.
+        "ruleset": {"weights": WEIGHTS, "bands": [{"from_score": t, "verdict": str(v)} for t, v in BANDS]},
     }
 
 
 @app.post("/demand")
 def post_demand(
     payload: dict = Body(...),
-    _: Principal = Depends(require("inventory:read")),
+    _: Principal = Depends(require("profile:assess")),
 ) -> dict:
     """Cohort -> purchasing plan.
 
@@ -289,6 +796,120 @@ def post_demand(
     }
 
 
+DEFAULT_SWITCH_RATE = 0.6
+
+
+def assumption(name: str, fallback: float) -> tuple[float, str]:
+    """One PP-4 assumption and the note explaining it.
+
+    Falls back rather than failing if the table is missing, for the same reason
+    approved_profiles does: the migration not having run is a deployment state,
+    not a reason a director cannot see a forecast. The fallback matches the
+    value the migration seeds, so a degraded read gives the same number rather
+    than a quietly different one.
+    """
+    try:
+        with Session(engine) as session:
+            row = session.execute(
+                select(PrognosisAssumption).where(PrognosisAssumption.name == name)
+            ).scalar_one_or_none()
+    except (ProgrammingError, SQLAlchemyError):
+        return fallback, "assumption table unavailable — using the built-in default"
+    if row is None:
+        return fallback, "no row for this assumption — using the built-in default"
+    return float(row.value), str(row.note or "")
+
+
+@patients.post("/forecast")
+def forecast(
+    payload: dict = Body(...),
+    _: Principal = Depends(require("profile:assess")),
+) -> dict:
+    """Cohort -> purchasing plan, plus where the therapy is heading (PP-4).
+
+    Body: the `/plan` body, plus optional `switch_rate` and `horizon_days`.
+
+    `/plan` answers *what are they on, and what is safe*. This adds *and where
+    is that going*: two hospitals with the same headcount and the same current
+    prescriptions still need different stock, because their patients differ
+    (docs/prognosis-and-procurement.md §2.1).
+
+    Every projected number here rests on `switch_rate`, which is assumed rather
+    than measured, so the response echoes it back under `assumptions`. A
+    forecast that does not say which of its inputs were chosen rather than
+    observed is the one dishonest thing this design could do.
+    """
+    raw_cohort = payload.get("cohort") or []
+    if len(raw_cohort) > MAX_COHORT:
+        raise HTTPException(status_code=400, detail=f"cohort of at most {MAX_COHORT}")
+    cohort = [PatientVector.from_json(p) for p in raw_cohort]
+    candidates = [str(c) for c in (payload.get("candidates") or []) if c]
+    if not cohort or not candidates:
+        raise HTTPException(status_code=422, detail="cohort and candidates must not be empty")
+
+    seeded_rate, note = assumption("switch_rate", DEFAULT_SWITCH_RATE)
+    override = payload.get("switch_rate")
+    if override is None:
+        switch_rate, rate_source = seeded_rate, "prognosis_assumption"
+    else:
+        try:
+            switch_rate = float(override)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="switch_rate must be a number") from None
+        if not 0.0 <= switch_rate <= 1.0:
+            raise HTTPException(status_code=422, detail="switch_rate must be between 0 and 1")
+        rate_source, note = "request", "supplied per-request, overriding the stored assumption"
+
+    profiles = approved_profiles(candidates)
+    unavailable = [str(u) for u in (payload.get("unavailable") or [])]
+    lines, unserved = plan_demand(
+        cohort,
+        candidates,
+        on_hand={str(k): int(v) for k, v in (payload.get("on_hand") or {}).items()},
+        unavailable=unavailable,
+        units_per_patient=int(payload.get("units_per_patient") or 30),
+        risk_profiles=profiles,
+    )
+
+    cohort_size = len(cohort)
+    return {
+        "ruleset_version": RULESET_VERSION,
+        "cohort_size": cohort_size,
+        "horizon_days": int(payload.get("horizon_days") or 90),
+        "unavailable": unavailable,
+        "lines": [
+            {
+                "rxcui": line.rxcui,
+                "on_therapy": line.on_therapy,
+                "substitutes_for": line.substitutes_for,
+                "eligible": line.eligible,
+                "blocked": line.blocked,
+                "flagged": line.flagged,
+                "at_risk": line.at_risk,
+                "switch_in": line.switch_in,
+                "cohort_fit": line.cohort_fit(cohort_size),
+                "projected_patients": line.projected(switch_rate),
+                "projected_units": line.projected(switch_rate)
+                * int(payload.get("units_per_patient") or 30),
+                "units_needed": line.units_needed,
+                "on_hand": line.on_hand,
+                "shortfall": line.shortfall,
+                "block_reasons": line.reasons,
+            }
+            for line in sorted(lines.values(), key=lambda x: -x.units_needed)
+        ],
+        "total_shortfall": sum(line.shortfall for line in lines.values()),
+        "unservable": unserved,
+        "unservable_total": sum(unserved.values()),
+        "risk_profiles_applied": len(profiles),
+        # Everything below was chosen, not derived. Named so a reader can tell
+        # which parts of the forecast are observation and which are assumption.
+        "assumptions": {
+            "switch_rate": {"value": switch_rate, "source": rate_source, "note": note},
+        },
+    }
+
+
 @patients.get("/patients")
 def list_patients(principal: Principal = Depends(require("patient:read"))) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
@@ -314,6 +935,7 @@ def create_patient(
             blood_group=blood,
             allergy_codes=_norm_codes(body.allergy_codes),
             condition_codes=_norm_codes(body.condition_codes),
+            pgx_phenotypes=_norm_phenotypes(body.pgx_phenotypes),
         )
         session.add(row)
         session.flush()
@@ -352,6 +974,8 @@ def update_patient(
             row.allergy_codes = _norm_codes(body.allergy_codes)
         if body.condition_codes is not None:
             row.condition_codes = _norm_codes(body.condition_codes)
+        if body.pgx_phenotypes is not None:
+            row.pgx_phenotypes = _norm_phenotypes(body.pgx_phenotypes)
         session.flush()
         return _patient_dict(row)
 
@@ -377,10 +1001,16 @@ def cart_check(
         patient_payload = _patient_dict(row)
 
     avoided = profile_avoided_ingredients(vector)
+    # One lookup for the whole cart, not one per line: approved_profiles takes a
+    # list precisely so a ten-item cart costs a single query.
+    cart_rxcuis = [item.rxcui.strip() for item in body.items if item.rxcui.strip()]
+    profiles = approved_profiles(cart_rxcuis)
+    pgx = pgx_for(cart_rxcuis)
+    adr = adr_signals_for(cart_rxcuis)
     results: list[dict] = []
     for item in body.items:
         rxcui = item.rxcui.strip()
-        assessment = assess(vector, rxcui)
+        assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         # Surface all findings as warnings for the cart (demo: no hard block UI).
         warnings = [_finding_dict(f) for f in assessment.findings]
 
@@ -428,10 +1058,23 @@ def cart_check(
             }
         )
 
+    # Logged for the same reason /assess is: this produces a per-patient verdict
+    # a physician acts on. The cohort endpoints (/demand, /forecast) are not
+    # logged here — they answer a purchasing question about a group, not a
+    # clinical decision about a person, and assessment_log is the clinical trail.
+    request_id = record_assessment(principal, vector, results)
+
     return {
         "ruleset_version": RULESET_VERSION,
+        "request_id": request_id,
         "patient": patient_payload,
         "results": results,
+        # Mirrors /assess. Zero here is meaningful: it distinguishes "no approved
+        # profile covers this cart" from "the prognosis stage never ran", which
+        # otherwise look identical from a response with no PP-3 findings in it.
+        "risk_profiles_applied": len(profiles),
+        "pgx_guidelines_applied": len(pgx),
+        "adr_signals_applied": len(adr),
     }
 
 

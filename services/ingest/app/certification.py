@@ -33,17 +33,26 @@ import httpx
 from medstock_shared import engine
 from medstock_shared.certification import (
     RULESET_VERSION,
+    AlertListing,
     Recall,
     Shortage,
     evaluate,
+    firm_key,
     ndc11,
     parse_fda_date,
     product_ndc_candidates,
     status_for,
 )
-from medstock_shared.models import CertificationFinding, DrugCertification, StockSnapshot
+from medstock_shared.db import SessionLocal
+from medstock_shared.models import (
+    CertificationFinding,
+    DrugCertification,
+    ImportAlert,
+    StockSnapshot,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ._source import fetch_json
@@ -115,6 +124,35 @@ def _product_ndcs(product: dict) -> list[str]:
         if isinstance(pack, dict) and pack.get("package_ndc"):
             found.append(pack["package_ndc"])
     return [str(n) for n in found if n]
+
+
+def import_alerts_for(labeler: str | None) -> list[AlertListing]:
+    """Red List entries matching this labeler, or none.
+
+    Reads its own session because this module is a batch job, not a request
+    handler. A missing table degrades to no listings: the openFDA findings are
+    the backbone of a badge and must stay computable before the weekly scrape
+    has ever run.
+    """
+    if not labeler:
+        return []
+    try:
+        with SessionLocal() as session:
+            rows = session.scalars(
+                select(ImportAlert).where(ImportAlert.firm_key == firm_key(labeler))
+            ).all()
+            return [
+                AlertListing(
+                    alert_number=r.alert_number,
+                    firm_name=r.firm_name,
+                    country=r.country or "",
+                    listed_at=r.listed_at,
+                    source_url=r.source_url or "",
+                )
+                for r in rows
+            ]
+    except (ProgrammingError, SQLAlchemyError):
+        return []
 
 
 def _package_ndcs(product: dict) -> list[str]:
@@ -249,9 +287,21 @@ def _product_to_rows(
         "finished": product.get("finished"),
     }
 
+    # Import-alert listings for this product's labeler, matched exactly on the
+    # normalised firm name — see certification.firm_key for why never fuzzy.
+    # The scheduled path applies the same rule as the on-demand one so a badge
+    # does not change colour depending on which produced it.
+    listings = import_alerts_for(product.get("labeler_name"))
+
     rows: list[tuple[dict, list[dict]]] = []
     for key in keys:
-        findings = evaluate(**common, recalls=recalls, shortages=shortages.get(key, ()), today=today)
+        findings = evaluate(
+            **common,
+            recalls=recalls,
+            shortages=shortages.get(key, ()),
+            import_alerts=listings,
+            today=today,
+        )
         certification = {
             "ndc": key,
             "status": str(status_for(findings)),

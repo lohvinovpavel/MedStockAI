@@ -12,7 +12,9 @@ from types import SimpleNamespace
 import pytest
 from medstock_shared.certification import (
     YELLOW_EXPIRY_WINDOW_DAYS,
+    AlertListing,
     Finding,
+    NewsItem,
     Recall,
     Severity,
     Shortage,
@@ -301,6 +303,18 @@ def test_every_published_rule_is_reachable():
                 today=TODAY,
             )
         )
+    # Import certification (§4.1) and news (§4.2) — neither can be produced by
+    # the openFDA fields above, so they need their own inputs here.
+    reachable |= codes(
+        evaluate(
+            import_alerts=[
+                AlertListing(alert_number="66-40", firm_name="A"),
+                AlertListing(alert_number="66-41", firm_name="B"),
+            ],
+            news=[NewsItem(headline="story", url="https://x.test/1")],
+            today=TODAY,
+        )
+    )
     assert set(ruleset()["rules"]) == reachable
 
 

@@ -232,10 +232,22 @@ exposes.
 | Source | Endpoint | Key | Notes |
 |---|---|---|---|
 | **FDA press announcements / MedWatch** | FDA RSS feeds | none | Official but faster than the datasets — the best signal here |
-| **GDELT Doc API** | `api.gdeltproject.org/api/v2/doc/doc` | none | Global news index, keyless, filterable by domain and date. Recommended default |
-| **Google News RSS** | `news.google.com/rss/search?q=` | none | Trivial to query, no quota published — treat as best-effort |
+| **GDELT Doc API** | `api.gdeltproject.org/api/v2/doc/doc` | none | Global news index, keyless, filterable by domain and date. Recommended default — but see below |
+| **Google News RSS** | `news.google.com/rss/search?q=` | none | Trivial to query, no quota published — treat as best-effort. **The fallback that actually ran** |
 | **NewsAPI.org** | `newsapi.org/v2/everything` | **yes** | Free dev tier is non-commercial and rate-limited. Only if GDELT proves insufficient |
 | **Trade press** (Regulatory Focus, FiercePharma, Endpoints) | RSS | none | Narrow, high-signal. Pink Sheet is paywalled — excluded |
+
+`services/ingest/app/news.py` tries GDELT first and falls back to Google News RSS. **GDELT
+answered 429 to every query from the development network** — including a bare `query=heparin`
+with a browser user agent, so it is neither pacing nor the user agent — while openFDA, CPIC and
+accessdata.fda.gov all worked from the same host. A compliance feed that silently produces
+nothing because one index is unreachable is worse than a best-effort second source the design
+already sanctions, so both are wired and whichever answers is used. The severity is identical
+either way.
+
+One trap in the fallback: **Google News RSS ignores date qualifiers**, and will return a 2017
+story about contaminated heparin next to this month's. The window is applied after the fetch, or
+a nine-year-old article would be presented as a current signal.
 
 ### 4.3 Why news cannot turn a badge red
 
@@ -256,8 +268,25 @@ certification is identical for every hospital, so it is polled once for all of t
 |---|---|---|
 | `drug_certification` | `ingest` (scheduled) + `compliance` (on-demand) | `ndc` unique · `status` · `marketing_end_date` · `approval_status` · `provenance` · `confidence` · `expires_at` · `raw` |
 | `certification_finding` | same | `ndc` · `severity` · `source` · `source_url` · `citation` · `observed_at` · `raw` |
-| `import_alert` | `ingest` | `alert_number` · `firm_name` · `country` · `listed_at` unique on (`alert_number`, `firm_name`) |
-| `news_signal` | `compliance` | `ndc` · `headline` · `url` · `published_at` · `relevance` unique on `url` |
+| `import_alert` | `ingest` | `alert_number` · `firm_name` · **`firm_key`** · `country` · `address` · `listed_at` unique on (`alert_number`, `firm_name`) — **built** |
+| `news_signal` | `ingest` | `ndc` · `query_term` · `headline` · `url` · `domain` · `published_at` unique on `url` — **built** |
+
+`firm_key` is the normalised name the labeler match runs on, stored rather than derived on read
+so it is indexable and so the normalisation can be inspected when a match is disputed.
+
+**The match is exact and never fuzzy**, and that asymmetry is deliberate: a missed alert looks
+like every other drug that is not on one, while a false match publicly accuses a named
+manufacturer of being detained at the border over a product that has nothing to do with them.
+Those errors are not symmetric, so the matcher errs hard toward missing and the finding names the
+matched firm so a human can check it. Corporate suffixes are stripped (`N.V.` ≡ `NV`); nothing
+else is.
+
+Both feeds raise **yellow only**. For news that is §4.3. For import alerts it is because
+detention without physical examination is a standing posture on a *manufacturer*, not a defect
+found in this product — the finding says "check where this came from", which is what yellow
+means. `news_signal` is written by `ingest` rather than `compliance` as originally sketched: it
+is a scheduled feed like every other, and putting it on a request path would make a badge wait
+on a news index.
 
 One row per NDC in `drug_certification` holds the computed colour; `certification_finding` holds
 every reason behind it. The colour is derived and re-derivable — if the rule in §2.1 changes,
@@ -273,11 +302,42 @@ findings are replayed, not re-fetched.
    but the rule as written says no. Either §3 gets amended to three AI consumers, or COMP-2C is
    dropped and unknown drugs stay ⚪ until a CronJob catches them. **Recommendation:** amend §3.
    The alternative makes COMP-2 a scheduled feature, which is not what it is for.
-2. **Two new ingest CronJobs** (`certification` daily, `import-alerts` weekly) expand `ingest`
-   past the three scripts documented in §7/§8. Cheap, but the docs must move with it.
-3. **HTML scraping enters the codebase** for import alerts and warning letters. No JSON
-   alternative exists. Accept the fragility, or cut import certification from the MVP scope.
+
+   **Resolved by not happening.** COMP-2 shipped without AI: `explore.py` resolves an unknown NDC
+   against the openFDA directory and RxNorm's NDC status endpoint, and no `ask_ai()` call exists
+   anywhere in `compliance`. The rule in §3 is intact for this service, and §3 has since been
+   amended only for `ingest`'s offline CronJobs.
+
+   Note that [prognosis-and-procurement.md](prognosis-and-procurement.md) §6 still cites recall
+   identity extraction as one of the two places AI is load-bearing, and **that extraction does not
+   exist**. Reviving it is a live decision, not a settled one: the measured 40% regex ceiling is
+   the argument for it, and this item is the argument against doing it on a request path.
+2. ~~**Two new ingest CronJobs**~~ **Done.** `ingest-certification` (daily),
+   `ingest-import-alerts` (Mondays 04:00) and `ingest-news` (daily 06:30) are in
+   `deploy/k8s/ingest-cronjobs.yaml`, which now carries seven jobs.
+3. ~~**HTML scraping enters the codebase**~~ **Accepted and done**, for import alerts.
+   `services/ingest/app/import_alerts.py`, and the source is now verified rather than `verify`:
+
+   - `ialist.html` carries the alert number and its detail page in sibling `<td>`s, so the
+     mapping is read rather than hardcoded — the page ids are internal and have already drifted
+     (66-40 is `importalert_189.html`, not `_190`).
+   - The detail pages contain **no `<table>` at all** despite being ~2 MB. Firms are
+     `<div class="div-name floatleft">` blocks: **453 on 66-40, 1 832 on 66-41**, live.
+   - The country is the trailing run of capitals, not the last comma-separated field — that
+     naive read yields "AM-KT ARMENIA" and inflates 55 countries into 529.
+
+   The fragility is real and handled by failing loudly: a layout change produces zero firms and
+   says so, rather than wrong ones. `--dry-run` shows what the parser found before anything is
+   written.
+
+   Warning letters and EudraGMDP remain unscraped; import alerts were the load-bearing one.
 4. **Two calls vs. a SQL join** for the inventory badge — §2.2.
-5. **New permissions.** `certificate:read` and `certification:explore` do not exist in
-   `shared/medstock_shared/auth.py`; today no role grants anything compliance-specific beyond
-   `audit:read`.
+5. ~~**New permissions.**~~ **Done.** `certificate:read` and `certification:explore` are in
+   `shared/medstock_shared/auth.py`, and `/status`, `/certificates/{ndc}` and `/explore` are on
+   them instead of `inventory:read`.
+
+   The split is not about secrecy. `/explore` triggers a live openFDA fetch and openFDA's budget
+   is 1 000 requests a day *per IP, shared across every feed* ([services.md](services.md) §7), so
+   a permission that let anyone who can see stock spend it would let one curious user starve the
+   nightly CronJobs. Reading an already-computed certificate costs a SQL query and is granted to
+   pharmacist, physician, director and admin; exploring is pharmacist and admin only.

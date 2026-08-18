@@ -12,8 +12,10 @@ all 18 — including one obsolete since 2012, which is a red badge the scheduled
 feed could never have produced.
 
 **Rules for what this may conclude.** RxNorm is NLM, a government source, so it
-can set red (docs/compliance-usecases.md §4.3). News is not consulted here; when
-it is, it will only ever raise yellow.
+can set red (docs/compliance-usecases.md §4.3). Import alerts are FDA, also
+formal, but raise **yellow** — detention without physical examination is a
+standing posture on a manufacturer, not a defect found in this product. News
+raises yellow and can never raise red, whatever it says.
 
 Every row written is `provenance='on_demand'` and carries `expires_at`. Nothing
 refreshes it on a schedule, so it has to expire itself.
@@ -26,20 +28,33 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from medstock_shared.certification import (
     RULESET_VERSION,
+    AlertListing,
+    NewsItem,
     evaluate,
+    firm_key,
     ndc11,
     parse_fda_date,
     product_ndc_candidates,
     status_for,
 )
-from medstock_shared.models import CertificationFinding, DrugCertification
+from medstock_shared.models import (
+    CertificationFinding,
+    DrugCertification,
+    ImportAlert,
+    NewsSignal,
+)
 from medstock_shared.ndc_status import fetch_ndc_status
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 NDC_URL = "https://api.fda.gov/drug/ndc.json"
 _TIMEOUT = 15.0
+
+# A badge is a summary, not a feed reader. Beyond a handful the list stops being
+# something a pharmacist scans and starts being something they scroll past.
+MAX_NEWS = 5
 
 # An on-demand row has no CronJob behind it. A week is long enough that a demo
 # or a busy afternoon does not re-spend the openFDA budget on the same drug, and
@@ -66,6 +81,60 @@ def _directory_record(ndc: str) -> dict | None:
     return results[0] if results else None
 
 
+def import_alerts_for(session: Session, labeler: str | None) -> list[AlertListing]:
+    """Red List entries whose firm name matches this NDC's labeler.
+
+    **Exact match on the normalised key, never fuzzy** — `firm_key` carries the
+    argument. Briefly: a miss looks like every other drug that is not on an
+    alert, while a false positive publicly accuses a named manufacturer of being
+    detained at the border. Those are not symmetric errors.
+
+    A missing table degrades to "no listings" rather than failing the check: the
+    formal openFDA findings are the backbone of a badge and must still be
+    computable when the weekly scrape has never run.
+    """
+    if not labeler:
+        return []
+    try:
+        rows = session.scalars(
+            select(ImportAlert).where(ImportAlert.firm_key == firm_key(labeler))
+        ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        AlertListing(
+            alert_number=row.alert_number,
+            firm_name=row.firm_name,
+            country=row.country or "",
+            listed_at=row.listed_at,
+            source_url=row.source_url or "",
+        )
+        for row in rows
+    ]
+
+
+def news_for(session: Session, ndc: str) -> list[NewsItem]:
+    """Recent press mentions attached to this NDC. Yellow at most — §4.3."""
+    try:
+        rows = session.scalars(
+            select(NewsSignal)
+            .where(NewsSignal.ndc == ndc)
+            .order_by(NewsSignal.published_at.desc().nullslast())
+            .limit(MAX_NEWS)
+        ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+    return [
+        NewsItem(
+            headline=row.headline,
+            url=row.url,
+            domain=row.domain or "",
+            published_at=row.published_at,
+        )
+        for row in rows
+    ]
+
+
 def explore(session: Session, ndc: str) -> dict:
     """Resolve one NDC and persist the verdict. Returns the stored row shape.
 
@@ -76,12 +145,15 @@ def explore(session: Session, ndc: str) -> dict:
     product = _directory_record(key)
     status_record = fetch_ndc_status(key)
 
+    labeler = (product or {}).get("labeler_name")
     findings = evaluate(
         marketing_end_date=parse_fda_date((product or {}).get("marketing_end_date")),
         marketing_start_date=parse_fda_date((product or {}).get("marketing_start_date")),
         listing_expiration_date=parse_fda_date((product or {}).get("listing_expiration_date")),
         marketing_category=(product or {}).get("marketing_category"),
         finished=(product or {}).get("finished"),
+        import_alerts=import_alerts_for(session, labeler),
+        news=news_for(session, key),
         ndc_status=status_record,
         in_directory=product is not None,
     )

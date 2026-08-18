@@ -16,7 +16,7 @@ Status: **draft**. §2 is a recommendation, not a settled decision.
 |---|---|---|---|
 | **PP-1** | Substitution safety check | `analogue` proposes an alternative drug | Risk score + ranked reasons + hard blocks |
 | **PP-2** | Profile risk assessment | Pharmacist opens a patient's assessment | Per-drug risk across the current regimen |
-| **PP-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations |
+| **PP-3** | Explain a prediction | Pharmacist asks "why?" | Feature contributions + guideline citations — **built**, `GET /explain/{request_id}` |
 
 PP-3 is not a nice-to-have. It is what keeps this system a decision *support* tool rather than a
 regulated medical device (§6), and what satisfies the human-in-the-loop requirement the product
@@ -142,8 +142,16 @@ Nothing that was stripped. The prediction runs on a **feature vector, not a pers
 ```
 age_band, sex, weight_band, eGFR_band, hepatic_function,
 allergy_codes[], comorbidity_codes[], active_rxcuis[],
-prior_adr_codes[], relevant_lab_bands[], pgx_alleles[]
+prior_adr_codes[], relevant_lab_bands[], pgx_phenotypes[]
 ```
+
+**`pgx_phenotypes`, not `pgx_alleles`** — changed when Tier 3 was built, and worth the
+sentence. Turning a diplotype like `*2/*2` into "Poor Metabolizer" needs CPIC's
+allele-definition and diplotype tables, and a mis-mapped diplotype is a clinical error we
+would have authored. The reporting lab already states the phenotype, every CPIC
+recommendation is keyed on it, and taking what the lab asserts keeps the accountability for
+that inference where it already sits. Values are `"GENE:phenotype"` in CPIC's own
+vocabulary — `"CYP2C19:Poor Metabolizer"`, `"HLA-B:*57:01 positive"`.
 
 De-identification is not a compromise here — it is sufficient. That is what makes this
 recommendation cheap rather than a sacrifice.
@@ -180,8 +188,57 @@ buildable — and only Tier 2 is the black box.
 |---|---|---|---|---|
 | **0** | Deterministic rules | Hard contraindications, allergy cross-reactivity (β-lactam class), renal/hepatic dose limits, duplicate therapy | Knowledge bases | Trivially |
 | **1** | Disproportionality analysis — PRR / ROR / IC | "This reaction is reported N× above baseline for this drug" | FAERS | Yes — it is a ratio |
+
+**Tier 1 is built** (`services/ingest/app/faers.py` → `adr_signal` → stage 7a). PRR and ROR from
+the standard 2×2 table, screened on the conventional floors: at least 3 reports and PRR ≥ 2.
+
+Three things measured while building it:
+
+- **The keyless baseline is the top 100 reactions, not 1 000.** Asking a count query for
+  `limit=1000` returns `403 API_KEY_MISSING`. Every other feed here is keyless by design, so 100
+  is what ships — and it is a real coverage limit, because a drug-specific reaction outside the
+  overall top 100 has no baseline and is skipped rather than given a guessed one. Metformin's
+  lactic acidosis is one such casualty; it is caught by Tier 3's label extraction instead.
+  Registering an openFDA key would raise the ceiling and materially widen this tier.
+- **Confounding by indication is visible in the output, not theoretical.** Metformin's strongest
+  signal is *blood glucose increased* at PRR 4.6 over 8 659 reports. Metformin does not raise
+  blood glucose; it is prescribed to people whose glucose is already high. This is why the tier
+  carries a small weight and why every message it emits says "reported", never "causes".
+- **openFDA answers 404 for "no matching reports"**, which for a drug nobody has filed an event
+  against is an ordinary result rather than an error.
+
+The weight is deliberately the smallest in the table. A FAERS ratio is identical for every
+patient on the drug, so if it could outweigh a renal or prior-ADR finding it would flatten the
+distinctions the assessment exists to make. It nudges; it does not decide.
 | **2** | Gradient boosting or survival model | Individual risk score for a named reaction | MIMIC-IV, offline | Via SHAP |
 | **3** | Pharmacogenomic guideline lookup | CYP2C19 → clopidogrel, HLA-B\*57:01 → abacavir, etc. | CPIC level A/B pairs | Trivially |
+
+**Tier 3 is built** (`services/ingest/app/cpic.py` → `pgx_guideline` → stage 8). 131 level
+A/B gene–drug pairs carry an RxCUI, giving 252 gene/drug/phenotype rows across CYP2D6,
+CYP2C19, G6PD, SLCO1B1, MT-RNR1, CYP2C9, DPYD, CYP3A5, UGT1A1, NAT2 and CFTR. CPIC codes
+`drugid` as `RxNorm:…` already, so guidelines join onto the formulary with no mapping layer
+to build or audit.
+
+Two things the API turned out not to provide, both discovered by running it rather than
+reading it:
+
+- **No machine-readable "is this actionable" flag.** `dosinginformation`,
+  `alternatedrugavailable` and `otherprescribingguidance` exist in the schema and are
+  `false` on every row. The reassuring-versus-actionable split therefore comes from the
+  phenotype vocabulary (`is_baseline_phenotype`), which is a short enumerated list, is ours
+  rather than CPIC's, and is documented as such at the point it is defined. The alternative
+  was matching words like "avoid" in recommendation prose, which is not a thing a clinical
+  weight should rest on.
+- **Match on `phenotypes`, not `lookupkey`.** They differ on 673 of 1 000 rows: `lookupkey`
+  is CPIC's machine key, which for CYP2D6 is an activity score (`0.25`), while `phenotypes`
+  carries the clinical phenotype a lab actually reports.
+
+Multi-gene recommendations ("CYP2D6 IM *and* CYP2C19 IM") are skipped rather than
+half-matched on one gene. That is a real coverage gap, not a rounding error.
+
+Tier 3 raises a score and **never blocks** — even for abacavir with HLA-B\*57:01, which is a
+genuine absolute contraindication. Deriving a block here would mean parsing CPIC's prose;
+hard gates stay in Tier 0 where a person curates them.
 
 **Tier 0 fires first and can veto.** A statistical model must never be able to overturn a known
 absolute contraindication — if Tier 0 says no, the answer is no and the score is not consulted.
@@ -265,6 +322,18 @@ recommendation. Criteria (a)–(c) already hold. Criterion (d) is precisely PP-3
 SHAP contributions and guideline citations are load-bearing, not decoration. FDA's 2022 CDS
 guidance reads (d) strictly: a bare risk score with no reviewable basis does not qualify.
 
+**Criterion (d) is now served, and without SHAP.** `GET /explain/{request_id}` returns, for a
+logged assessment: every finding's weight, its share of the score, the stage and source it came
+from, the band that turned the score into a colour, and how far the score sits from the next
+band. §7 sketched this around SHAP because it assumed a Tier 2 model — but nothing on this path
+is a model, so the contributions are not estimated, they *are* the arithmetic. When Tier 2
+lands, SHAP becomes an additional contribution source inside the same response, not a
+replacement for it.
+
+The response also compares the stored `ruleset_version` against the current one and refuses to
+pretend when they differ. Explaining a six-month-old decision with today's weights would look
+like a perfectly good answer and be a lie — which is the failure §7 predicts.
+
 **EU.** Under MDR Rule 11 and MDCG 2019-11, software providing information used for diagnostic
 or therapeutic decisions is typically **Class IIa or above** — a notified body, not a
 self-declaration. The EU carve-out is much narrower than the US one. If EU deployment is ever
@@ -278,20 +347,43 @@ Neither applies to a capstone that is not placed on the market. Both are worth o
 
 Nothing here is a tenant table, because nothing here is about a person.
 
-| Table | Class | Key columns |
-|---|---|---|
-| `pgx_guideline` | reference | `gene` · `rxcui` · `phenotype` · `recommendation` · `evidence_level` · `source_url` |
-| `interaction_rule` | reference | `rxcui_a` · `rxcui_b` · `severity` · `mechanism` · `source` |
-| `adr_signal` | reference | `rxcui` · `reaction_code` · `prr` · `ror` · `n_reports` · `computed_at` |
-| `model_version` | reference | `name` · `version` · `trained_at` · `metrics` · `feature_schema` |
-| `assessment_log` | tenant, RLS | `request_id` · `actor_id` · `feature_hash` · `model_version` · `result` · `created_at` |
+| Table | Class | Key columns | Status |
+|---|---|---|---|
+| `pgx_guideline` | reference | `gene` · `rxcui` · `phenotype` · `recommendation` · `implication` · `classification` · `evidence_level` · `action_required` · `population` · `source_url` | **built** — Tier 3 |
+| `interaction_rule` | reference | `rxcui_a` · `rxcui_b` · `severity` · `mechanism` · `source` | planned |
+| `adr_signal` | reference | `rxcui` · `reaction_code` · `prr` · `ror` · `n_reports` · `computed_at` | planned — Tier 1 |
+| `model_version` | reference | `name` · `version` · `trained_at` · `metrics` · `feature_schema` | planned — Tier 2, blocked on MIMIC-IV |
+| `drug_risk_profile` | reference | see [prognosis-and-procurement.md](prognosis-and-procurement.md) §4 | **built** |
+| `assessment_log` | tenant | `hospital_id` · `request_id` · `actor_id` · `feature_hash` · `ruleset_version` · `result` · `created_at` | **built** |
 
 `assessment_log` is the only tenant table and holds **no patient identifier** — `feature_hash`
 proves what was asked without recording who it was about. That is what makes the audit trail in
 [services.md](services.md) §1.3 work under a no-PHI design.
 
+Two details the implementation settled:
+
+- **`patient_ref` is excluded from the hash.** It is opaque to us but stable per patient, so
+  hashing it would let anyone holding this table group every assessment ever made about one
+  person — a re-identification handle assembled out of the audit trail itself. Pinned by
+  `services/patient-profiling/tests/test_feature_hash.py`.
+- **`ruleset_version`, not `model_version`.** This pipeline is deterministic, so what has to be
+  pinned to explain an old answer is the weight table and the bands. When a Tier 2 model lands it
+  gets its own column; one version string quietly meaning two different things would be worse
+  than either.
+
+The write **fails the request** if it cannot happen. An assessment reaching a clinician with no
+audit row is precisely the hole §1.3 claims does not exist, and it is a silent one — the answer
+looks identical either way.
+
 `model_version` exists so an assessment from six months ago can be explained with the model that
 produced it. Without it, PP-3 silently becomes a lie the moment the model is retrained.
+
+**No table in this schema has an RLS policy**, this one included, despite the class column above
+and §1.1 of [services.md](services.md). `session_scope` sets `app.hospital_id` and nothing reads
+it; isolation is application-level `WHERE hospital_id` throughout. Adding a policy here alone
+would also be a silent no-op — the services connect as the owning role, and Postgres bypasses RLS
+for table owners without `FORCE ROW LEVEL SECURITY`, which is worse than absent because it looks
+present. Tracked separately; it is a schema-wide decision, not this table's.
 
 ---
 
@@ -305,8 +397,20 @@ produced it. Without it, PP-3 silently becomes a lie the moment the model is ret
    before it is on the critical path.
 4. **Scope the MVP tiers.** Tiers 0, 1 and 3 are deliverable and genuinely useful. Tier 2 is the
    "complex ML" ask and the one that can slip. Decide whether Tier 2 is committed or a stretch.
+   **Tiers 0, 1 and 3 are built.** Tier 2 is the only one left and cannot start until MIMIC-IV
+   credentialing does, which is item 3 and has not been begun. It is therefore a stretch by
+   circumstance rather than by choice — and the pipeline is built so it arrives as an additional
+   contribution inside `/explain`, not a rewrite.
 5. **PharmGKB / DrugBank licensing** — free for research, not for a product. Affects what can be
    claimed on stage.
 6. **Deployment region**, before the first migration. §5.
-7. **New permissions** — `profile:assess`, `profile:explain`. Neither exists in
-   `shared/medstock_shared/auth.py`, and no role currently grants anything patient-related.
+7. ~~**New permissions**~~ **Done.** `profile:assess` and `profile:explain` exist, alongside
+   `profile:review` and `profile:approve` from the PP-3 approval gate
+   ([prognosis-and-procurement.md](prognosis-and-procurement.md) §1.3). `/assess`, `/demand` and
+   `/forecast` are on `profile:assess` rather than `inventory:read`, so seeing stock no longer
+   implies being able to run a clinical assessment.
+
+   `profile:explain` goes to pharmacist and physician. A prescriber who cannot ask *why* a line
+   was flagged has been handed a verdict without its basis, which is precisely what §6's CDS
+   exclusion turns on — so withholding it from the physician would undermine the exclusion the
+   design relies on.
