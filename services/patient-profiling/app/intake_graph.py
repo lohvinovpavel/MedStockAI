@@ -11,11 +11,19 @@ So this reads the document -- text or a photograph of one -- and produces
 structured features. The graph is not decoration; each node exists because the
 naive version of this is dangerous in a specific way:
 
-    classify -> extract -> normalise -> plausibility -> reconcile -> apply
+    classify --+--> read as labs  --+--> normalise -> reconcile -> apply
+               +--> read as prose --+
 
-**classify** first, because the extraction prompt for a lab panel and for a
-discharge summary are not the same question, and asking one prompt to handle
-both is how a creatinine gets read as a bilirubin.
+**classify** first, because the prompt for a lab panel and the prompt for
+narrative are not the same question, and one prompt asked to do both does
+neither well -- it transcribes the numbers and skims the prose, or reads the
+prose and rounds the numbers.
+
+**The reads run in parallel**, which is what makes that split free. A
+discharge summary genuinely is both -- a lab panel and a narrative -- so it
+gets both prompts at once and costs the wall time of one. An unclassified
+document also gets both, because a failed classification must not silently
+skip whichever half we guessed wrong.
 
 **normalise** separately from extract, because the model reports what the page
 says -- "eGFR 32 mL/min/1.73m2", "moderate hepatic impairment" -- and the
@@ -42,10 +50,11 @@ gated on `settings.phi_to_model_allowed` and refuses to run without it.
 from __future__ import annotations
 
 import logging
+import operator
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 _log = logging.getLogger(__name__)
 
@@ -106,7 +115,9 @@ class IntakeState(TypedDict, total=False):
     document_text: str
     document_date: str          # ISO, from the page if it has one
     kind: str                   # lab_report | discharge_summary | note | unknown
-    raw: list[dict[str, Any]]   # what extract said, before normalising
+    # Written by every extraction branch in parallel, so it reduces by
+    # concatenation rather than by last-write-wins.
+    raw: Annotated[list[dict[str, Any]], operator.add]
     extracted: list[Extracted]
     rejected: list[tuple[str, str]]
     conflicts: list[dict[str, Any]]
@@ -279,6 +290,42 @@ def reconcile(
 # --- nodes --------------------------------------------------------------------
 
 
+# Which extractions a document is worth. A discharge summary gets BOTH, and
+# that is the case the single-prompt version handled badly: they carry a lab
+# panel *and* prose, and one prompt asked to do both does neither as well --
+# it either transcribes the numbers and skims the narrative, or reads the
+# narrative and rounds the numbers. Two prompts, run at once, cost the same
+# wall time as one.
+READS: dict[str, tuple[str, ...]] = {
+    "lab_report": ("patient_doc_labs",),
+    "discharge_summary": ("patient_doc_labs", "patient_doc_summary"),
+    "note": ("patient_doc_summary",),
+    "unknown": ("patient_doc_labs", "patient_doc_summary"),
+}
+
+
+def reads_for(kind: str) -> tuple[str, ...]:
+    """The prompts to run for a document of this kind.
+
+    An unclassified document gets both, deliberately: classification failed, so
+    guessing narrow would silently skip whichever half we guessed wrong.
+    """
+    return READS.get(kind or "unknown", READS["unknown"])
+
+
+def fan_out_reads(state: IntakeState) -> list:
+    """One `Send` per extraction the document deserves."""
+    from langgraph.types import Send
+
+    return [
+        Send(
+            "extract",
+            {"task": task, "document_text": state.get("document_text", "")},
+        )
+        for task in reads_for(state.get("kind", ""))
+    ]
+
+
 def make_nodes(ask: Callable[..., dict]) -> dict[str, Callable[[IntakeState], dict]]:
     """Nodes built against an `ask_ai`-shaped callable, injected so the flow is
     exercisable without a model."""
@@ -295,15 +342,18 @@ def make_nodes(ask: Callable[..., dict]) -> dict[str, Callable[[IntakeState], di
         kind = str(result.get("kind") or "unknown")
         return {"kind": kind, "document_date": str(result.get("document_date") or "")}
 
-    def extract_node(state: IntakeState) -> dict:
-        task = {
-            "lab_report": "patient_doc_labs",
-            "discharge_summary": "patient_doc_summary",
-        }.get(state.get("kind", ""), "patient_doc_summary")
+    def extract_node(state: dict) -> dict:
+        """One extraction prompt, and the unit of parallelism.
+
+        Which prompts run is `reads_for`'s decision; this just runs the one it
+        was sent. Failure is per-branch: a summary whose lab panel could not be
+        read should still yield the intolerance in its prose.
+        """
+        task = state["task"]
         try:
             result = ask(task, {"source_text": state.get("document_text", "")})
         except Exception:  # noqa: BLE001 — nothing extracted is a real outcome
-            _log.warning("intake: extraction failed for kind=%s", state.get("kind"))
+            _log.warning("intake: %s failed", task)
             return {"raw": []}
         return {"raw": list(result.get("features") or [])}
 
@@ -349,7 +399,9 @@ def build_graph(ask: Callable[..., dict] | None = None):
     for name, fn in nodes.items():
         graph.add_node(name, fn)
     graph.add_edge(START, "classify")
-    graph.add_edge("classify", "extract")
+    # Fan out on what the classification says the document is worth reading for.
+    graph.add_conditional_edges("classify", fan_out_reads, ["extract"])
+    # Fan in: `raw` concatenates across branches, and normalise sees one list.
     graph.add_edge("extract", "normalise")
     graph.add_edge("normalise", "reconcile")
     graph.add_edge("reconcile", END)

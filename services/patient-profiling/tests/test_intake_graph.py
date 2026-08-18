@@ -189,17 +189,16 @@ def _stub(answers):
     return ask
 
 
-def test_a_lab_report_routes_to_the_lab_prompt():
-    """A lab panel and a discharge summary are not the same question; one
-    prompt for both is how a creatinine gets read as a bilirubin."""
+def test_a_branch_runs_the_prompt_it_was_sent():
+    """Which prompts run is the fan-out's decision; the branch just runs one."""
     seen = []
 
     def ask(task, payload, *a, **kw):
         seen.append(task)
-        return {"kind": "lab_report", "features": []}
+        return {"features": []}
 
     nodes = make_nodes(ask)
-    nodes["extract"]({"kind": "lab_report", "document_text": "x"})
+    nodes["extract"]({"task": "patient_doc_labs", "document_text": "x"})
     assert seen == ["patient_doc_labs"]
 
 
@@ -208,9 +207,11 @@ def test_an_unclassified_document_still_gets_read():
     assert nodes["classify"]({"document_text": "x"}) == {"kind": "unknown"}
 
 
-def test_a_failed_extraction_yields_nothing_rather_than_raising():
+def test_a_failed_branch_yields_nothing_rather_than_raising():
+    """Per-branch failure: a summary whose lab panel could not be read should
+    still yield the intolerance in its prose."""
     nodes = make_nodes(_stub({}))
-    assert nodes["extract"]({"kind": "lab_report"}) == {"raw": []}
+    assert nodes["extract"]({"task": "patient_doc_labs"}) == {"raw": []}
 
 
 def test_the_graph_runs_end_to_end():
@@ -233,3 +234,74 @@ def test_the_graph_runs_end_to_end():
     )
     assert [e.value for e in final["extracted"]] == [32.0]
     assert final["rejected"], "the implausible one is reported, not silently dropped"
+
+
+# --- parallel reads -----------------------------------------------------------
+
+
+def test_a_discharge_summary_gets_both_reads():
+    """It genuinely is both a lab panel and a narrative. One prompt asked to do
+    both transcribes the numbers and skims the prose, or the reverse."""
+    from app.intake_graph import reads_for
+
+    assert set(reads_for("discharge_summary")) == {"patient_doc_labs", "patient_doc_summary"}
+
+
+def test_a_lab_report_gets_only_the_lab_read():
+    from app.intake_graph import reads_for
+
+    assert reads_for("lab_report") == ("patient_doc_labs",)
+
+
+def test_an_unclassified_document_gets_both():
+    """Classification failed, so guessing narrow would silently skip whichever
+    half the guess got wrong."""
+    from app.intake_graph import reads_for
+
+    assert len(reads_for("unknown")) == 2
+    assert len(reads_for("")) == 2
+
+
+def test_the_reads_run_concurrently():
+    pytest.importorskip("langgraph")
+    import threading
+    import time
+
+    from app.intake_graph import build_graph
+
+    live = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def ask(task, payload, *args, **kwargs):
+        nonlocal live, peak
+        if task == "patient_doc_classify":
+            return {"kind": "discharge_summary", "document_date": "2026-08-01"}
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        time.sleep(0.05)
+        with lock:
+            live -= 1
+        return {"features": []}
+
+    build_graph(ask=ask).invoke({"document_text": "x", "existing": {}})
+    assert peak > 1, "the two reads ran one after another"
+
+
+def test_both_branches_reach_normalise():
+    """`raw` reduces by concatenation. Without that, one branch's features
+    would overwrite the other's and half the document would vanish."""
+    pytest.importorskip("langgraph")
+    from app.intake_graph import build_graph
+
+    def ask(task, payload, *args, **kwargs):
+        if task == "patient_doc_classify":
+            return {"kind": "discharge_summary", "document_date": "2026-08-01"}
+        if task == "patient_doc_labs":
+            return {"features": [{"field": "egfr_value", "value": "32"}]}
+        return {"features": [{"field": "hepatic", "value": "cirrhosis"}]}
+
+    final = build_graph(ask=ask).invoke({"document_text": "x", "existing": {}})
+    fields = {e.field for e in final["extracted"]}
+    assert fields == {"egfr_value", "hepatic"}, "a branch's features were lost"

@@ -33,9 +33,10 @@ from __future__ import annotations
 
 import json
 import logging
+import operator
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from medstock_shared.ai_tasks import PROGNOSIS_FEATURES, PROGNOSIS_OPS
 
@@ -86,14 +87,20 @@ class GraphState(TypedDict, total=False):
     """What flows between nodes.
 
     `rxcui`, `drug_name` and `sections` are inputs. Everything else accumulates.
+
+    `risks` and `failed_sections` carry `operator.add` reducers because the
+    section branches run in PARALLEL and every one of them writes both. Without
+    a reducer LangGraph treats concurrent writes to the same key as a conflict;
+    with one, six branches append into a single list and the merge is the
+    framework's problem rather than ours.
     """
 
     rxcui: str
     drug_name: str
     spl_id: str
     sections: list[tuple[str, str]]   # (section name, text)
-    failed_sections: list[str]        # sections the model never read
-    risks: list[dict[str, Any]]       # extracted, pre-validation
+    failed_sections: Annotated[list[str], operator.add]   # never read
+    risks: Annotated[list[dict[str, Any]], operator.add]  # extracted, pre-validation
     kept: list[dict[str, Any]]        # validated risks
     rejected: list[dict[str, Any]]    # Rejection.as_dict(), for the reviewer
     repair_rounds: int
@@ -380,36 +387,42 @@ def make_nodes(ask: Callable[[str, dict], dict]) -> dict[str, Callable[[GraphSta
     retries and the per-task validators with it.
     """
 
-    def extract_node(state: GraphState) -> dict:
-        """One call per section. A section that fails is skipped, not fatal —
-        a boxed warning that extracts is worth having even if
-        use_in_specific_populations times out."""
-        risks: list[dict[str, Any]] = []
-        failed: list[str] = []
-        for name, body in state.get("sections") or []:
-            try:
-                result = ask(
-                    "prognosis_section",
-                    {
-                        "rxcui": state.get("rxcui", ""),
-                        "drug_name": state.get("drug_name", ""),
-                        "section": name,
-                        "source_text": body,
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001 — one section must not end the label
-                # Recorded, not swallowed. A section that failed to extract
-                # contributes no risks, and a reviewer looking at three profiles
-                # cannot otherwise tell whether the fourth section was clean or
-                # simply never read. That is the same invisible loss this whole
-                # module exists to stop.
-                _log.warning("prognosis: section %s failed: %s", name, exc)
-                failed.append(name)
-                continue
-            for risk in result.get("risks") or []:
-                if isinstance(risk, dict):
-                    risks.append({**risk, "section": risk.get("section") or name})
-        return {"risks": risks, "failed_sections": failed}
+    def extract_section_node(state: dict) -> dict:
+        """ONE section, and the unit of parallelism.
+
+        The sections of a label are independent questions -- a boxed warning
+        says nothing about how use_in_specific_populations should be read -- so
+        there is no reason to wait for one before asking the next. Six sections
+        ran as six sequential calls purely because a for-loop was the obvious
+        way to write it; as branches they run at once and the label costs about
+        as long as its slowest section.
+
+        Failure stays per-branch. A section that fails contributes no risks and
+        records its name; a reviewer looking at three profiles cannot otherwise
+        tell whether the fourth section was clean or simply never read, which is
+        the invisible loss this module exists to stop.
+        """
+        name, body = state["section"]
+        try:
+            result = ask(
+                "prognosis_section",
+                {
+                    "rxcui": state.get("rxcui", ""),
+                    "drug_name": state.get("drug_name", ""),
+                    "section": name,
+                    "source_text": body,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — one section must not end the label
+            _log.warning("prognosis: section %s failed: %s", name, exc)
+            return {"risks": [], "failed_sections": [name]}
+
+        risks = [
+            {**risk, "section": risk.get("section") or name}
+            for risk in result.get("risks") or []
+            if isinstance(risk, dict)
+        ]
+        return {"risks": risks, "failed_sections": []}
 
     def validate_node(state: GraphState) -> dict:
         partition = validate_risks(state.get("risks") or [], _source_of(state))
@@ -470,7 +483,7 @@ def make_nodes(ask: Callable[[str, dict], dict]) -> dict[str, Callable[[GraphSta
         }
 
     return {
-        "extract": extract_node,
+        "extract_section": extract_section_node,
         "validate": validate_node,
         "repair": repair_node,
         "explain": explain_node,
@@ -482,6 +495,28 @@ def _source_of(state: GraphState) -> str:
     section, not just the one a risk came from, because the model is told to
     quote the label and a boxed warning is quoted in both places."""
     return "\n\n".join(body for _name, body in state.get("sections") or [])
+
+
+def fan_out_sections(state: GraphState) -> list:
+    """One `Send` per section: the fan-out itself.
+
+    A label with no sections sends nothing, and the graph proceeds straight to
+    validate with an empty extraction -- which is the correct reading of a drug
+    whose label carries no conditional risk, and not an error.
+    """
+    from langgraph.types import Send
+
+    return [
+        Send(
+            "extract_section",
+            {
+                "rxcui": state.get("rxcui", ""),
+                "drug_name": state.get("drug_name", ""),
+                "section": (name, body),
+            },
+        )
+        for name, body in state.get("sections") or []
+    ]
 
 
 def needs_repair(state: GraphState) -> str:
@@ -516,8 +551,14 @@ def build_graph(ask: Callable[[str, dict], dict] | None = None):
     for name, fn in nodes.items():
         graph.add_node(name, fn)
 
-    graph.add_edge(START, "extract")
-    graph.add_edge("extract", "validate")
+    # Fan out: one branch per section, all in flight at once. `Send` carries the
+    # section into the branch rather than the branch reading it out of shared
+    # state, which is what lets the same node run many times concurrently
+    # without the copies treading on each other.
+    graph.add_conditional_edges(START, fan_out_sections, ["extract_section"])
+    # Fan in. Every branch writes `risks` and `failed_sections`, whose reducers
+    # concatenate; validate does not run until all of them have landed.
+    graph.add_edge("extract_section", "validate")
     # validate decides whether a repair round is worth a call.
     graph.add_conditional_edges("validate", needs_repair, {"repair": "repair", "explain": "explain"})
     # A repair is revalidated inside repair_node, so it goes straight on: the

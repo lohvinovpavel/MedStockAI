@@ -259,29 +259,49 @@ def _stub(answers: dict[str, dict]):
     return ask
 
 
-def test_extract_calls_once_per_section():
+def test_a_branch_reads_exactly_one_section():
     ask = _stub({"prognosis_section": {"risks": [risk()]}})
     nodes = make_nodes(ask)
-    out = nodes["extract"]({"rxcui": "1", "sections": split_sections(LABEL)})
-    assert len(ask.calls) == 2, "one call per section, not one for the whole label"
-    assert len(out["risks"]) == 2
+    out = nodes["extract_section"](
+        {"rxcui": "1", "section": ("boxed_warning", "Risk factors include renal impairment.")}
+    )
+    assert len(ask.calls) == 1
+    assert ask.calls[0][1]["section"] == "boxed_warning"
+    assert len(out["risks"]) == 1
 
 
-def test_a_failing_section_does_not_end_the_label():
+def test_a_failing_branch_does_not_end_the_label():
     """A boxed warning that extracts is worth having even if another section
-    times out."""
-    ask = _stub({})  # every call raises
-    nodes = make_nodes(ask)
-    out = nodes["extract"]({"rxcui": "1", "sections": split_sections(LABEL)})
+    times out. Failure is per-branch, so it cannot take the others with it."""
+    nodes = make_nodes(_stub({}))  # every call raises
+    out = nodes["extract_section"]({"rxcui": "1", "section": ("geriatric_use", "text")})
     assert out["risks"] == []
 
 
-def test_a_failing_section_is_recorded_not_swallowed():
+def test_a_failing_branch_is_recorded_not_swallowed():
     """A reviewer looking at three profiles cannot otherwise tell whether the
     fourth section was clean or simply never read."""
     nodes = make_nodes(_stub({}))
-    out = nodes["extract"]({"rxcui": "1", "sections": split_sections(LABEL)})
-    assert out["failed_sections"] == ["boxed_warning", "geriatric_use"]
+    out = nodes["extract_section"]({"rxcui": "1", "section": ("boxed_warning", "text")})
+    assert out["failed_sections"] == ["boxed_warning"]
+
+
+def test_the_fan_out_sends_one_branch_per_section():
+    pytest.importorskip("langgraph")
+    from app.prognosis_graph import fan_out_sections
+
+    sends = fan_out_sections({"rxcui": "1", "sections": split_sections(LABEL)})
+    assert len(sends) == 2
+    assert {s.arg["section"][0] for s in sends} == {"boxed_warning", "geriatric_use"}
+
+
+def test_a_label_with_no_sections_sends_nothing():
+    """The correct reading of a drug whose label carries no conditional risk,
+    not an error."""
+    pytest.importorskip("langgraph")
+    from app.prognosis_graph import fan_out_sections
+
+    assert fan_out_sections({"rxcui": "1", "sections": []}) == []
 
 
 def test_the_reviewer_is_told_a_section_was_never_read():
@@ -370,3 +390,62 @@ def test_the_graph_runs_end_to_end():
     )
     assert final["kept"]
     assert final["explanation"]
+
+
+# --- the fan-out is the reason this is a graph --------------------------------
+
+
+def test_sections_are_read_concurrently():
+    """The regression guard on the whole point of the rewrite.
+
+    Sections are independent questions, so waiting for one before asking the
+    next was pure latency: six sequential calls where six concurrent ones do.
+    Measured at realistic API latency the speedup is linear in section count.
+
+    Asserts overlap rather than wall time -- a timing threshold on a shared CI
+    runner is a flaky test, while "did two branches ever run at once" is exactly
+    the property and is not load-dependent. A revert to a for-loop makes peak 1.
+    """
+    pytest.importorskip("langgraph")
+    import threading
+    import time
+
+    from app.prognosis_graph import build_graph
+
+    label = "".join(f"[section{i}]\nRisk factors include renal impairment.\n\n" for i in range(4))
+    live = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def ask(task, payload, *args, **kwargs):
+        nonlocal live, peak
+        if task != "prognosis_section":
+            return {"explanation": "x"}
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        time.sleep(0.05)
+        with lock:
+            live -= 1
+        return {"risks": []}
+
+    build_graph(ask=ask).invoke({"rxcui": "1", "sections": split_sections(label)})
+    assert peak > 1, "sections ran one after another; the fan-out is not wired"
+
+
+def test_every_branch_result_survives_the_merge():
+    """Parallel branches all write `risks` and `failed_sections`. Without the
+    operator.add reducers LangGraph rejects the concurrent writes, and a version
+    that dropped one would silently lose whole sections of a label."""
+    pytest.importorskip("langgraph")
+    from app.prognosis_graph import build_graph
+
+    label = "".join(f"[section{i}]\n{QUOTE}\n\n" for i in range(3))
+
+    def ask(task, payload, *args, **kwargs):
+        if task == "prognosis_section":
+            return {"risks": [risk(reaction=f"reaction from {payload['section']}")]}
+        return {"explanation": "x"}
+
+    final = build_graph(ask=ask).invoke({"rxcui": "1", "sections": split_sections(label)})
+    assert len(final["kept"]) == 3, "a branch's risks were lost in the merge"
