@@ -1,6 +1,10 @@
 # Shared AI Engine & Reliability Layer — implementation plan
 
-Status: proposal. Supersedes nothing yet; amends [services.md](services.md) §4 when Phase 1 lands.
+Status: **Phases 1, 2, 4 implemented** (breaker + versioned cache; `ai_audit_log` provenance;
+copilot tool-calling in `analogue`). **Phase 3 (certificate OCR) skipped by decision** — it
+targeted a UI flow `docs/backend/specs/H1-append-only-audit-log.md:11` calls "fabricated"; no
+scanned-document concept exists anywhere in this schema. Phases 5–8 below are new proposals, not
+yet started — see §9.
 
 ---
 
@@ -332,3 +336,257 @@ one line of this table does not belong on the request path.
 | `user_id` on `ai_cache` | never; it belongs on `ai_audit_log` (§0.3) |
 | Procurement/oversight tools | their endpoints exist |
 | A separate `copilot` service | copilot traffic diverges from analogue's |
+
+---
+
+# Part II — Phase 5–8: new use cases
+
+Proposals, not yet approved for implementation. Each was checked against what actually exists —
+table, endpoint, permission — before being written down; two of them are gaps `docs/services.md`
+§4 and `docs/pre-mortem.md` already named as open (`extract`, `prediction`). One throughline
+holds across all four: everywhere this system uses AI today, the model **ranks, narrates, or
+extracts from closed-world data with a citation — it never invents a number or a verdict**. Every
+phase below keeps that invariant; where a natural design would break it, that's called out and
+designed around, not silently done.
+
+## 9. Phase 5 — `explain_assessment` narration (pharmacist)
+
+**Where:** `services/patient-profiling/app/main.py`'s `explain` endpoint
+([main.py:634](../services/patient-profiling/app/main.py)). Deliberately deterministic today —
+its own docstring: "the contributions are not estimated, they are the arithmetic itself," which
+is what lets it satisfy the FDA CDS exclusion's criterion (d), a professional must be able to
+independently review the *basis* of a recommendation. That basis must stay the arithmetic. The
+model's job here is narrower than anywhere else in this codebase: **paraphrase already-computed,
+already-cited numbers into a sentence** — not decide anything, not add a fact the response body
+doesn't already contain.
+
+**Task:**
+
+```python
+TASKS["explain_assessment"] = AITask(
+    name="explain_assessment",
+    owner="Andrii",
+    prompt_version="v1",
+    prompt=(
+        "A hospital's automated drug-safety rules produced this assessment. Write one or two "
+        "plain-language sentences a pharmacist can read at a glance. State only what is in the "
+        "data below — do not add a risk, a number, or a recommendation that isn't already "
+        "there.\n\nVerdict: {verdict}\nScore: {score}\nContributions (code, weight, share of "
+        "total): {contributions}\n\nReturn JSON: {{\"narrative\": str, \"cites\": [str]}} — "
+        "each entry in cites must be a code from Contributions above, verbatim."
+    ),
+    validate=_no_uncited_numbers,  # NEW — see below
+)
+```
+
+**A new validator, not a variant of the citation-substring check.** The existing
+`_citation_must_be_verbatim` checks that a quoted *sentence* appears in source text; this needs
+to check that no quoted *number* appears that isn't in the source data. `_no_uncited_numbers`:
+extract every digit sequence from `result["narrative"]`, reject the whole narrative (not prune —
+there is no partial-sentence salvage here) if any number isn't one of the source's `score`,
+`weight`, or `share` values. A pharmacist reading a wrong number in a sentence next to a correct
+one is worse than reading no sentence.
+
+**Caching changes the trust story favorably, not just the cost story.** `AssessmentLog` rows are
+immutable once written (`docs/patient-profiling-usecases.md` §7), so the same `request_id` always
+narrates the same way — this is the most cacheable task in the system, not the least. Dedupe key
+on `{verdict, score, contributions}` (never `request_id` or `patient_ref` — no PHI enters the
+payload, matching `AssessmentLog`'s own no-identifier design), so two different patients who land
+on an identical scored outcome share one cached sentence, same sharing model as `ai_cache`
+already has for `analogue`.
+
+**Architectural correction this phase forces:** `docs/services.md` §3 states "only `analogue`
+and `prediction` call Gemini on a request path." Serving a narration inline in `explain()` makes
+`patient-profiling` a third. Two ways to keep the rule intact instead, in order of preference:
+
+1. **Precompute, don't call live.** A `CronJob` narrates every `AssessmentLog` row shortly after
+   it's written (matching `prognosis`'s already-established "offline, nobody is waiting" pattern)
+   and stores the result back onto the row or in `ai_cache`. `explain()` stays a plain read —
+   zero new request-path Gemini caller, zero new latency, zero new failure mode on a
+   compliance-critical endpoint.
+2. **Call live, but only as an additive field the response degrades without.** `explain()` calls
+   `ask_ai` itself, patient-profiling gets a Gemini secret, and `narrative: str | None` is added
+   to the response — `null` on any `AIError`, same fallback discipline as `analogue`. This does
+   revise services.md §3's "only two" claim and should be written up as an amendment, not slipped
+   in silently.
+
+Recommend (1): it keeps the pharmacist-facing compliance endpoint exactly as fast and dependency-
+free as its own docstring says it needs to be, and the caching argument above means there's no
+"same request twice" case (2) would even help with, since a request is only ever asked about the
+same immutable assessment once.
+
+**Acceptance:** `explain()`'s response gains an optional `narrative` field; every existing field
+is unchanged. A narrative containing a number absent from `contributions` is rejected before
+storage — a test asserts this directly by constructing a result with a fabricated number and
+checking `_no_uncited_numbers` raises. Two assessments with identical `(verdict, score,
+contributions)` for different patients produce one Gemini call, not two.
+
+## 10. Phase 6 — `extract_recall_identity` (COMP-2, ingest)
+
+**Where:** `services/ingest/app/certification.py`, which already names this exact gap at
+[line 20](../services/ingest/app/certification.py): 61% of ongoing FDA recalls carry no
+`openfda.package_ndc` and are dropped rather than joined, "extracting identity from that free
+text is COMP-2's `extract` task, and this is the concrete reason it exists." Fully offline — a
+`CronJob`, no request ever waits on it, no patient data anywhere near the call (public recall
+text), the same trade `prognosis` already made.
+
+**Task, using `response_schema` for real for the first time** (`AITask.response_schema`, drafted
+in Phase 1's interfaces but never given a consumer since Phase 3 was skipped):
+
+```python
+class RecallIdentity(BaseModel):
+    ndc: str | None = Field(description="An 11-digit NDC named in the text, or null")
+    product_name: str | None
+    confidence: Literal["high", "medium", "low"]
+    citation: str  # verbatim substring of product_description
+
+TASKS["extract_recall_identity"] = AITask(
+    name="extract_recall_identity",
+    owner="Andrii",
+    prompt_version="v1",
+    prompt=(
+        "An FDA recall names a product only in free text, with no structured NDC. Read the "
+        "text and identify the NDC if one is stated. Do not guess a resemblance — if no NDC "
+        "appears verbatim in the text, return null.\n\nText: {product_description}"
+    ),
+    response_schema=RecallIdentity,
+    validate=_recall_identity_is_grounded,  # NEW
+)
+```
+
+**Two-layer grounding, not one.** `_recall_identity_is_grounded` rejects the result if `citation`
+isn't a verbatim substring of `product_description` (the established pattern) — but a
+well-formatted, verbatim-quoted NDC can still be one that doesn't exist. So `certification.py`'s
+caller does a second check the validator can't: the extracted `ndc`, if any, must appear in the
+NDC Directory index (`_product_ndcs`/`_package_ndcs`) this same job already builds from the other
+feed — closed-world, exactly like `analogue`'s `by_rxcui` filter rejects any RxCUI outside the
+actual candidate set. An extraction that names a real-sounding NDC nobody's directory has ever
+heard of is discarded, not trusted.
+
+**A finding built on inference should not carry the same weight as one built on a structured
+field, and this codebase already has the pattern for that distinction.** `certification.py`'s own
+rules cap news/unverified findings at yellow — "News and unverified reports can never produce
+red" (`docs/compliance-usecases.md` §4.3). Apply the identical cap here: a `CertificationFinding`
+whose NDC came from `extract_recall_identity` is tagged (a new `source='ai_extracted'` value, or
+reuse the existing `source` column) and the rule that would otherwise map a Class I recall to red
+is capped at yellow when the join is inferred rather than structured. No new approval workflow to
+build — the severity ceiling *is* the review gate, same as it already is for news.
+
+**Acceptance:** a synthetic `product_description` naming a real NDC from the demo seed data
+produces a `CertificationFinding` capped at yellow even where the recall's own classification is
+Class I. A `product_description` naming no real NDC, or one the directory doesn't have, produces
+no finding at all — never a hallucinated one. Re-running the CronJob twice on the same recall
+text is one Gemini call, not two (cache hit on the second).
+
+## 11. Phase 7 — deterministic forecast + narration (`prediction`, director/procurement)
+
+**Where:** `services/prediction`, today a `/healthz` skeleton with one test — the gap
+`docs/pre-mortem.md` §2 names directly ("`prediction` is a `/healthz` stub"). What's changed
+since that doc was written: `warehouse.ConsumptionDaily`
+([models.py:764](../shared/medstock_shared/models.py)) now exists, with real per-facility daily
+usage and a `stockout` flag marking recorded zeros that are censoring (empty shelf), not absence
+of demand — the data half of this gap is closed, only the endpoint isn't built.
+
+**Correction to `docs/services.md` §4's own task table**, before building this: it describes the
+`prediction` task as the model producing "days + confidence + reasoning" directly. That would be
+the one place in this design where an LLM invents a quantity on a supply-planning path, breaking
+the invariant every other task holds to. Split it instead:
+
+1. **Deterministic forecast — no model involved.** Days-of-supply = current `on_hand` ÷ a moving
+   average of `qty_consumed` over the trailing N days, **excluding** `stockout=true` days from
+   the average (a censored zero pulls the average down and the forecast falsely optimistic if
+   left in). This is a genuinely new algorithm to write — plain arithmetic, not a task for
+   `ask_ai` at all.
+2. **`ask_ai("narrate_forecast", …)` — reasoning only, grounded in (1)'s own numbers.** Same
+   `_no_uncited_numbers`-style validator as Phase 5: the narrative may cite `days_of_supply`,
+   the trend direction, and the drug's current shortage/certification status (already-computed,
+   already-available), and nothing else. "Consumption rose 22% over the trailing 14 days; at the
+   current rate this drug has 9 days of supply left" is fine — the 22% and the 9 both have to
+   already be in the payload the model was given, or the sentence is rejected.
+
+**Acceptance:** `GET /forecast/{rxcui}` returns `{days_of_supply, trend, confidence, narrative}`
+where the first three are computed with zero Gemini calls and are testable with plain arithmetic
+fixtures; `narrative` is `None` on any `AIError` (same degrade discipline as everywhere else) and
+the endpoint's numeric fields are unaffected by that failure. A test constructs a narrative citing
+a number absent from the forecast payload and confirms it's rejected before being returned.
+
+## 12. Phase 8 — `mapping_spec` (connector-factory, admin)
+
+**Where:** new — `docs/services.md:23` names it directly ("the `mapping_spec` AI task
+[connector-factory] would use goes through `ask_ai()` like any other task, not a separate
+service") and `admin`'s `mapping:approve` permission has existed in `PERMS` with zero backing
+code since before this AI module existed. Largest scope of the four; sequenced last for that
+reason, and **blocked on `docs/backend/specs/B6-formulary-import.md` (❌, not built)** — B6 is
+the deterministic CSV import this task is an *assist* on top of, not a replacement for. A file
+whose columns already read `rxcui,name` needs no AI; `mapping_spec`'s whole job is proposing the
+translation when they don't.
+
+**The model never executes anything — this is the safety property the name is chosen to make
+inescapable.** It proposes a **declarative** mapping — `{source_column: canonical_field,
+transform}` where `transform` is one of a fixed enum (`trim`, `uppercase`, `date_parse:<fmt>`,
+`identity`) the ingest job already knows how to interpret — never a code string, never `eval`.
+The admin reviews the *spec*, not a diff of imported rows, and only an approved spec is ever run:
+
+```python
+class ColumnMapping(BaseModel):
+    source_column: str
+    canonical_field: Literal["rxcui", "name"]  # grows only as B6 grows more columns
+    transform: Literal["trim", "uppercase", "identity"] | str  # "date_parse:%Y-%m-%d" pattern-matched, not free text
+    confidence: Literal["high", "medium", "low"]
+
+class MappingSpec(BaseModel):
+    columns: list[ColumnMapping]
+    unmapped_columns: list[str]  # named, not silently dropped — an admin should see what didn't map
+
+TASKS["mapping_spec"] = AITask(
+    name="mapping_spec", owner="Mykhailo", prompt_version="v1",
+    prompt="Given these CSV column headers and 3 sample rows, propose how each maps onto our "
+           "canonical fields ({canonical_fields}). Only use the listed transforms. If a column "
+           "doesn't map, list it in unmapped_columns rather than guessing.\n\n"
+           "Headers: {headers}\nSample rows: {sample_rows}",
+    response_schema=MappingSpec,
+)
+```
+
+**Schema (new table, tenant-owned per `services.md`'s own classification table)**:
+
+```sql
+CREATE TABLE mapping_spec (
+  id bigserial PRIMARY KEY,
+  hospital_id text NOT NULL,
+  source_name text NOT NULL,        -- filename or connector label, not sensitive
+  spec jsonb NOT NULL,               -- the MappingSpec, as proposed or as edited
+  status text NOT NULL DEFAULT 'awaiting_approval',  -- awaiting_approval | approved | rejected
+  proposed_by text NOT NULL,         -- 'ai' or an actor_id, if hand-edited before approval
+  approved_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  approved_at timestamptz
+);
+```
+
+**Flow:** admin uploads headers + a sample (never the full file — the model sees structure, not
+data volume) → `ask_ai("mapping_spec", …)` → stored `awaiting_approval` → admin reviews in the UI,
+can hand-edit any `ColumnMapping` before approving → `mapping:approve` flips `status` → **only
+then** does a full B6-style import run, through a small declarative interpreter (a `match` over
+the four fixed transforms) that executes the *approved* spec — never model output directly, and
+never code the model wrote.
+
+**Acceptance:** an admin uploads headers `Drug Code, Drug Name, First Seen` against canonical
+`rxcui, name` and receives a spec mapping the first two and naming `First Seen` in
+`unmapped_columns` — never a mapping to a field that doesn't exist in `canonical_fields`.
+Approving a spec then importing runs the fixed interpreter, not the free-text `transform` value —
+a spec with a `transform` outside the enum fails to parse into `ColumnMapping` at all (Pydantic
+rejects it) and is never stored as approvable. Two identical header sets share one cached
+proposal.
+
+## 13. Sequencing and what's still open
+
+| Phase | Depends on | Size | Why this order |
+|---|---|---|---|
+| 5 — `explain_assessment` | Phases 1–2 (done) | Small | Safest: reuses the proven pattern exactly, zero new infra |
+| 6 — `extract_recall_identity` | Phases 1–2 (done) | Small–medium | Already-named gap, fully offline, no request-path risk |
+| 7 — `prediction` forecast + narration | Phases 1–2 (done), a new deterministic algorithm | Medium | Data now exists (`ConsumptionDaily`); closes a pre-mortem-flagged gap |
+| 8 — `mapping_spec` | **B6 (not built)** | Large | New table, new endpoints, new UI review flow, gated on a prerequisite that doesn't exist yet |
+
+None of these are approved for implementation — say which one (or several) to build and I'll plan
+it out to code-signature depth the way Phases 1–4 were, then implement it the same way.
