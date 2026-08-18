@@ -441,4 +441,6 @@ app.include_router(drugs, prefix="/api/analogue")
 
 app.include_router(copilot)
 app.include_router(copilot, prefix="/api/analogue")
+
+app.include_router(gateway)
 app.include_router(gateway, prefix="/api/copilot")
