@@ -144,19 +144,40 @@ Recommendation: two calls. Decide before the endpoint is written.
 
 | Method | Path | Permission | Status | Notes |
 |---|---|---|---|---|
-| `GET` | `/status?ndc=…` | `inventory:read` | **built** | Batch: repeatable `ndc` param, max 100, one page of stock in one call |
-| `GET` | `/certificates/{ndc}` | `inventory:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
+| `GET` | `/status?ndc=…` | `certificate:read` | **built** | Batch: repeatable `ndc` param, max 100, one page of stock in one call |
+| `GET` | `/certificates/{ndc}` | `certificate:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
 | `GET` | `/ruleset` | `inventory:read` | **built** | Every rule and threshold that can produce a colour |
+| `POST` | `/explore` | `certification:explore` | **built** | COMP-2 on demand, max 10 NDCs — two upstream calls each |
 | `GET` | `/export/compliance.csv` | `audit:read` | planned | Director surface, already sketched in services.md §3 |
 
-`inventory:read` is reused rather than adding a `certificate:read` permission: every role that
-can see the shelf needs to see the badge on it, and a change to `shared/auth.py` redeploys all
-seven services (services.md §0).
+`certificate:read` is held by pharmacist, physician and director — every role that can see the
+shelf can see the badge on it. `certification:explore` is narrower (pharmacist only) because it
+spends the shared openFDA daily budget, and `/ruleset` sits on `inventory:read` because it is
+the same document for everyone and contains nothing about a particular drug.
 
-**What is built today is COMP-1 only.** COMP-2 (§3) is designed but not implemented — an NDC with
-no row comes back `unknown` and nothing explores it. The status rules live in
-`shared/medstock_shared/certification.py`, the daily feed in
+The status rules live in `shared/medstock_shared/certification.py`, the daily feed in
 `services/ingest/app/certification.py`.
+
+### 2.4 Clicking the light
+
+The badge is a button. The colour is a verdict, and a verdict you cannot interrogate is one a
+pharmacist is right to distrust — so the evidence is one click from the light itself rather
+than behind a row menu.
+
+What the dialog says depends on the colour, and **green gets a sentence like every other
+state**. That is the point of the section. An empty findings list renders identically to
+"nobody looked", and those are opposite facts:
+
+| Colour | What it says |
+|---|---|
+| Green | *N* rules evaluated, none disqualifying, broken down by category — plus the limit: green is a statement about the FDA record, not an inspection of the physical stock |
+| Amber / Red | The finding that **set the colour**, tagged as such in the list so severity ordering is not a puzzle to solve, and whether the reasons are standing or have an end |
+| Unknown | No record held. Explicitly *not* a clean bill of health; opening the dialog is what asks the FDA (COMP-2) |
+| Unavailable | The service could not be reached. Nothing was checked — never rendered as green |
+
+The wording lives in `web/lib/certification.ts`, apart from the dialog, because the copilot
+drawer shows the same verdict and two copies would eventually disagree about what green means
+on the same screen.
 
 ---
 

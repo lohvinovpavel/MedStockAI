@@ -47,7 +47,8 @@ DRUGS: tuple[dict, ...] = (
     {"rxcui": "200801", "name": "furosemide 20 MG Oral Tablet [Lasix]", "in_formulary": False},
 )
 
-# The ten SKUs the dashboard shelf shows (web/lib/mock-data.ts).
+# The SKUs the dashboard shelf shows (web/lib/mock-data.ts), pinned to this
+# list by services/compliance/tests/test_demo_shelf.py.
 #
 # Seeded by NDC rather than resolved through RxNorm like DRUGS above, because
 # these were chosen *as* NDCs: each is a real, currently-listed product picked so
@@ -69,6 +70,10 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
     {"ndc": "63323041125", "name": "Midazolam 5mg/mL", "quantity": 180},
     {"ndc": "00143938610", "name": "Paracetamol 1g IV", "quantity": 300},
     {"ndc": "00338043304", "name": "Heparin Sodium 5000IU/mL", "quantity": 95},
+    # Obsolete in RxNorm, so the certification traffic light has a red to show.
+    # The two rows above were picked for open Class I recalls and both closed --
+    # the feed working, not failing, but it left the shelf with no red on it.
+    {"ndc": "76168080030", "name": "Carmellose Sodium 0.5% Eye Drops", "quantity": 62},
 )
 
 # Optional `quantity` (all locations) and `locations` freeze demo stock; otherwise random.

@@ -63,8 +63,10 @@ import {
   CertificationBadge,
   useCertificateDetail,
   useCertificationStatuses,
+  useRuleset,
   type CertResult,
 } from "@/components/CertificationBadge";
+import { explainCertification } from "@/lib/certification";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory } from "@/lib/inventory-context";
@@ -248,6 +250,11 @@ function CertificateDialog({
   // Only fetch while the dialog is actually open: on a miss this endpoint
   // triggers COMP-2 exploration upstream, which spends real request budget.
   const { detail, error, loading } = useCertificateDetail(open && item?.ndc ? item.ndc : null);
+  const ruleset = useRuleset();
+  // Built here rather than inline so the wording has one home: the copilot
+  // drawer shows the same verdict, and two copies would eventually disagree
+  // about what green means on the same screen.
+  const why = explainCertification(detail, ruleset, { unreachable: Boolean(error) });
   if (!item) return null;
 
   return (
@@ -279,9 +286,7 @@ function CertificateDialog({
           <div className="rounded-md border border-dashed p-6 text-center">
             <p className="text-xs font-medium">Compliance service unreachable</p>
             <p className="mt-1 text-[11px] text-muted-foreground">{error}</p>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Status not checked — this is not a clean bill of health.
-            </p>
+            <p className="mt-2 text-[11px] text-muted-foreground">{why.caveat}</p>
           </div>
         )}
 
@@ -312,9 +317,32 @@ function CertificateDialog({
               </div>
             </dl>
 
+            {/* Why this colour — the part a pharmacist came here for. Stated
+                for green as loudly as for red: an empty findings list reads
+                exactly like "nobody looked", and those are different facts. */}
+            <div className="rounded-md border bg-muted/40 p-3">
+              <p className="text-xs font-medium">{why.headline}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{why.caveat}</p>
+
+              {/* Green only: name the checks that ran. "Nothing was wrong" is an
+                  assertion; "these 5 categories were evaluated" is evidence. */}
+              {detail.status === "green" && why.checked.length > 0 && (
+                <ul className="mt-2 flex flex-wrap gap-1">
+                  {why.checked.map((c) => (
+                    <li
+                      key={c.category}
+                      className="rounded border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                    >
+                      {c.category} · {c.rules}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
             {detail.findings.length === 0 ? (
               <p className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                No open findings. Actively marketed, no recall on record.
+                No finding on record — nothing fired, at any severity.
               </p>
             ) : (
               <ul className="flex flex-col gap-2">
@@ -322,6 +350,13 @@ function CertificateDialog({
                   <li key={`${f.code}-${i}`} className="rounded-md border p-2.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge tone={SEVERITY_TONE[f.severity] ?? "neutral"}>{f.code}</StatusBadge>
+                      {/* Severity ordering alone leaves the reader to work out
+                          which finding set the colour. Say it. */}
+                      {why.decisive.some((d) => d.code === f.code) && (
+                        <span className="rounded border border-current px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide">
+                          sets the colour
+                        </span>
+                      )}
                       <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                         {f.category}
                       </span>
@@ -583,8 +618,16 @@ export default function InventoryPage() {
                           {item.expiryDate} ({expiryDays}d)
                         </StatusBadge>
                       </TableCell>
-                      <TableCell className="py-2">
-                        <CertificationBadge result={certFor(item)} />
+                      {/* The badge is the trigger. The reasoning used to live
+                          behind the kebab menu, which is an odd place to hide
+                          the answer to the question the colour itself provokes.
+                          stopPropagation so it does not also select the row. */}
+                      <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                        <CertificationBadge
+                          result={certFor(item)}
+                          label={item.drugName}
+                          onClick={() => setCertItem(item)}
+                        />
                       </TableCell>
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
