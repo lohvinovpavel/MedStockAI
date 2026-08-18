@@ -18,7 +18,7 @@ import os
 import sys
 import uuid
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from medstock_shared import engine
@@ -114,7 +114,7 @@ def _upsert_batches(s: Session, rows: list[dict]) -> None:
     seen: set[tuple[int, str]] = set()
     for row in rows:
         meta = shelf.get(row["ndc"], {})
-        expiry = date.today() + timedelta(days=int(row.get("expiry_days") or meta.get("expiry_days", 365)))
+        expiry = datetime.now(tz=UTC).date() + timedelta(days=int(row.get("expiry_days") or meta.get("expiry_days", 365)))
         lot = row.get("lot") or f"SEED-{row['facility_id']}-{row['ndc']}-{row['location_id']}"
         batches.append(
             {

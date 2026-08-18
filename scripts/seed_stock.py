@@ -15,7 +15,7 @@ import argparse
 import random
 import sys
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # scripts/ → repo root on sys.path is not enough; shared lives in shared/.
@@ -23,16 +23,28 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.demo_shelf import DASHBOARD_SHELF, demo_shortage_rows, formulary_rxcuis, shelf_stock_rows
+from medstock_shared.demo_shelf import (
+    DASHBOARD_SHELF,
+    demo_shortage_rows,
+    formulary_rxcuis,
+    shelf_stock_rows,
+)
 from medstock_shared.demo_tenant import (
     FACILITIES,
     HOSPITAL_NAME,
     LOCATIONS,
     OPERATED_CODES,
-    location_for,
     upsert_registry,
 )
-from medstock_shared.models import Drug, FormularyItem, Hospital, ParLevel, ShortageEvent, StockBatch, StockSnapshot
+from medstock_shared.models import (
+    Drug,
+    FormularyItem,
+    Hospital,
+    ParLevel,
+    ShortageEvent,
+    StockBatch,
+    StockSnapshot,
+)
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
@@ -40,11 +52,6 @@ from medstock_shared.rxnorm import (
 )
 from medstock_shared.seed_wave4 import apply_partner_shortage, apply_suppliers
 from medstock_shared.seed_wave5 import apply_orders
-from medstock_shared.rxnorm import (
-    CURATED_NDCS_WHEN_EMPTY,
-    RxNormError,
-    ndcs_for_rxcui,
-)
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -202,7 +209,7 @@ def upsert(session: Session, hospital_id: uuid.UUID, rows: list[dict], formulary
         shelf_by_ndc = {d["ndc"]: d for d in DASHBOARD_SHELF}
         for row in rows:
             shelf = shelf_by_ndc.get(row["ndc"], {})
-            expiry = date.today() + timedelta(
+            expiry = datetime.now(tz=UTC).date() + timedelta(
                 days=int(row.get("expiry_days") or shelf.get("expiry_days", 365))
             )
             lot = row.get("lot") or f"SEED-{row['facility_id']}-{row['ndc']}-{row['location_id']}"

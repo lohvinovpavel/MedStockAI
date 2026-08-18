@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.main import app
@@ -20,7 +20,7 @@ from medstock_shared.models import (
 )
 from medstock_shared.stock import derive_status, suggested_order_qty
 from sqlalchemy import delete, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 HOSPITAL_A = uuid.UUID("00000000-0000-0000-0000-00000000b2a1")
@@ -152,7 +152,7 @@ def test_rxnorm_failure_degrades(seeded, monkeypatch):
 
 
 def test_receive_same_lot_adds_and_rollups(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     c = _client()
     first = c.post(
         "/batches",
@@ -186,7 +186,7 @@ def test_receive_same_lot_adds_and_rollups(seeded):
 
 
 def test_two_lots_sum_on_snapshot(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     c = _client()
     c.post(
         "/batches",
@@ -199,7 +199,7 @@ def test_two_lots_sum_on_snapshot(seeded):
         "/batches",
         json={
             "facility_id": seeded["a"], "ndc": NDC, "lot": "L2",
-            "expiry_date": (date.today() + timedelta(days=10)).isoformat(),
+            "expiry_date": (datetime.now(tz=UTC).date() + timedelta(days=10)).isoformat(),
             "quantity": 15, "location_id": "main-room",
         },
     )
@@ -226,7 +226,7 @@ def test_non_operated_receive_is_422(seeded):
         "/batches",
         json={
             "facility_id": seeded["partner"], "ndc": NDC, "lot": "X",
-            "expiry_date": (date.today() + timedelta(days=10)).isoformat(),
+            "expiry_date": (datetime.now(tz=UTC).date() + timedelta(days=10)).isoformat(),
             "quantity": 10, "location_id": "main-room",
         },
     )
@@ -234,7 +234,7 @@ def test_non_operated_receive_is_422(seeded):
 
 
 def test_consume_over_qty_is_422_and_unchanged(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     c = _client()
     created = c.post(
         "/batches",
@@ -249,7 +249,7 @@ def test_consume_over_qty_is_422_and_unchanged(seeded):
 
 
 def test_disjoint_facilities(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     c = _client()
     c.post(
         "/batches",
@@ -280,7 +280,7 @@ def test_cross_tenant_facility_is_404(seeded):
 
 
 def test_par_upsert_and_status(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     pharm = _client()
     pharm.post(
         "/batches",
@@ -307,17 +307,16 @@ def test_par_upsert_and_status(seeded):
 
 
 def test_par_constraint_holds_without_api(seeded):
-    with pytest.raises(IntegrityError):
-        with session_scope(str(HOSPITAL_A), str(ACTOR), "test") as s:
-            s.add(
-                ParLevel(
-                    hospital_id=HOSPITAL_A,
-                    facility_id=seeded["a"],
-                    ndc=NDC,
-                    reorder_point=10,
-                    target_qty=10,
-                )
+    with pytest.raises(IntegrityError), session_scope(str(HOSPITAL_A), str(ACTOR), "test") as s:
+        s.add(
+            ParLevel(
+                hospital_id=HOSPITAL_A,
+                facility_id=seeded["a"],
+                ndc=NDC,
+                reorder_point=10,
+                target_qty=10,
             )
+        )
 
 
 def test_physician_cannot_receive(seeded):
@@ -325,7 +324,7 @@ def test_physician_cannot_receive(seeded):
         "/batches",
         json={
             "facility_id": seeded["a"], "ndc": NDC, "lot": "X",
-            "expiry_date": (date.today() + timedelta(days=10)).isoformat(),
+            "expiry_date": (datetime.now(tz=UTC).date() + timedelta(days=10)).isoformat(),
             "quantity": 1, "location_id": "main-room",
         },
     )
@@ -333,7 +332,7 @@ def test_physician_cannot_receive(seeded):
 
 
 def test_cross_tenant_read_is_empty(seeded):
-    expiry = (date.today() + timedelta(days=40)).isoformat()
+    expiry = (datetime.now(tz=UTC).date() + timedelta(days=40)).isoformat()
     _client().post(
         "/batches",
         json={
@@ -346,7 +345,7 @@ def test_cross_tenant_read_is_empty(seeded):
 
 
 def test_query_without_session_scope_returns_zero(seeded):
-    expiry = date.today() + timedelta(days=40)
+    expiry = datetime.now(tz=UTC).date() + timedelta(days=40)
     with session_scope(str(HOSPITAL_A), str(ACTOR), "test") as s:
         s.add(
             StockBatch(
@@ -366,20 +365,19 @@ def test_query_without_session_scope_returns_zero(seeded):
 
 
 def test_mismatched_hospital_id_fails_with_check(seeded):
-    expiry = date.today() + timedelta(days=40)
-    with pytest.raises(Exception):
-        with session_scope(str(HOSPITAL_A), str(ACTOR), "test") as s:
-            s.add(
-                StockBatch(
-                    hospital_id=HOSPITAL_B,
-                    facility_id=seeded["b"],
-                    ndc=NDC,
-                    lot="BAD",
-                    expiry_date=expiry,
-                    quantity=1,
-                    location_id="main-room",
-                )
+    expiry = datetime.now(tz=UTC).date() + timedelta(days=40)
+    with pytest.raises(ProgrammingError), session_scope(str(HOSPITAL_A), str(ACTOR), "test") as s:
+        s.add(
+            StockBatch(
+                hospital_id=HOSPITAL_B,
+                facility_id=seeded["b"],
+                ndc=NDC,
+                lot="BAD",
+                expiry_date=expiry,
+                quantity=1,
+                location_id="main-room",
             )
+        )
 
 
 def test_protected_routes_require_auth():
@@ -388,13 +386,7 @@ def test_protected_routes_require_auth():
     for route in app.routes:
         path = getattr(route, "path", "")
         methods = getattr(route, "methods", None) or set()
-        if (
-            not path
-            or path in public
-            or path.startswith("/docs")
-            or path.startswith("/redoc")
-            or path.startswith("/api/inventory")
-        ):
+        if not path or path in public or path.startswith(("/docs", "/redoc", "/api/inventory")):
             continue
         if "GET" in methods:
             assert bare.get(path).status_code in (401, 405, 422), path

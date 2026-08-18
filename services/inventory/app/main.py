@@ -13,6 +13,7 @@ from medstock_shared.formulary import (
     shelf_name_for_rxcui,
     shelf_ndcs_for_rxcuis,
 )
+from medstock_shared.geo import haversine_km
 from medstock_shared.models import (
     ConsumptionDaily,
     Drug,
@@ -23,7 +24,6 @@ from medstock_shared.models import (
     StockBatch,
     StockSnapshot,
 )
-from medstock_shared.geo import haversine_km
 from medstock_shared.rxnorm import RxNormError, ndcs_for_rxcui
 from medstock_shared.stock import (
     COVERAGE_RANK,
@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
 from .orders import orders, recommendations
 
 app = FastAPI(title="inventory")
@@ -331,9 +332,10 @@ def list_items(
         st, par_defined = derive_status(int(row.quantity), row.reorder_point, row.target_qty)
         if status is not None and st != status:
             continue
-        if expiring_before is not None:
-            if row.earliest_expiry is None or row.earliest_expiry >= expiring_before:
-                continue
+        if expiring_before is not None and (
+            row.earliest_expiry is None or row.earliest_expiry >= expiring_before
+        ):
+            continue
         suggested = (
             suggested_order_qty(int(row.quantity), int(row.target_qty))
             if row.target_qty is not None
@@ -383,7 +385,7 @@ def receive_batch(
     body: ReceiveBatchBody,
     principal: Principal = Depends(require("batch:write")),
 ) -> dict:
-    if body.expiry_date < date.today():
+    if body.expiry_date < datetime.now(tz=UTC).date():
         raise HTTPException(status_code=422, detail="expiry_date is in the past")
     with session_scope(principal.hospital_id, principal.user_id) as session:
         fac = _facility(session, body.facility_id)
@@ -555,7 +557,7 @@ def delete_par_level(
 
 @api.post("/formulary/import")
 async def import_formulary(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 — FastAPI UploadFile default
     principal: Principal = Depends(require("formulary:write")),
 ) -> dict:
     """B6: additive CSV upsert of RxCUIs. Name is advisory and is not stored."""
@@ -581,11 +583,6 @@ async def import_formulary(
 
     hid = uuid.UUID(principal.hospital_id)
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        existing = set()
-        if rxcuis:
-            existing = set(
-                session.scalars(select(FormularyItem.rxcui).where(FormularyItem.rxcui.in_(rxcuis))).all()
-            )
         inserted = 0
         updated = 0
         now = datetime.now(UTC)
@@ -710,7 +707,7 @@ def get_exposure(
 
         trailing: dict[str, float] = {}
         if ndcs:
-            cutoff = date.today() - timedelta(days=28)
+            cutoff = datetime.now(tz=UTC).date() - timedelta(days=28)
             tstmt = (
                 select(
                     ConsumptionDaily.ndc,
@@ -833,7 +830,7 @@ def _relevant_shortage_ndcs(session) -> set[str]:
 def _trailing_mean_by_facility(session, ndcs: set[str]) -> dict[tuple[int, str], float]:
     if not ndcs:
         return {}
-    cutoff = date.today() - timedelta(days=28)
+    cutoff = datetime.now(tz=UTC).date() - timedelta(days=28)
     stmt = (
         select(
             ConsumptionDaily.facility_id,

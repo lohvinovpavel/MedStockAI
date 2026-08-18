@@ -8,7 +8,7 @@ hospital_id predicates.
 
 import math
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -447,7 +447,7 @@ def quote(
             lead_time_days=int(supplier.lead_time_days),
             shipping_flat=Decimal(supplier.shipping_flat),
             lines=quoted,
-            today=date.today(),
+            today=datetime.now(tz=UTC).date(),
         )
 
 

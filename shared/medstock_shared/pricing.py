@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 
 TWOPLACES = Decimal("0.01")
 
@@ -34,7 +34,7 @@ def quote_totals(
     today: date | None = None,
 ) -> dict:
     """`lines` items: ndc, requested, rounded_to, unit_cost (Decimal), reason|None."""
-    subtotal = Decimal("0")
+    subtotal = Decimal(0)
     adjustments = []
     for line in lines:
         unit_cost = Decimal(line["unit_cost"])
@@ -51,7 +51,7 @@ def quote_totals(
             )
     shipping = money(Decimal(shipping_flat))
     subtotal = money(subtotal)
-    start = today or date.today()
+    start = today or datetime.now(tz=UTC).date()
     return {
         "subtotal": float(subtotal),
         "shipping": float(shipping),

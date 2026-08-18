@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -213,7 +213,7 @@ def test_quote_rounds_pack_and_names_missing_ndc(seeded):
     assert body["total"] == 1830.0
     assert body["lead_time_days"] == 5
     assert body["calendar"] == "calendar_days"
-    assert body["expected_delivery"] == (date.today() + timedelta(days=5)).isoformat()
+    assert body["expected_delivery"] == (datetime.now(tz=UTC).date() + timedelta(days=5)).isoformat()
     assert body["adjustments"] == [
         {"ndc": NDC, "requested": 145, "rounded_to": 150, "reason": "pack_size"}
     ]

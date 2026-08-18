@@ -6,7 +6,7 @@ A recommendation nobody acted on is not a row. Inventory materialises one as
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -109,7 +109,7 @@ def compute_recommendations(
     if not pars:
         return []
 
-    through = date.today()
+    through = datetime.now(tz=UTC).date()
     items: list[dict] = []
     for par in pars:
         on_hand = _on_hand(session, par.facility_id, par.ndc)

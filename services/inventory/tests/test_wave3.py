@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.main import app
@@ -201,7 +201,7 @@ def _plant_stock(facility_id: int, hospital_id: uuid.UUID, ndc: str, qty: int, r
         s.add(
             StockBatch(
                 hospital_id=hospital_id, facility_id=facility_id, ndc=ndc,
-                lot=f"W3-{ndc[-4:]}", expiry_date=date.today() + timedelta(days=30),
+                lot=f"W3-{ndc[-4:]}", expiry_date=datetime.now(tz=UTC).date() + timedelta(days=30),
                 quantity=qty, location_id="main-room",
             )
         )

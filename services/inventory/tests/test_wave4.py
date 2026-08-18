@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.main import app
@@ -60,7 +60,7 @@ def _client(role: str = "pharmacist", hospital_id: uuid.UUID = HOSPITAL_A) -> Te
 
 
 def _plant_consumption(hospital_id: uuid.UUID, facility_id: int, ndc: str, daily: int) -> None:
-    today = date.today()
+    today = datetime.now(tz=UTC).date()
     with session_scope(str(hospital_id), str(ACTOR), "test_g1") as s:
         s.execute(
             delete(ConsumptionDaily).where(
@@ -102,7 +102,7 @@ def _plant_stock(
                 facility_id=facility_id,
                 ndc=ndc,
                 lot=f"G1-{ndc[-4:]}-{facility_id}",
-                expiry_date=date.today() + timedelta(days=30),
+                expiry_date=datetime.now(tz=UTC).date() + timedelta(days=30),
                 quantity=qty,
                 location_id=location,
             )

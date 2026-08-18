@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -120,7 +120,7 @@ def seeded():
         s.add(
             StockBatch(
                 hospital_id=HOSPITAL_A, facility_id=ids["a"], ndc=NDC,
-                lot="NEP-SEED", expiry_date=date.today() + timedelta(days=90),
+                lot="NEP-SEED", expiry_date=datetime.now(tz=UTC).date() + timedelta(days=90),
                 quantity=6, location_id="main-room",
             )
         )
@@ -241,7 +241,7 @@ def test_ai_suggestion_without_decision_rejected_by_db(seeded):
                 status="draft",
                 source="ai_suggestion",
                 review_decision_id=None,
-                shipping=Decimal("0"),
+                shipping=Decimal(0),
             )
         )
         with pytest.raises(IntegrityError):

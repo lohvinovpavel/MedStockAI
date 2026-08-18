@@ -44,7 +44,7 @@ COMMITTED_SPEND_DEFINITION = (
 
 def allocate_po_ref(session: Session, year: int | None = None) -> str:
     n = session.execute(text("SELECT nextval('purchase_order_ref_seq')")).scalar_one()
-    return f"PO-{year or date.today().year}-{int(n):04d}"
+    return f"PO-{year or datetime.now(tz=UTC).date().year}-{int(n):04d}"
 
 
 def _facility_operated(session: Session, facility_id: int) -> Facility:
@@ -268,7 +268,7 @@ def serialize_order(session: Session, order: PurchaseOrder, *, full: bool = Fals
     )
     facility = session.get(Facility, order.facility_id)
     supplier = session.get(Supplier, order.supplier_id)
-    line_sum = sum((Decimal(row.quantity) * Decimal(row.unit_cost) for row in lines), Decimal("0"))
+    line_sum = sum((Decimal(row.quantity) * Decimal(row.unit_cost) for row in lines), Decimal(0))
     total = float(money(line_sum + Decimal(order.shipping)))
     first = lines[0] if lines else None
     body = {

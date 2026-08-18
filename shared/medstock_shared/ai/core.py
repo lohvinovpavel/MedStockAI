@@ -12,8 +12,8 @@ so it does not block the event loop.
 
 import hashlib
 import json
-import re
 import logging
+import re
 import time
 import uuid
 

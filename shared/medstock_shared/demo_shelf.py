@@ -25,7 +25,7 @@ Wave 5: `DEMO_ORDERS` plants the purchase-order history `/orders` shows
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 from .demo_tenant import FACILITIES, location_for
 
@@ -543,7 +543,7 @@ def partner_shortage_consumption_rows(
     `consumption_daily.qty_consumed` is int, so the 28-day series is an
     integer mix whose mean reconstructs units/days (largest remainder).
     """
-    today = date.today()
+    today = datetime.now(tz=UTC).date()
     rows: list[dict] = []
     for stock in partner_shortage_stock_rows(hospital_id, fac_ids):
         qty = int(stock["quantity"])

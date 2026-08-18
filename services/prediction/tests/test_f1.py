@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -91,14 +91,14 @@ def seeded():
         s.add(
             StockBatch(
                 hospital_id=HOSPITAL_A, facility_id=ids["a"], ndc=NDC,
-                lot="F1-LOT", expiry_date=date.today() + timedelta(days=30),
+                lot="F1-LOT", expiry_date=datetime.now(tz=UTC).date() + timedelta(days=30),
                 quantity=6, location_id="main-room",
             )
         )
         s.add(
             StockBatch(
                 hospital_id=HOSPITAL_A, facility_id=ids["a"], ndc=NDC_NOPAR,
-                lot="F1-PROP", expiry_date=date.today() + timedelta(days=30),
+                lot="F1-PROP", expiry_date=datetime.now(tz=UTC).date() + timedelta(days=30),
                 quantity=40, location_id="main-room",
             )
         )

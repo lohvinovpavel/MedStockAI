@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.main import app
@@ -83,7 +83,7 @@ def seeded():
                 facility_id=ids["src"],
                 ndc=NDC,
                 lot="NOR-25A",
-                expiry_date=date.today() + timedelta(days=40),
+                expiry_date=datetime.now(tz=UTC).date() + timedelta(days=40),
                 quantity=30,
                 location_id="main-room",
             )
@@ -145,7 +145,7 @@ def test_receive_preserves_lot_and_expiry(seeded):
             )
         )
         assert batch.lot == "NOR-25A"
-        assert batch.expiry_date == date.today() + timedelta(days=40)
+        assert batch.expiry_date == datetime.now(tz=UTC).date() + timedelta(days=40)
 
 
 def test_over_dispatch_is_422_and_moves_nothing(seeded):

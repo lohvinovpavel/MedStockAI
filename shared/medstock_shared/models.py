@@ -910,7 +910,7 @@ class Supplier(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False)
     reliability_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
-    shipping_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    shipping_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal(0))
     currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 
@@ -1169,7 +1169,7 @@ class PurchaseOrder(Base):
     review_decision_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("review_decision.id")
     )
-    shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    shipping: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal(0))
     note: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(

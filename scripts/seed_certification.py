@@ -35,8 +35,8 @@ from medstock_shared.certification import (
     evaluate,
     status_for,
 )
-from medstock_shared.demo_shelf import DASHBOARD_SHELF
 from medstock_shared.db import SessionLocal
+from medstock_shared.demo_shelf import DASHBOARD_SHELF
 from medstock_shared.models import (
     CertificationFinding,
     DrugCertification,

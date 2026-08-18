@@ -21,7 +21,7 @@ TRANSITIONS = {
 
 def allocate_tr_ref(session: Session, year: int | None = None) -> str:
     n = session.execute(text("SELECT nextval('transfer_request_ref_seq')")).scalar_one()
-    return f"TR-{year or date.today().year}-{int(n):04d}"
+    return f"TR-{year or datetime.now(tz=UTC).date().year}-{int(n):04d}"
 
 
 def _get_facility(session: Session, facility_id: int) -> Facility:

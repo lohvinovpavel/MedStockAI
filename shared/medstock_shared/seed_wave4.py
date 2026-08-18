@@ -7,7 +7,7 @@ Actor GUC / hospital_id must already be set — partner batches fire H1.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import delete, select
@@ -55,7 +55,7 @@ def apply_partner_shortage(session: Session, hospital_id: uuid.UUID, fac_ids: di
             "facility_id": row["facility_id"],
             "ndc": row["ndc"],
             "lot": row["lot"],
-            "expiry_date": date.today() + timedelta(days=int(row["expiry_days"])),
+            "expiry_date": datetime.now(tz=UTC).date() + timedelta(days=int(row["expiry_days"])),
             "quantity": int(row["quantity"]),
             "location_id": row["location_id"],
         }
