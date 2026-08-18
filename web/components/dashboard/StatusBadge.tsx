@@ -12,11 +12,11 @@ export type StatusTone = "critical" | "warning" | "normal" | "stockout" | "surpl
 // critical/warning/normal color mapping instead of each page re-deriving it
 // with its own dark-mode convention. See Callout for the banner use.
 export const TONE_STYLE: Record<StatusTone, string> = {
-  critical: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-400",
-  stockout: "border-red-300 bg-red-100 text-red-800 dark:border-red-500/35 dark:bg-red-500/15 dark:text-red-300",
-  warning: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-400",
-  normal: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-400",
-  surplus: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-400",
+  critical: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300",
+  stockout: "border-red-300 bg-red-100 text-red-800 dark:border-red-500/40 dark:bg-red-500/20 dark:text-red-200",
+  warning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300",
+  normal: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
+  surplus: "border-[#e1e9f0] bg-[#f5f3ff] text-[#0f77ff] dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
   neutral: "border-border bg-muted text-muted-foreground",
 };
 
@@ -25,9 +25,7 @@ const DOT_STYLE: Record<StatusTone, string> = {
   stockout: "bg-red-500 animate-pulse",
   warning: "bg-amber-500",
   normal: "bg-emerald-500",
-  surplus: "bg-sky-500",
-  // No pulse, no saturation: "unknown" should read as an absence of
-  // information, not as a state that wants attention.
+  surplus: "bg-[#0f77ff]",
   neutral: "bg-muted-foreground/40",
 };
 
@@ -43,7 +41,7 @@ export function StatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide",
+        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 font-sans text-[11px] font-medium tracking-[0.004em]",
         TONE_STYLE[tone],
         className,
       )}

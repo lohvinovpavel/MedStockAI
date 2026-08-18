@@ -104,25 +104,23 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
   const { facilityId, setFacilityId, facility, operatedFacilities } = useFacility();
   const { draftCount } = useOrders();
   const { user } = useSession();
-  // Tabs the signed-in role can't reach (lib/rbac.ts) don't render at all —
-  // a hidden link is not a security boundary (the layout's route guard is),
-  // but a visible one for a page you'll just get bounced from is a bad menu.
   const tabs = TABS.filter((t) => canAccessPage(user?.role, t.href));
 
   return (
     <>
-      <Link href="/inventory" onClick={onNavigate} className="mb-2 flex items-center gap-2 px-2 py-1.5">
-        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+      <Link href="/inventory" onClick={onNavigate} className="mb-3 flex items-center gap-2.5 px-2 py-2">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-none">
           <Plus className="size-4" strokeWidth={3} />
         </span>
-        <span className="text-sm font-semibold tracking-tight">MedStock AI</span>
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold tracking-tight text-foreground">MedStock AI</span>
+          <span className="text-[10px] text-muted-foreground -mt-0.5 tracking-wider uppercase font-medium">Data Observatory</span>
+        </div>
       </Link>
 
       <div className="flex flex-1 flex-col gap-1">
         {tabs.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
-          // Draft orders awaiting review — makes the forecast → orders
-          // handoff visible the moment a suggestion is accepted.
           const badge = href === "/orders" && draftCount > 0 ? draftCount : null;
           return (
             <Link
@@ -131,17 +129,17 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
               onClick={onNavigate}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
+                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium tracking-[0.008em] transition-colors",
                 active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
-              <Icon className="size-4" />
-              {label}
+              <Icon className="size-4 shrink-0" />
+              <span className="truncate">{label}</span>
               {badge && (
                 <span
                   className={cn(
-                    "ml-auto flex min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] tabular-nums",
-                    active ? "bg-primary-foreground/20 text-primary-foreground" : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                    "ml-auto flex min-w-4 items-center justify-center rounded-full px-1.5 font-sans text-[10px] font-medium tabular-nums",
+                    active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300",
                   )}
                 >
                   {badge}
@@ -152,25 +150,25 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </div>
 
-      <Separator className="my-2" />
+      <Separator className="my-2 bg-border" />
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-8 w-full justify-between gap-1 text-xs font-normal">
+          <Button variant="outline" size="sm" className="h-8 w-full justify-between gap-1 text-xs font-normal border-border bg-card">
             <span className="truncate">{facility.name}</span>
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
             <span className="sr-only">Switch facility, currently {facility.name}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
-          <DropdownMenuLabel>Switch facility</DropdownMenuLabel>
-          <DropdownMenuSeparator />
+        <DropdownMenuContent align="start" className="w-56 rounded-xl border-border bg-card">
+          <DropdownMenuLabel className="text-xs text-muted-foreground">Switch facility</DropdownMenuLabel>
+          <DropdownMenuSeparator className="bg-border" />
           <DropdownMenuGroup>
             {operatedFacilities.map((f) => (
               <DropdownMenuItem
                 key={f.code}
                 onSelect={() => setFacilityId(f.code)}
-                className={cn(f.code === facilityId && "bg-accent")}
+                className={cn(f.code === facilityId && "bg-muted font-medium")}
               >
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate">{f.name}</span>
@@ -191,9 +189,9 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="mt-1 h-11 w-full justify-start gap-2 px-2 text-xs font-normal">
-            <Avatar className="size-7 shrink-0">
-              <AvatarFallback className="text-xs">{user?.full_name ? initials(user.full_name) : "?"}</AvatarFallback>
+          <Button variant="ghost" size="sm" className="mt-1 h-11 w-full justify-start gap-2.5 px-2 text-xs font-normal hover:bg-muted">
+            <Avatar className="size-7 shrink-0 border border-border">
+              <AvatarFallback className="text-xs bg-muted text-foreground">{user?.full_name ? initials(user.full_name) : "?"}</AvatarFallback>
             </Avatar>
             <span className="flex min-w-0 flex-col items-start leading-tight">
               <span className="truncate font-medium text-foreground">{user?.full_name ?? "—"}</span>
@@ -204,7 +202,7 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
             <span className="sr-only">Account menu, {user?.full_name ?? "unknown user"}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuContent align="start" className="w-56 rounded-xl border-border bg-card">
           <DropdownMenuGroup>
             <DropdownMenuItem>
               <UserIcon /> Profile
@@ -213,7 +211,7 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
               <Settings /> Settings
             </DropdownMenuItem>
           </DropdownMenuGroup>
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator className="bg-border" />
           <DropdownMenuItem onSelect={() => router.push("/login")}>
             <LogOut /> Sign out
           </DropdownMenuItem>
@@ -228,38 +226,30 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-// Desktop-only inline sidebar. Below `lg` it renders nothing — MobileTopBar
-// covers navigation there via a Sheet instead, since there's no room for a
-// fixed 208px column at phone/tablet widths.
 export function SideNav() {
   return (
-    <nav className="hidden w-52 shrink-0 flex-col border-r bg-card p-2 lg:flex">
+    <nav className="hidden w-56 shrink-0 flex-col border-r border-border bg-card p-3 lg:flex">
       <NavBody />
     </nav>
   );
 }
 
-// Below `lg`: a slim bar above the nav/main/copilot row carrying the brand,
-// a hamburger that opens the same NavBody in a Sheet, and a shortcut to
-// open the AI MedStock Assistant (which supplies its own trigger at `lg` and above).
 export function MobileTopBar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const { setOpen: setCopilotOpen } = useCopilot();
 
-  // Close the nav sheet on navigation rather than leaving it open behind
-  // the new page.
   useEffect(() => setOpen(false), [pathname]);
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-2 lg:hidden">
+    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 lg:hidden">
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
           <Button variant="ghost" size="icon" aria-label="Open navigation menu">
             <Menu />
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="flex w-64 flex-col gap-0 p-2">
+        <SheetContent side="left" className="flex w-64 flex-col gap-0 p-3 border-r border-border bg-card">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <NavBody onNavigate={() => setOpen(false)} />
         </SheetContent>
@@ -269,7 +259,7 @@ export function MobileTopBar() {
         <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Plus className="size-3.5" strokeWidth={3} />
         </span>
-        <span className="text-sm font-semibold tracking-tight">MedStock AI</span>
+        <span className="text-sm font-semibold tracking-tight text-foreground">MedStock AI</span>
       </Link>
 
       <Button variant="ghost" size="icon" onClick={() => setCopilotOpen(true)} aria-label="Open AI MedStock Assistant">

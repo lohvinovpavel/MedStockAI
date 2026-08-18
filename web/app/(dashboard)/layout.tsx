@@ -65,25 +65,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <InventoryProvider>
       <OrdersProvider>
         <CopilotProvider>
-          <div className="flex h-screen flex-col overflow-hidden bg-muted/30 text-sm">
+          <div className="flex h-screen flex-col overflow-hidden bg-[#f5f3ff] text-sm text-foreground">
             <MobileTopBar />
             <div className="flex min-h-0 flex-1">
               <SideNav />
-              <main className="min-w-0 flex-1 overflow-y-auto"><RoleGate>{children}</RoleGate></main>
+              <main className="min-w-0 flex-1 overflow-y-auto bg-[#f5f3ff]"><RoleGate>{children}</RoleGate></main>
               <CopilotDrawer />
             </div>
-            <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t bg-neutral-950 px-3 font-mono text-[10px] tracking-wide text-neutral-500">
+            <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t border-border bg-[#091135] px-3 font-sans text-[11px] font-medium tracking-[0.004em] text-[#b1bbcd]">
               <LiveTelemetry />
-              <span className="ml-auto flex items-center gap-2">
+              <span className="ml-auto flex items-center gap-2 text-[10px] text-[#b1bbcd]">
                 <span>
-                  Audit Hash: <span className="text-neutral-300">SHA256:{systemStatus.auditHash}&hellip;</span>
+                  Audit Hash: <span className="font-mono text-white">SHA256:{systemStatus.auditHash}&hellip;</span>
                 </span>
-                <span className="text-neutral-700">&bull;</span>
+                <span className="text-[#36394a]">&bull;</span>
                 <span>
-                  Node: <span className="text-neutral-300">{systemStatus.gkeCluster}</span>
+                  Node: <span className="text-white">{systemStatus.gkeCluster}</span>
                 </span>
-                <span className="text-neutral-700">&bull;</span>
-                <span className="text-neutral-300">{systemStatus.complianceStandard}</span>
+                <span className="text-[#36394a]">&bull;</span>
+                <span className="text-white">{systemStatus.complianceStandard}</span>
               </span>
             </footer>
           </div>
