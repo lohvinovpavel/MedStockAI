@@ -75,6 +75,11 @@ PERMS: dict[str, set[str]] = {
         "profile:explain",
         "certificate:read",
         "certification:explore",
+        "forecast:read",
+        # Triggering a run is a write with a distinct name on purpose — but it
+        # is held by the same people who read forecasts: the pharmacist at the
+        # keyboard is the one who notices the data has outrun the run.
+        "forecast:run",
     },
     "physician": {
         "alert:read",
@@ -100,6 +105,8 @@ PERMS: dict[str, set[str]] = {
         # readable by the person who has to decide whether to trust extraction.
         "profile:review",
         "certificate:read",
+        "forecast:read",
+        "forecast:run",
     },
     "admin": {
         "mapping:approve",

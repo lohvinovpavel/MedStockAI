@@ -809,3 +809,71 @@ class LocationCondition(Base):
     __table_args__ = (
         UniqueConstraint("location_id", "ts", name="uq_location_condition_natural"),
     )
+
+
+class ForecastPoint(Base):
+    """One forecast quantile row per (facility, ndc, target_date) within a run
+    (spec E1). Runs are immutable across days and kept 90 days; a same-day
+    re-run replaces that day's run in one transaction rather than accumulating.
+
+    `data_through` is the last consumption date the run saw — constant within
+    a run. Clients compare it against the newest consumption data to decide
+    that a forecast has been outrun and a re-run is due. `hospital_id` is Text
+    (not uuid, deviating from the E1 sketch) to join stock_snapshot and
+    consumption_daily without casts.
+    """
+
+    __tablename__ = "forecast_point"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    data_through: Mapped[date] = mapped_column(Date, nullable=False)
+    target_date: Mapped[date] = mapped_column(Date, nullable=False)
+    p10: Mapped[float] = mapped_column(Numeric, nullable=False)
+    p50: Mapped[float] = mapped_column(Numeric, nullable=False)
+    p90: Mapped[float] = mapped_column(Numeric, nullable=False)
+    model_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("p10 <= p50 AND p50 <= p90", name="ck_forecast_point_quantiles"),
+        UniqueConstraint(
+            "hospital_id",
+            "facility_id",
+            "ndc",
+            "run_id",
+            "target_date",
+            name="uq_forecast_point_natural",
+        ),
+        Index("ix_forecast_lookup", "hospital_id", "facility_id", "ndc", "run_id"),
+    )
+
+
+class StockDaily(Base):
+    """End-of-day on-hand per facility/NDC — the stock history the forecasts
+    page draws left of "today". Mirrors consumption_daily's shape. No writer
+    exists in production yet (B4 receiving events are the future source);
+    the demo seeder plants a series consistent with consumption_daily that
+    ends exactly at stock_snapshot's current quantity.
+    """
+
+    __tablename__ = "stock_daily"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    qty_on_hand: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "hospital_id", "facility_id", "ndc", "date", name="uq_stock_daily_natural"
+        ),
+        Index("ix_stock_daily_series", "facility_id", "ndc", "date"),
+    )
