@@ -8,6 +8,11 @@ RxCUIs/NDCs) and writes three gzipped CSVs next to it:
   consumption.csv.gz  3 years × daily × drug × operated facility
   stock.csv.gz        current on-hand per facility/location/NDC
   conditions.csv.gz   90 days × hourly temp/humidity per storage location
+  forecast.csv.gz     one canonical forecast run (issue #7) over the
+                      consumption history, data_through = END_DATE, fitted
+                      with the same shared engine the prediction service
+                      uses live — seeded so a fresh demo DB has a populated
+                      forecast chart before anyone presses "Run forecast"
 
 Same seed → identical CSV content (gzip mtime pinned to 0 so even the .gz
 bytes are stable for one zlib build; different zlib builds deflate to
@@ -41,6 +46,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
+from medstock_shared.forecasting import forecast_series
 
 from .demo_layout import (
     CONDITION_DAYS,
@@ -229,6 +235,24 @@ def gen_consumption(drugs: list[dict]) -> tuple[list, dict[tuple[str, str], int]
     return rows, end_stock
 
 
+def gen_forecast(consumption: list) -> list:
+    """The committed forecast run: fit every (facility, ndc) series exactly
+    as POST /forecast/runs would, cut at END_DATE. Deterministic because the
+    engine is pure and the input is the seeded consumption sim."""
+    series: dict[tuple[str, str], dict] = {}
+    for code, ndc, _rxcui, date_str, qty, stockout in consumption:
+        series.setdefault((code, ndc), {})[date.fromisoformat(date_str)] = (qty, bool(stockout))
+    rows: list = []
+    for (code, ndc), history in sorted(series.items()):
+        points = forecast_series(history, END_DATE)
+        if points is None:
+            continue
+        rows.extend(
+            (code, ndc, target.isoformat(), p10, p50, p90) for target, p10, p50, p90 in points
+        )
+    return rows
+
+
 def gen_stock(drugs: list[dict], end_stock: dict[tuple[str, str], int]) -> list:
     """Stock per facility/location/NDC. Operated sites carry the consumption
     sim's ending balance (the consistency invariant tests pin); partners get a
@@ -325,6 +349,7 @@ def run() -> dict[str, int]:
     consumption, end_stock = gen_consumption(drugs)
     stock = gen_stock(drugs, end_stock)
     conditions = gen_conditions()
+    forecast = gen_forecast(consumption)
     counts = {
         "consumption": _write_gz(
             out / "consumption.csv.gz",
@@ -336,6 +361,11 @@ def run() -> dict[str, int]:
             out / "conditions.csv.gz",
             ["facility", "location", "ts", "temperature_c", "humidity_pct"],
             conditions,
+        ),
+        "forecast": _write_gz(
+            out / "forecast.csv.gz",
+            ["facility", "ndc", "date", "p10", "p50", "p90"],
+            forecast,
         ),
     }
     return counts

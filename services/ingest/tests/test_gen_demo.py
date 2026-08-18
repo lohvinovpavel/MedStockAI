@@ -22,7 +22,7 @@ import pytest
 from app import gen_demo
 from app.demo_layout import DEMO_SEED, data_dir
 
-ARTIFACTS = ("consumption.csv.gz", "stock.csv.gz", "conditions.csv.gz")
+ARTIFACTS = ("consumption.csv.gz", "stock.csv.gz", "conditions.csv.gz", "forecast.csv.gz")
 
 
 @pytest.fixture(scope="module")

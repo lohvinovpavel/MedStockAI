@@ -376,15 +376,24 @@ the concrete reason to bring a queue back — not "queues are more correct" in t
 | Task type | Owner | Work | Output |
 |---|---|---|---|
 | `analogue` | Pavlo | rank therapeutic alternatives **+ the exact source sentence** | ranked items + citation |
-| `prediction` | Mykhailo | forecast days-of-supply from usage history | days + confidence + reasoning |
+| ~~`prediction`~~ | Mykhailo | ~~forecast days-of-supply from usage history~~ **retired** — see below | — |
 | `extract` | Andrii | pull structured fields from shortage/label text | normalized fields + citation |
 | `mapping_spec` | Mykhailo | propose a **declarative mapping spec** (never executable code) | spec, `status=awaiting_approval` |
 
+**Amendment (issue #7):** the `prediction` AI task was retired before it was ever registered.
+Spec E1 (docs/backend/specs/E1-demand-forecast.md) rules the forecast is not an LLM feature —
+a model cannot produce a reproducible p10/p90, and the surge scenario (E3) and decision
+provenance (H2) both depend on bit-identical replay. The service ships a deterministic
+seasonal-naive quantile engine (`shared/medstock_shared/forecasting.py`) instead; `prediction`
+makes no Gemini calls today, leaving `analogue` as the only request-path AI consumer.
+
 Only `analogue` is actually registered in `shared/medstock_shared/ai_tasks.py` today —
-`prediction`, `extract`, and `mapping_spec` are the table above and a `# TASKS[…] — owner`
-stub comment, nothing callable yet. The other six domain services are `/healthz` + `/readyz`
-skeletons with no business endpoints wired up either; treat the "Endpoints (sketch)" column in
-§3 as the plan, not the current state.
+`extract` and `mapping_spec` are the table above and a `# TASKS[…] — owner`
+stub comment, nothing callable yet. `prediction` has real endpoints now (issue #7):
+stored-run forecasts, days-of-supply/at-risk, and the server-side surge scenario, on dev port
+:8006. Most other domain services still carry `/healthz` + `/readyz`
+skeletons with business endpoints landing service by service; treat the "Endpoints (sketch)"
+column in §3 as the plan, not the current state.
 
 A recommendation is never auto-approved. `ask_ai()` produces candidates; only a pharmacist,
 through `analogue`, produces a decision.
