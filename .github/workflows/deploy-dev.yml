@@ -34,6 +34,10 @@ on:
         description: "Also (re)create the 4 demo users in St Mary's General — safe to re-run, skips existing ones"
         type: boolean
         default: false
+      patient_count:
+        description: "Generated demo patients to seed on top of the 8 curated ones (blank = the manifest default, 1000)"
+        type: string
+        default: ""
 
 concurrency:
   group: deploy-dev
@@ -214,6 +218,55 @@ jobs:
             kubectl -n medstock rollout status "deploy/$s" --timeout=180s
           done
 
+  # Runs on every deploy, unlike `seed` below. Two reasons it can be automatic
+  # where the user seed cannot: the script is idempotent (it pre-fetches the
+  # existing (name, DOB) keys and adds only what is missing, so a re-run costs
+  # one query and prints "seeded 0"), and it prints a count rather than a
+  # generated password. The user seed's log *is* the credential, which is
+  # exactly why that one stays behind a checkbox.
+  #
+  # The rows are invented people. `patient` is the documented PHI exception
+  # (docs/phi-readiness.md) and the reason this job is safe to run against a
+  # cloud environment on a schedule nobody thinks about is that it cannot
+  # produce a real one — the names come from fixed pools and a seeded RNG.
+  # Nothing here should ever be pointed at a real patient source.
+  seed-patients:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      - name: Seed demo patients
+        env:
+          PATIENT_COUNT: ${{ inputs.patient_count }}
+        run: |
+          img="${{ env.REGISTRY }}/patient-profiling:${{ env.DEPLOY_SHA }}"
+          src=deploy/k8s/seed-patients-job.yaml
+          sed "s|ghcr.io/medstockai/patient-profiling:latest|$img|" "$src" > /tmp/seed-patients.yaml
+          if [ -n "$PATIENT_COUNT" ]; then
+            sed -i "s|value: \"1000\"|value: \"$PATIENT_COUNT\"|" /tmp/seed-patients.yaml
+          fi
+          # A Job's pod template is immutable, so a re-run replaces the object
+          # rather than patching it.
+          kubectl -n medstock delete job seed-patients --ignore-not-found
+          kubectl -n medstock apply -f /tmp/seed-patients.yaml
+          kubectl -n medstock wait --for=condition=complete job/seed-patients --timeout=300s
+          kubectl -n medstock logs job/seed-patients
+          kubectl -n medstock delete job seed-patients
   seed:
     needs: [deploy]
     if: ${{ inputs.seed_dev_users }}

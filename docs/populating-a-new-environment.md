@@ -27,7 +27,7 @@ Run the feeds once, by hand, after migrating.
 | `adr_signal` (Tier 1) | `ingest-faers` | Sundays 07:00 | — |
 | `drug_risk_profile` (PP-3) | `ingest-prognosis` | Sundays 06:00 | **`GEMINI_API_KEY`** |
 | `assessment_log` | written by `/assess` and `/cart-check` | on use | — |
-| `patient` (demo) | `seed-patients-job.yaml` | one-off | — |
+| `patient` (demo) | `seed-patients-job.yaml` | every dev deploy | — |
 
 `ingest-faers` depends on the formulary — it costs one openFDA call per drug, so
 it needs a drug list rather than "everything". Seed stock before it or it has
@@ -51,6 +51,8 @@ kubectl -n medstock apply -f deploy/k8s/seed-stock-job.yaml
 kubectl -n medstock wait --for=condition=complete job/seed-stock --timeout=300s
 
 # Demo patients for the prescribe cart. Invented people — see §6.
+# deploy-dev.yml already runs this on every deploy; by hand it needs the auth
+# seed to have run first, because it resolves the tenant by hospital name.
 kubectl -n medstock apply -f deploy/k8s/seed-patients-job.yaml
 kubectl -n medstock wait --for=condition=complete job/seed-patients --timeout=300s
 
@@ -140,8 +142,34 @@ patients into a demo environment to make a screen look fuller. If a real
 integration is ever needed, the vector contract is the thing to implement, not
 this table.
 
-The two seeded patients carry deliberately contrasting genotypes, because that
-contrast *is* the Tier 3 demonstration:
+### Which tenant the rows land in
+
+The seed resolves the hospital **by name** (`St Mary's General`, matching
+`services/auth/app/seed.py`) and exits non-zero if no such hospital exists.
+
+That is not defensiveness for its own sake. `patient.hospital_id` is `Text`
+with no foreign key, and this script used to default to the literal
+`00000000-0000-0000-0000-000000000001` — an id nothing creates, since the auth
+seed lets Postgres generate one. So the old default wrote its rows, printed
+`seeded 1008`, and left every user staring at an empty picker, because a user
+only ever sees the hospital named in their token. Run the auth seed first, or
+pass `--hospital-id`.
+
+### The population
+
+Eight curated patients, plus whatever `SEED_PATIENT_COUNT` asks for (1000 in
+the Job). The generated cohort is not padding: `/demand`, the PP-4 forecast and
+the population panels all answer questions about a cohort, and a cohort of eight
+makes every one of them read as noise. It is deterministic — same seed, same
+people — so a rebuilt environment is comparable to the one before it.
+
+Frequencies are chosen to be plausible rather than authoritative, and roughly
+45% of the cohort has **no genotype on file**. That is deliberate: a fully
+genotyped population would make Tier 3 look far more useful than it is before a
+hospital invests in testing.
+
+The eight curated patients carry deliberately contrasting genotypes, because
+that contrast *is* the Tier 3 demonstration:
 
 | Patient | Phenotype | Citalopram in the cart |
 |---|---|---|
@@ -152,6 +180,11 @@ Marcus getting an explicit *standard dosing* line rather than silence is the
 point: it is how a reader tells "we checked the genotype and it is ordinary"
 from "nobody looked".
 
-Re-running the seed is safe. It skips patients that already exist and backfills
-a genotype onto any seeded before `pgx_phenotypes` existed, so an environment
-stood up earlier upgrades rather than staying half-configured.
+Re-running the seed is safe. It pre-fetches the existing `(name, DOB)` keys in
+one query, adds only what is missing, and backfills a genotype onto any patient
+seeded before `pgx_phenotypes` existed — so an environment stood up earlier
+upgrades rather than staying half-configured, and a no-op re-run costs a second.
+
+Because it is safe, `deploy-dev.yml` runs it on **every** deploy rather than
+behind a checkbox like the user seed. The distinction is what ends up in the
+log: this job prints a count, the user seed prints a generated password.
