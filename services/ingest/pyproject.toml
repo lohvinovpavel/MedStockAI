@@ -6,6 +6,10 @@ dependencies = [
     "medstock-shared",
     "httpx>=0.27", "tenacity>=9.0",
     "numpy>=2.0",
+    # Only ingest runs the PP-3 extraction graph. Deliberately not a dependency
+    # of medstock-shared: seven services import that, and six have no reason to
+    # carry a graph library in their image.
+    "langgraph>=0.2",
 ]
 
 [dependency-groups]
