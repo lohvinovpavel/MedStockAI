@@ -398,6 +398,77 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
 
 
+def test_list_at_risk_skus_caps_and_reports_truncation(monkeypatch):
+    from contextlib import contextmanager
+
+    from medstock_shared.ai.tools.pharmacy import AtRiskArgs, list_at_risk_skus
+
+    items = [{"ndc": f"n{i}", "days_of_supply": i} for i in range(40)]
+
+    def fake_at_risk_skus(session, facility_id, within_days, surge_pct):
+        return {"run_id": "run-1", "data_through": "2026-08-18", "items": list(items)}
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._at_risk_skus", fake_at_risk_skus)
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        yield MagicMock()
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = list_at_risk_skus(AtRiskArgs(), PHARMACIST)
+    assert result["checked"] == 40
+    assert len(result["items"]) == 30
+    assert result["truncated"] is True
+    assert result["run_id"] == "run-1"
+
+
+def test_propose_forecast_rerun_never_calls_run_forecast(monkeypatch):
+    """The whole point of this tool: it reports staleness and never commits
+    a run itself -- there is no run_forecast import in pharmacy.py at all."""
+    import medstock_shared.ai.tools.pharmacy as pharmacy_module
+
+    assert not hasattr(pharmacy_module, "run_forecast")
+
+    from contextlib import contextmanager
+    from datetime import date, datetime, timezone
+
+    from medstock_shared.ai.tools.pharmacy import ProposeRerunArgs, propose_forecast_rerun
+
+    def fake_latest_run(session):
+        return ("run-1", date(2026, 8, 17), datetime(2026, 8, 17, 6, tzinfo=timezone.utc))
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._latest_run", fake_latest_run)
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        yield MagicMock()
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = propose_forecast_rerun(ProposeRerunArgs(), PHARMACIST)
+    assert result["has_run"] is True
+    assert result["run_id"] == "run-1"
+    assert "Re-run Forecast" in result["note"]
+
+
+def test_propose_forecast_rerun_handles_no_run_yet(monkeypatch):
+    from contextlib import contextmanager
+
+    from medstock_shared.ai.tools.pharmacy import ProposeRerunArgs, propose_forecast_rerun
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._latest_run", lambda session: None)
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        yield MagicMock()
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = propose_forecast_rerun(ProposeRerunArgs(), PHARMACIST)
+    assert result["has_run"] is False
+
+
 def test_query_ai_decisions_scopes_to_the_caller_hospital(monkeypatch):
     from medstock_shared.ai.tools.pharmacy import AuditQueryArgs, query_ai_decisions
 
@@ -581,6 +652,8 @@ def test_declarations_are_scoped_to_the_caller_role():
         "assess_patient_for_drug",
         "explain_assessment",
         "list_review_queue",
+        "list_at_risk_skus",
+        "propose_forecast_rerun",
     }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
@@ -607,6 +680,8 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
         "explain_assessment",
         "query_ai_decisions",
         "list_review_queue",
+        "list_at_risk_skus",
+        "propose_forecast_rerun",
     }
 
 

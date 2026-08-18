@@ -20,30 +20,33 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Depends, FastAPI, Query
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import (
-    ConsumptionDaily,
-    Drug,
-    ForecastPoint,
-    ShortageEvent,
-    StockDaily,
-    StockSnapshot,
+from medstock_shared.forecasting import (
+    HISTORY_DAYS_RETURNED,
+    HORIZON_DAYS,
+    MIN_HISTORY_DAYS,
+    MODEL_VERSION,
+    RESOLVED_STATUSES,
+    TRAILING_MEAN_DAYS,
+    at_risk_skus,
+    depletion_fields,
+    forecast_by_ndc,
+    latest_run,
+    on_hand,
+    scale,
+    shortage_active,
+    summarize,
+    trailing_means,
 )
+from medstock_shared.models import ConsumptionDaily, ShortageEvent, StockDaily
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 
-from .forecast import HORIZON_DAYS, MIN_HISTORY_DAYS, MODEL_VERSION, run_forecast
-from .supply import scale, summarize
+from .forecast import run_forecast
 
 app = FastAPI(title="prediction")
 api = APIRouter()
 
 RULESET_VERSION = "prediction-1"
-HISTORY_DAYS_RETURNED = 60
-TRAILING_MEAN_DAYS = 28
-# A shortage row is active unless its status says otherwise. Status is raw
-# feed text and nullable; a shortage row with no status is still a shortage
-# row.
-RESOLVED_STATUSES = {"resolved", "discontinued"}
 
 
 @app.get("/healthz")
@@ -70,86 +73,6 @@ def version() -> dict[str, str]:
     except PackageNotFoundError:
         semver = "unknown"
     return {"service": "prediction", "version": os.environ.get("GIT_SHA", "unknown"), "semver": semver}
-
-
-def _shortage_active(status: str | None) -> bool:
-    return status is None or status.strip().lower() not in RESOLVED_STATUSES
-
-
-def _latest_run(session) -> tuple[str, date, object] | None:
-    """(run_id, data_through, created_at) of the newest run, or None."""
-    row = session.execute(
-        select(ForecastPoint.run_id, ForecastPoint.data_through, ForecastPoint.created_at)
-        .order_by(ForecastPoint.created_at.desc())
-        .limit(1)
-    ).first()
-    return (row[0], row[1], row[2]) if row else None
-
-
-def _trailing_means(
-    session, ndcs: set[str], through: date, facility_id: int | None
-) -> dict[str, float]:
-    """Mean daily consumption per NDC over the trailing window, stockout-
-    censored days excluded — E2's fallback denominator."""
-    stmt = (
-        select(ConsumptionDaily.ndc, func.avg(ConsumptionDaily.qty_consumed))
-        .where(
-            ConsumptionDaily.ndc.in_(ndcs),
-            ConsumptionDaily.stockout.is_(False),
-            ConsumptionDaily.date > through - timedelta(days=TRAILING_MEAN_DAYS),
-            ConsumptionDaily.date <= through,
-        )
-        .group_by(ConsumptionDaily.ndc)
-    )
-    if facility_id is not None:
-        stmt = stmt.where(ConsumptionDaily.facility_id == facility_id)
-    return {ndc: float(mean) for ndc, mean in session.execute(stmt)}
-
-
-def _forecast_by_ndc(
-    session, run_id: str, ndcs: set[str], facility_id: int | None
-) -> dict[str, list[tuple[date, float, float, float]]]:
-    """Latest-run quantiles per NDC, summed across facilities unless one is
-    named. Summing quantiles across series is an approximation (a sum of
-    medians is not the median of sums) — accepted and published in /ruleset."""
-    stmt = (
-        select(
-            ForecastPoint.ndc,
-            ForecastPoint.target_date,
-            func.sum(ForecastPoint.p10),
-            func.sum(ForecastPoint.p50),
-            func.sum(ForecastPoint.p90),
-        )
-        .where(ForecastPoint.run_id == run_id, ForecastPoint.ndc.in_(ndcs))
-        .group_by(ForecastPoint.ndc, ForecastPoint.target_date)
-        .order_by(ForecastPoint.ndc, ForecastPoint.target_date)
-    )
-    if facility_id is not None:
-        stmt = stmt.where(ForecastPoint.facility_id == facility_id)
-    series: dict[str, list[tuple[date, float, float, float]]] = defaultdict(list)
-    for ndc, target, p10, p50, p90 in session.execute(stmt):
-        series[ndc].append((target, float(p10), float(p50), float(p90)))
-    return series
-
-
-def _on_hand(session, ndcs: set[str] | None, facility_id: int | None) -> dict[str, int]:
-    stmt = select(StockSnapshot.ndc, func.sum(StockSnapshot.quantity)).group_by(StockSnapshot.ndc)
-    if ndcs is not None:
-        stmt = stmt.where(StockSnapshot.ndc.in_(ndcs))
-    if facility_id is not None:
-        stmt = stmt.where(StockSnapshot.facility_id == facility_id)
-    return {ndc: int(qty) for ndc, qty in session.execute(stmt)}
-
-
-def _depletion_fields(verdict: dict) -> dict:
-    """The `depletion` object shared by /forecast and the single-SKU lookup."""
-    return {
-        "date": verdict["depletion_date"],
-        "days": verdict["days_of_supply"],
-        "days_p90": verdict["days_of_supply_p90"],
-        "basis": verdict["basis"],
-        "reason": verdict["reason"],
-    }
 
 
 @api.get("/forecast/{rxcui}")
@@ -187,7 +110,7 @@ def forecast(
             out["reason"] = "no_history"
             return out
 
-        run = _latest_run(session)
+        run = latest_run(session)
         latest_data = session.execute(
             select(func.max(ConsumptionDaily.date)).where(ConsumptionDaily.ndc.in_(ndcs))
         ).scalar()
@@ -239,7 +162,7 @@ def forecast(
             out["model_version"] = MODEL_VERSION
             out["generated_at"] = created_at.isoformat()
             merged: dict[date, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
-            for series in _forecast_by_ndc(session, run_id, ndcs, facility_id).values():
+            for series in forecast_by_ndc(session, run_id, ndcs, facility_id).values():
                 for target, p10, p50, p90 in series:
                     merged[target][0] += p10
                     merged[target][1] += p50
@@ -260,11 +183,11 @@ def forecast(
             for t, p10, p50, p90 in points[:horizon_days]
         ]
 
-        quantity = sum(_on_hand(session, ndcs, facility_id).values())
-        trailing = _trailing_means(session, ndcs, data_through, facility_id)
+        quantity = sum(on_hand(session, ndcs, facility_id).values())
+        trailing = trailing_means(session, ndcs, data_through, facility_id)
         trailing_sum = sum(trailing.values()) if trailing else None
         verdict = summarize(quantity, points, trailing_sum, data_through, surge_pct, HORIZON_DAYS)
-        out["depletion"] = {"quantity": quantity, **_depletion_fields(verdict)}
+        out["depletion"] = {"quantity": quantity, **depletion_fields(verdict)}
         if surged:
             baseline = summarize(quantity, points, trailing_sum, data_through, 100, HORIZON_DAYS)
             out["baseline_depletion"] = {
@@ -281,82 +204,18 @@ def at_risk(
     surge_pct: int = Query(100, ge=100, le=300),
     principal: Principal = Depends(require("forecast:read")),
 ) -> dict:
+    """The query itself lives in `medstock_shared.forecasting.at_risk_skus`
+    (P3, docs/ai_workflow_impl_plan.md) so this route and the copilot's
+    list_at_risk_skus tool read the exact same thing. `reorder_point` and a
+    per-item `run_id` are this route's own contract additions -- B5 (par
+    levels) is unbuilt, so the key ships null so the contract is par-ready."""
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        stock = _on_hand(session, None, facility_id)
-        run = _latest_run(session)
-
-        out: dict = {
-            "facility_id": facility_id,
-            "within_days": within_days,
-            "surge_pct": surge_pct,
-            "scenario": "surge" if surge_pct > 100 else "standard",
-            "run_id": run[0] if run else None,
-            "generated_at": run[2].isoformat() if run else None,
-            "data_through": None,
-            "latest_data": None,
-            "items": [],
-        }
-        if not stock:
-            return out
-
-        ndcs = set(stock)
-        latest_data = session.execute(
-            select(func.max(ConsumptionDaily.date)).where(ConsumptionDaily.ndc.in_(ndcs))
-        ).scalar()
-        data_through = run[1] if run else latest_data
-        if data_through is None:
-            return out
-        out["data_through"] = data_through.isoformat()
-        out["latest_data"] = latest_data.isoformat() if latest_data else None
-
-        by_ndc = _forecast_by_ndc(session, run[0], ndcs, facility_id) if run else {}
-        trailing = _trailing_means(session, ndcs, data_through, facility_id)
-        names = dict(
-            session.execute(select(Drug.ndc, Drug.name).where(Drug.ndc.in_(ndcs))).all()
-        )
-        rxcuis = dict(
-            session.execute(
-                select(ConsumptionDaily.ndc, func.max(ConsumptionDaily.rxcui))
-                .where(ConsumptionDaily.ndc.in_(ndcs))
-                .group_by(ConsumptionDaily.ndc)
-            ).all()
-        )
-        shortages = {
-            ndc
-            for ndc, status in session.execute(
-                select(ShortageEvent.ndc, ShortageEvent.status).where(ShortageEvent.ndc.in_(ndcs))
-            )
-            if _shortage_active(status)
-        }
-
-        items = []
-        for ndc, quantity in stock.items():
-            verdict = summarize(
-                quantity, by_ndc.get(ndc, []), trailing.get(ndc), data_through, surge_pct, HORIZON_DAYS
-            )
-            days = verdict["days_of_supply"]
-            if days is None or days > within_days:
-                continue
-            items.append(
-                {
-                    "ndc": ndc,
-                    "rxcui": rxcuis.get(ndc),
-                    "name": names.get(ndc),
-                    "quantity": quantity,
-                    "days_of_supply": days,
-                    "days_of_supply_p90": verdict["days_of_supply_p90"],
-                    "depletion_date": verdict["depletion_date"],
-                    "basis": verdict["basis"],
-                    # B5 is unbuilt; the key ships so the contract is par-ready.
-                    "reorder_point": None,
-                    "in_shortage": ndc in shortages,
-                    "run_id": out["run_id"],
-                }
-            )
-        # E2 rule 3: worst first, ties on quantity then NDC, stable between polls.
-        items.sort(key=lambda i: (i["days_of_supply"], i["quantity"], i["ndc"]))
-        out["items"] = items
-        return out
+        result = at_risk_skus(session, facility_id, within_days, surge_pct)
+    result["scenario"] = "surge" if surge_pct > 100 else "standard"
+    for item in result["items"]:
+        item["reorder_point"] = None
+        item["run_id"] = result["run_id"]
+    return result
 
 
 @api.get("/days-of-supply")
@@ -368,8 +227,8 @@ def days_of_supply(
 ) -> dict:
     """Single-SKU form for the inventory row and the analogue dialog (E2)."""
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        quantity = _on_hand(session, {ndc}, facility_id).get(ndc, 0)
-        run = _latest_run(session)
+        quantity = on_hand(session, {ndc}, facility_id).get(ndc, 0)
+        run = latest_run(session)
         data_through = (
             run[1]
             if run
@@ -377,9 +236,9 @@ def days_of_supply(
                 select(func.max(ConsumptionDaily.date)).where(ConsumptionDaily.ndc == ndc)
             ).scalar()
         )
-        points = _forecast_by_ndc(session, run[0], {ndc}, facility_id).get(ndc, []) if run else []
+        points = forecast_by_ndc(session, run[0], {ndc}, facility_id).get(ndc, []) if run else []
         trailing = (
-            _trailing_means(session, {ndc}, data_through, facility_id).get(ndc)
+            trailing_means(session, {ndc}, data_through, facility_id).get(ndc)
             if data_through
             else None
         )
@@ -400,7 +259,7 @@ def days_of_supply(
             "depletion_date": verdict["depletion_date"],
             "basis": verdict["basis"],
             "reason": verdict["reason"],
-            "in_shortage": bool(status) and _shortage_active(status[0]),
+            "in_shortage": bool(status) and shortage_active(status[0]),
         }
 
 

@@ -22,6 +22,9 @@ from ...certification import Finding, signal
 from ...db import engine, session_scope
 from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...explore import explore
+from ...forecasting import HORIZON_DAYS
+from ...forecasting import at_risk_skus as _at_risk_skus
+from ...forecasting import latest_run as _latest_run
 from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
 from ...patient_assess import NOT_FOUND, UNAVAILABLE, assess_for_drug as _assess_for_drug
@@ -394,6 +397,71 @@ def explain_assessment(args: ExplainAssessmentArgs, principal: Principal) -> dic
     if result == UNAVAILABLE:
         return {"error": "assessment log unavailable"}
     return result
+
+
+class AtRiskArgs(BaseModel):
+    facility_id: int | None = Field(None, description="Limit to one facility; omit for all")
+    within_days: int = Field(30, ge=1, le=HORIZON_DAYS, description="Only SKUs depleting within this many days")
+    surge_pct: int = Field(100, ge=100, le=300, description="100 = baseline demand; >100 = a surge scenario")
+
+
+_AT_RISK_LIMIT = 30
+
+
+@tool(
+    permission="forecast:read",
+    description=(
+        "List stocked NDCs whose forecast depletes within a given number of "
+        "days -- worst first. Use for questions like 'what is about to run "
+        "out' or 'what needs restocking soon', across the whole formulary "
+        "rather than one drug at a time."
+    ),
+    args=AtRiskArgs,
+)
+def list_at_risk_skus(args: AtRiskArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        result = _at_risk_skus(session, args.facility_id, args.within_days, args.surge_pct)
+    items = result["items"]
+    return {
+        "run_id": result["run_id"],
+        "data_through": result["data_through"],
+        "checked": len(items),
+        "items": items[:_AT_RISK_LIMIT],
+        "truncated": len(items) > _AT_RISK_LIMIT,
+    }
+
+
+class ProposeRerunArgs(BaseModel):
+    facility_id: int | None = Field(None, description="Unused today -- forecast runs are hospital-wide")
+
+
+@tool(
+    permission="forecast:run",
+    description=(
+        "Check whether this hospital's forecast is stale -- report the last "
+        "run's timestamp and the most recent consumption data available. "
+        "Use when the user asks to re-run or refresh the forecast. This "
+        "tool never triggers a run itself: it only reports staleness. "
+        "Triggering a real run is a human action -- tell the user to use "
+        "the 'Re-run Forecast' button on the Forecasts page, which is the "
+        "same POST /forecast/runs this tool would otherwise have to call "
+        "silently on their behalf."
+    ),
+    args=ProposeRerunArgs,
+)
+def propose_forecast_rerun(args: ProposeRerunArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        run = _latest_run(session)
+    if run is None:
+        return {"has_run": False, "note": "No forecast has ever been run for this hospital."}
+    run_id, data_through, created_at = run
+    return {
+        "has_run": True,
+        "run_id": run_id,
+        "data_through": data_through.isoformat(),
+        "generated_at": created_at.isoformat(),
+        "note": "This is a report, not an action -- direct the user to the Re-run Forecast button on the Forecasts page to actually trigger a new run.",
+    }
 
 
 class AuditQueryArgs(BaseModel):
