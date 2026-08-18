@@ -1,6 +1,6 @@
 # E2 — Days of supply and at-risk list
 
-**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ✅ `GET /at-risk` and `GET /days-of-supply` — `/forecasts` consumes them; inventory status is B5 par; B3 exposure attaches trailing-mean `days_of_supply` when consumption exists; shortage page still computes locally from mock-data
+**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ✅ `GET /at-risk` and `GET /days-of-supply` — `/forecasts` consumes them; inventory status is B5 par; B3 exposure and G1 shortage coverage attach trailing-mean `days_of_supply` when consumption exists
 **Depends on:** B1, E1 · **Scope:** `forecast:read`
 
 ## Goal

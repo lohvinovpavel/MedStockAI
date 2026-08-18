@@ -11,7 +11,7 @@ import { useSession } from "@/lib/session";
  * that file is the security boundary (every real endpoint 403s on its own,
  * see lib/prognosis.ts's approvalStance for the pattern). This one only
  * decides what the UI *shows*: which nav tabs and pages a role sees, and
- * which buttons on mock-data pages (orders/forecasts/shortages/audit —
+ * which buttons on mock-data pages (orders/copilot —
  * lib/mock-data.ts, no backend yet) are offered. Hiding a button here is a
  * courtesy; a role with no cookie at all still can't reach anything real.
  */
@@ -24,9 +24,9 @@ export const ROLE_LABEL: Record<Role, string> = {
   physician: "Doctor",
 };
 
-// Pages backed by a real service (inventory, analogue, warehouse, audit)
-// mirror that service's PERMS grant; orders/shortages still have no backend,
-// so those rows are the product call from docs/rbac-matrix.md.
+// Pages backed by a real service (inventory, analogue, warehouse, audit,
+// shortages) mirror that service's PERMS grant; orders still have no backend,
+// so that row is the product call from docs/rbac-matrix.md.
 const PAGE_ROLES: Record<string, Role[]> = {
   "/inventory": ["pharmacist", "physician", "director", "admin"],
   "/analogue": ["pharmacist", "physician", "director", "admin"],

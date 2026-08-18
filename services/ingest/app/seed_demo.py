@@ -36,6 +36,7 @@ from medstock_shared.models import (
     StockDaily,
     StockSnapshot,
 )
+from medstock_shared.seed_wave4 import apply_partner_shortage, apply_suppliers
 from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -482,7 +483,9 @@ def run() -> dict[str, int]:
         _seed_forecast(s, forecast, fac_ids, hospital_id)
         _seed_stock_history(s, stock_history, fac_ids, hospital_id)
         shelf = _overlay_dashboard_shelf(s, drugs, consumption, stock_history, fac_ids, hospital_id)
+        partners = apply_partner_shortage(s, hospital_id, fac_ids)
         shortages = _seed_shortages(s, drugs)
+        suppliers = apply_suppliers(s, hospital_id)
         s.commit()
 
     return {
@@ -495,7 +498,9 @@ def run() -> dict[str, int]:
         "forecast": len(forecast),
         "stock_history": len(stock_history),
         "dashboard_shelf": shelf,
+        "partner_shortage_rows": partners,
         "shortages": shortages,
+        "suppliers": suppliers,
     }
 
 

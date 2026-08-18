@@ -144,6 +144,9 @@ Order matters, because tenant data references real reference data:
    after clearing leftover lots, so a second run cannot stack quantities.
    Wave 3 also plants `shortage_event` rows for Norepinephrine, Ceftriaxone
    and Heparin (the mock shortage alerts) so B3 `uncovered` is a real claim.
+   Wave 4 plants partner-site `stock_snapshot` / trailing consumption for
+   those three SKUs (St. Luke, Mercy — matching `PARTNER_SHORTAGE_STOCK`) and
+   the four mock suppliers plus per-SKU unit costs so G1 and F2 are live.
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly

@@ -36,8 +36,8 @@ boundary is real, the data boundary is not). This is the schema behind the featu
 | `location_condition` | tenant (via `storage_location` → `facility`) | `warehouse` | ✅ — hourly temp/humidity telemetry |
 | `stock_batch` | tenant | `inventory` | ✅ B4 |
 | `par_level` | tenant | `inventory` | ✅ B5 |
-| `supplier` | tenant | `warehouse` | ❌ F2 |
-| `supplier_catalog` | tenant | `warehouse` | ❌ F2 |
+| `supplier` | tenant | `warehouse` | ✅ F2 |
+| `supplier_catalog` | tenant | `warehouse` | ✅ F2 |
 | `purchase_order` | tenant | `inventory` | ❌ F3 |
 | `purchase_order_line` | tenant | `inventory` | ❌ F3 |
 | `transfer_request` | tenant | `warehouse` | ❌ G2 |

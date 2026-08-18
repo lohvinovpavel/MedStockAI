@@ -21,12 +21,13 @@ roles; `forecast:read` / `forecast:run` on pharmacist and director; `audit:read`
 `audit:read` is director/admin-only.
 
 Wave 2 added `batch:write` (pharmacist, admin) and `par:write` (admin).
+Wave 4 added `order:read` (pharmacist, director, admin) for F2.
 
 ## Scopes still to add
 
 | Scope | Roles | Used by |
 |---|---|---|
-| `order:read` | pharmacist, director, admin | F4 |
+| `order:read` | pharmacist, director, admin | F2, F4 |
 | `order:write` | pharmacist, admin | F3 |
 | `transfer:write` | pharmacist, director | G2 |
 | `copilot:use` | all four | I1 |

@@ -133,6 +133,23 @@ def test_dashboard_shelf_has_wave3_rxcuis_and_shortage_specs():
     assert all(s["id"] in ids for s in DEMO_SHORTAGE_SPECS)
 
 
+def test_wave4_partner_stock_and_suppliers_match_mock():
+    from medstock_shared.demo_shelf import DEMO_SUPPLIERS, PARTNER_SHORTAGE_STOCK
+
+    assert set(PARTNER_SHORTAGE_STOCK) == {"inv-003", "inv-005", "inv-010"}
+    assert PARTNER_SHORTAGE_STOCK["inv-005"]["st-luke"]["units"] == 0
+    assert PARTNER_SHORTAGE_STOCK["inv-003"]["st-luke"]["units"] == 210
+    assert "mercy" not in PARTNER_SHORTAGE_STOCK["inv-003"]
+    names = [row["name"] for row in DEMO_SUPPLIERS]
+    assert names == [
+        "PharmaSource Global Ltd.",
+        "Meditech Distribution Co.",
+        "EuroPharm Wholesale AG",
+        "Nordic Medical Supply",
+    ]
+    assert DEMO_SUPPLIERS[0]["catalog"]["inv-005"] == "22.5000"
+
+
 def test_the_seed_targets_a_constraint_that_still_exists():
     """`seed_stock.py` names a constraint in its ON CONFLICT clause, and a
     migration renamed it out from under the script.

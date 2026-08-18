@@ -3,6 +3,7 @@ service owns must be imported here before a migration is generated."""
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -890,6 +891,60 @@ class StorageLocation(Base):
             "kind IN ('room','fridge','freezer','cold_room')", name="ck_storage_location_kind"
         ),
         UniqueConstraint("facility_id", "code", name="uq_storage_location_facility_code"),
+    )
+
+
+class Supplier(Base):
+    """Tenant supplier catalog (F2). Money is numeric, never float.
+
+    `active = false` stays readable (order history) but `/quote` and F3 reject it.
+    """
+
+    __tablename__ = "supplier"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    reliability_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    shipping_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0"))
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+    __table_args__ = (
+        CheckConstraint("lead_time_days >= 0", name="ck_supplier_lead_nonneg"),
+        CheckConstraint(
+            "reliability_pct >= 0 AND reliability_pct <= 100",
+            name="ck_supplier_reliability_pct",
+        ),
+        UniqueConstraint("hospital_id", "name", name="uq_supplier_hospital_name"),
+    )
+
+
+class SupplierCatalog(Base):
+    """Per-SKU unit cost, pack size and minimum order for one supplier (F2)."""
+
+    __tablename__ = "supplier_catalog"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("supplier.id", ondelete="CASCADE"), nullable=False
+    )
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    pack_size: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    min_order_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("unit_cost >= 0", name="ck_supplier_catalog_cost_nonneg"),
+        CheckConstraint("pack_size >= 1", name="ck_supplier_catalog_pack"),
+        CheckConstraint("min_order_qty >= 1", name="ck_supplier_catalog_min_order"),
+        UniqueConstraint("supplier_id", "ndc", name="uq_supplier_catalog_supplier_ndc"),
     )
 
 

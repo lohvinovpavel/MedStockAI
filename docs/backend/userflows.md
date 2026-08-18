@@ -15,7 +15,7 @@ services and tables that have to exist behind them.
 |---|---|---|---|---|---|
 | 1 | Sign in | Any | `/` landing CTA | Landing → `/login` → email + password → OTP step (UI-only, A2 unused) → submit | Toast "Signed in" → that role's `HOME_ROUTE` |
 | 2 | Demo role sign-in | Pharmacist / Procurement / Clinical Director | `/login` | Click "Demo Login as {role}" | Toast with role → that role's `HOME_ROUTE` (`/inventory`, `/orders`, `/audit`). Nav and pages are gated by `PAGE_ROLES`; endpoints still 403 on their own `PERMS` |
-| 3 | Switch facility | Any | Sidebar bottom dropdown | Open dropdown → pick one of 4 `operated` facilities from `GET /warehouse/facilities?operated=true` | `FacilityProvider` stores B1 `code`; inventory reloads `GET /items?facility_id=`; orders/shortage mock tables re-key; sidebar distances are haversine from the **selected** site |
+| 3 | Switch facility | Any | Sidebar bottom dropdown | Open dropdown → pick one of 4 `operated` facilities from `GET /warehouse/facilities?operated=true` | `FacilityProvider` stores B1 `code`; inventory reloads `GET /items?facility_id=`; shortage matrix reloads `GET /shortages` + coverage; orders mock tables re-key; sidebar distances are haversine from the **selected** site |
 | 4 | Triage inventory | Pharmacist | `/inventory` | Search by SKU/INN/ATC → filter status → filter expiry date range → click row | Row selected, Copilot focus set to that SKU |
 | 5 | Receive a batch | Pharmacist | `/inventory` → **Receive Batch** | Dialog → NDC, lot, qty, expiry → Save | Toast "Batch received"; `POST /batches` writes Postgres and the table reloads from `GET /items` |
 | 6 | Verify certificate | Compliance | Row `⋯` → **View certificate** | Dialog → authority, number, status, expiry | Dialog closed; no state change |
@@ -61,13 +61,15 @@ split is:
 | Sidebar facility switcher | Postgres via `warehouse` (`GET /facilities?operated=true`; `code` is the client key) |
 | Inventory & Batches | Postgres via `inventory` (`GET /items`, `POST /batches`, `GET /exposure`). Status is B5-derived; lot/expiry from B4; `in_formulary` from B6 |
 | Purchase & Orders | `web/lib/mock-data.ts` + `OrdersProvider` memory; receiving-site picker is the live operated list |
-| Shortage Matrix | `web/lib/mock-data.ts` (keys aligned to B1 codes; distances still mock-from-Central until G1) |
+| Shortage Matrix | Postgres via `inventory` (`GET /shortages`, `GET /shortages/{id}/coverage`). Units from B2; days-of-supply from E2 trailing mean; distances from B1 haversine vs the selected site |
 | Audit Log | Postgres via `compliance` `GET /audit` (certificate badge and DecisionTrail are also live). Empty until a `review_decision` is written. Export is still a toast (D3) |
 | Copilot cards | canned / `mock-data.ts` (certificate lookup is live) |
 
-Waves 4–5 in [specs/README.md](specs/README.md) are the remaining cutover. Do not delete
-`mock-data.ts` until orders, shortages and copilot have live APIs. Inventory already reads B4.
+Waves 5–6 in [specs/README.md](specs/README.md) are the remaining cutover (orders, transfers, copilot). Do not delete
+`mock-data.ts` until orders and copilot have live APIs. Inventory already reads B4.
 Wave 3 cut over formulary, exposure, and the analogue availability overlay.
+Wave 4 cut over the shortage matrix (G1) and the supplier/price catalog (F2); `/orders` still
+multiplies mock catalog numbers until F3.
 
 ## Known gaps
 

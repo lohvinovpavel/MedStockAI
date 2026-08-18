@@ -1,6 +1,6 @@
 # F2 — Supplier and catalog
 
-**Service:** `warehouse` · **Flow:** 14 · **Status:** ❌ · **Depends on:** B1 · **Scope:** `order:read` / admin for writes
+**Service:** `warehouse` · **Flow:** 14 · **Status:** ✅ (wave 4, `20260818_wave4`) · **Depends on:** B1 · **Scope:** `order:read` / admin for writes
 
 ## Goal
 
@@ -91,11 +91,11 @@ the number is arithmetic.
 
 ## Acceptance criteria
 
-- [ ] Changing `supplier_id` in a quote changes both total and `expected_delivery`.
-- [ ] Requesting 145 with `pack_size` 10 quotes 150 and reports the adjustment.
-- [ ] An NDC absent from the catalog returns 422 rather than a $0 line.
-- [ ] Totals use `numeric` end to end; a test asserts no float rounding drift over 1,000 lines.
-- [ ] An inactive supplier is rejected by `/quote` but still resolves in order history.
+- [x] Changing `supplier_id` in a quote changes both total and `expected_delivery`.
+- [x] Requesting 145 with `pack_size` 10 quotes 150 and reports the adjustment.
+- [x] An NDC absent from the catalog returns 422 rather than a $0 line.
+- [x] Totals use `numeric` end to end; a test asserts no float rounding drift over 1,000 lines.
+- [x] An inactive supplier is rejected by `/quote` but still resolves in order history.
 
 ## Out of scope
 

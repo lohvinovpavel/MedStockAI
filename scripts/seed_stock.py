@@ -38,6 +38,12 @@ from medstock_shared.rxnorm import (
     RxNormError,
     ndcs_for_rxcui,
 )
+from medstock_shared.seed_wave4 import apply_partner_shortage, apply_suppliers
+from medstock_shared.rxnorm import (
+    CURATED_NDCS_WHEN_EMPTY,
+    RxNormError,
+    ndcs_for_rxcui,
+)
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -340,6 +346,8 @@ def main() -> int:
                 .on_conflict_do_update(index_elements=["ndc"], set_=values)
             )
         upsert(session, hospital_id, rows, formulary)
+        partners = apply_partner_shortage(session, hospital_id, fac_ids)
+        suppliers = apply_suppliers(session, hospital_id)
         for row in demo_shortage_rows():
             session.execute(
                 insert(ShortageEvent)
@@ -359,7 +367,9 @@ def main() -> int:
         f"upserted {len(rows)} stock line(s) "
         f"({len(DASHBOARD_SHELF)} of them the dashboard shelf), "
         f"{len(formulary)} formulary rxcui(s), "
-        f"{len(demo_shortage_rows())} shortage event(s) "
+        f"{len(demo_shortage_rows())} shortage event(s), "
+        f"{partners} partner shortage row(s), "
+        f"{suppliers} supplier(s) "
         f"for hospital_id={hospital_id} facilities={','.join(OPERATED_CODES)}"
     )
     return 0

@@ -107,8 +107,9 @@ counts above before concluding a feed is broken.
 Warehouse, forecasts, and the facility switcher need the demo tenant **before** the
 ingest feeds. Without `seed_demo` those screens are empty even if alembic has run.
 `seed_demo` + `seed_stock` also plant `stock_batch` / `par_level` for the 11
-dashboard SKUs (wave 2 inventory table), a default formulary (wave 3), and
-the three mock-aligned `shortage_event` rows B3 joins.
+dashboard SKUs (wave 2 inventory table), a default formulary (wave 3),
+the three mock-aligned `shortage_event` rows B3/G1 join, partner-site
+stock for the shortage matrix, and the F2 supplier catalog.
 
 ```bash
 export DATABASE_URL=postgresql+psycopg://medstock:medstock@localhost:5432/medstock

@@ -1,6 +1,5 @@
 import os
 import uuid
-import math
 from datetime import UTC, date, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -24,8 +23,16 @@ from medstock_shared.models import (
     StockBatch,
     StockSnapshot,
 )
+from medstock_shared.geo import haversine_km
 from medstock_shared.rxnorm import RxNormError, ndcs_for_rxcui
-from medstock_shared.stock import STATUS_RANK, derive_status, suggested_order_qty
+from medstock_shared.stock import (
+    COVERAGE_RANK,
+    STATUS_RANK,
+    coverage_band,
+    days_of_supply_from_mean,
+    derive_status,
+    suggested_order_qty,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import aggregate_order_by
@@ -790,10 +797,7 @@ def get_exposure(
                 "shortage_source_id": source_id,
             }
             mean = trailing.get(ndc) if ndc else None
-            if mean and mean > 0:
-                item["days_of_supply"] = float(math.ceil(qty / mean) if qty else 0)
-            else:
-                item["days_of_supply"] = None
+            item["days_of_supply"] = days_of_supply_from_mean(qty, mean)
             items.append(item)
 
         items.sort(key=lambda row: (row["rxcui"], row["ndc"] or ""))
@@ -807,6 +811,205 @@ def get_exposure(
                 "uncovered": int(totals_row[2] or 0),
             },
             "items": items,
+        }
+
+
+def _relevant_shortage_ndcs(session) -> set[str]:
+    """NDCs this tenant stocks or has on formulary — G1 rule 4."""
+    formulary_rxcuis = set(session.scalars(select(FormularyItem.rxcui)).all())
+    ndc_map = _resolve_ndcs_for_rxcuis(session, formulary_rxcuis)
+    ndcs = {ndc for packs in ndc_map.values() for ndc in packs}
+    ndcs.update(session.scalars(select(StockSnapshot.ndc).distinct()).all())
+    return {ndc for ndc in ndcs if ndc}
+
+
+def _trailing_mean_by_facility(session, ndcs: set[str]) -> dict[tuple[int, str], float]:
+    if not ndcs:
+        return {}
+    cutoff = date.today() - timedelta(days=28)
+    stmt = (
+        select(
+            ConsumptionDaily.facility_id,
+            ConsumptionDaily.ndc,
+            func.avg(ConsumptionDaily.qty_consumed),
+        )
+        .where(
+            ConsumptionDaily.ndc.in_(ndcs),
+            ConsumptionDaily.date >= cutoff,
+            ConsumptionDaily.stockout.is_(False),
+        )
+        .group_by(ConsumptionDaily.facility_id, ConsumptionDaily.ndc)
+    )
+    out: dict[tuple[int, str], float] = {}
+    for facility_id, ndc, avg_qty in session.execute(stmt):
+        if avg_qty is not None and float(avg_qty) > 0:
+            out[(int(facility_id), ndc)] = float(avg_qty)
+    return out
+
+
+def _coverage_rows(session, ndc: str, origin: Facility) -> list[dict]:
+    facilities = list(session.scalars(select(Facility).order_by(Facility.id)))
+    qty_by_fac = {
+        int(fid): int(qty)
+        for fid, qty in session.execute(
+            select(
+                StockSnapshot.facility_id,
+                func.coalesce(func.sum(StockSnapshot.quantity), 0),
+            )
+            .where(StockSnapshot.ndc == ndc)
+            .group_by(StockSnapshot.facility_id)
+        )
+        if fid is not None
+    }
+    trailing = _trailing_mean_by_facility(session, {ndc})
+    rows: list[dict] = []
+    for fac in facilities:
+        has_snapshot = fac.id in qty_by_fac
+        if not fac.operated and not has_snapshot:
+            continue
+        qty = qty_by_fac.get(fac.id, 0)
+        days = days_of_supply_from_mean(qty, trailing.get((fac.id, ndc)))
+        if fac.id == origin.id:
+            distance = 0.0
+        elif None not in (fac.lat, fac.lon, origin.lat, origin.lon):
+            distance = round(
+                haversine_km(
+                    float(origin.lat), float(origin.lon), float(fac.lat), float(fac.lon)
+                ),
+                1,
+            )
+        else:
+            distance = 0.0
+        rows.append(
+            {
+                "facility": {
+                    "id": fac.id,
+                    "code": fac.code,
+                    "name": fac.name,
+                    "type": fac.type,
+                    "operated": fac.operated,
+                },
+                "quantity": qty,
+                "days_of_supply": days,
+                "coverage": coverage_band(qty, days),
+                "distance_km": distance,
+                "is_current": fac.id == origin.id,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            COVERAGE_RANK.get(row["coverage"], 9),
+            row["distance_km"],
+            row["facility"]["id"],
+        )
+    )
+    return rows
+
+
+def _network_stats(rows: list[dict]) -> dict:
+    days = [row["days_of_supply"] for row in rows if row["days_of_supply"] is not None]
+    return {
+        "facilities_affected": sum(
+            1 for row in rows if row["coverage"] in ("stockout", "critical")
+        ),
+        "surplus_facilities": sum(1 for row in rows if row["coverage"] == "surplus"),
+        "worst_days_of_supply": min(days) if days else None,
+    }
+
+
+def _alert_payload(session, event: ShortageEvent, origin: Facility | None) -> dict:
+    raw = event.raw or {}
+    drug = session.scalar(select(Drug).where(Drug.ndc == event.ndc)) if event.ndc else None
+    rows = _coverage_rows(session, event.ndc, origin) if origin is not None and event.ndc else []
+    agency = raw.get("agency")
+    if agency not in ("FDA", "EMA"):
+        agency = "EMA" if (event.source_id or "").upper().startswith("EMA") else "FDA"
+    rxcui = raw.get("rxcui")
+    if not rxcui and drug and isinstance(drug.raw, dict):
+        rxcui = drug.raw.get("rxcui")
+    updated = event.updated_at
+    if updated is not None and updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    return {
+        "id": event.source_id,
+        "ndc": event.ndc,
+        "rxcui": rxcui,
+        "drug_name": raw.get("name") or (drug.name if drug else event.ndc),
+        "status": event.status,
+        "source": agency,
+        "note": raw.get("note"),
+        "updated_at": (
+            updated.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            if updated
+            else None
+        ),
+        "network": _network_stats(rows),
+    }
+
+
+@api.get("/shortages")
+def list_shortages(
+    facility_id: int | None = Query(None),
+    principal: Principal = Depends(require("inventory:read")),
+) -> dict:
+    """G1: open shortage events whose NDC is on this tenant's formulary or shelf."""
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        origin = _facility(session, facility_id) if facility_id is not None else None
+        if origin is None:
+            origin = session.scalars(
+                select(Facility).where(Facility.operated.is_(True)).order_by(Facility.id)
+            ).first()
+        relevant = _relevant_shortage_ndcs(session)
+        if not relevant:
+            return {"items": []}
+        events = session.scalars(
+            select(ShortageEvent)
+            .where(ShortageEvent.ndc.in_(relevant))
+            .order_by(ShortageEvent.source_id)
+        ).all()
+        items = []
+        for event in events:
+            if not event.ndc or not _shortage_active(event.status):
+                continue
+            if event.source_id.startswith("demo-shortage-"):
+                continue
+            items.append(_alert_payload(session, event, origin))
+        items.sort(
+            key=lambda row: (
+                row["network"]["worst_days_of_supply"]
+                if row["network"]["worst_days_of_supply"] is not None
+                else 10**9,
+                row["id"],
+            )
+        )
+        return {"items": items}
+
+
+@api.get("/shortages/{source_id}/coverage")
+def shortage_coverage(
+    source_id: str,
+    facility_id: int = Query(...),
+    principal: Principal = Depends(require("inventory:read")),
+) -> dict:
+    """G1: per-facility coverage for one alert, distances from viewing_from."""
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        origin = _facility(session, facility_id)
+        event = session.scalar(
+            select(ShortageEvent).where(ShortageEvent.source_id == source_id)
+        )
+        if (
+            event is None
+            or not event.ndc
+            or not _shortage_active(event.status)
+            or event.source_id.startswith("demo-shortage-")
+        ):
+            raise HTTPException(status_code=404, detail="shortage not found")
+        if event.ndc not in _relevant_shortage_ndcs(session):
+            raise HTTPException(status_code=404, detail="shortage not found")
+        return {
+            "id": event.source_id,
+            "viewing_from": origin.id,
+            "rows": _coverage_rows(session, event.ndc, origin),
         }
 
 

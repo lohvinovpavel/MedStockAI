@@ -92,6 +92,7 @@ PERMS: dict[str, set[str]] = {
         # without this grant GET /audit 403s a role that can already open it.
         "audit:read",
         "batch:write",
+        "order:read",
     },
     "physician": {
         "alert:read",
@@ -121,6 +122,7 @@ PERMS: dict[str, set[str]] = {
         "copilot:chat",
         "forecast:read",
         "forecast:run",
+        "order:read",
     },
     "admin": {
         "mapping:approve",
@@ -137,6 +139,7 @@ PERMS: dict[str, set[str]] = {
         "copilot:chat",
         "batch:write",
         "par:write",
+        "order:read",
     },
 }
 
