@@ -33,7 +33,9 @@ const PAGE_ROLES: Record<string, Role[]> = {
   "/analogue": ["pharmacist", "physician", "director", "admin"],
   "/warehouse": ["pharmacist", "physician", "director", "admin"],
   "/shortages": ["pharmacist", "physician", "director", "admin"],
-  "/forecasts": ["pharmacist", "director", "admin"],
+  // Mirrors forecast:read in shared PERMS — the prediction service is real
+  // now (issue #7) and 403s admin on its own; the page follows the backend.
+  "/forecasts": ["pharmacist", "director"],
   "/orders": ["pharmacist", "admin"],
   "/prognosis": ["pharmacist", "director", "admin"],
   "/audit": ["pharmacist", "director", "admin"],
@@ -59,6 +61,8 @@ export const CAN: Record<string, Role[]> = {
   placeOrder: ["admin"],
   requestTransfer: ["pharmacist", "admin"],
   actOnForecast: ["pharmacist", "admin"],
+  // forecast:run in shared PERMS: triggering a forecast run (issue #7).
+  runForecast: ["pharmacist", "director"],
   exportAudit: ["director"],
 };
 

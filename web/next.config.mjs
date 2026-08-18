@@ -7,6 +7,7 @@ const patientsOrigin = process.env.PATIENTS_PROXY_ORIGIN ?? "http://127.0.0.1:80
 // the one-port-per-service rule below is that two backends can run at once.
 const complianceOrigin = process.env.COMPLIANCE_PROXY_ORIGIN ?? "http://127.0.0.1:8004";
 const warehouseOrigin = process.env.WAREHOUSE_PROXY_ORIGIN ?? "http://127.0.0.1:8005";
+const predictionOrigin = process.env.PREDICTION_PROXY_ORIGIN ?? "http://127.0.0.1:8006";
 
 export default {
   // Required by the runtime stage of web/Dockerfile.
@@ -35,6 +36,7 @@ export default {
       // badge reads "unavailable" in local dev however healthy the service is.
       { source: "/api/compliance/:path*", destination: `${complianceOrigin}/:path*` },
       { source: "/api/warehouse/:path*", destination: `${warehouseOrigin}/:path*` },
+      { source: "/api/prediction/:path*", destination: `${predictionOrigin}/:path*` },
     ];
   },
 };

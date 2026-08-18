@@ -16,16 +16,21 @@ import csv
 import gzip
 import os
 import sys
+import uuid
 from pathlib import Path
 
 from medstock_shared import engine
+from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
     Drug,
     Facility,
+    ForecastPoint,
     FormularyItem,
     Hospital,
     LocationCondition,
+    ShortageEvent,
+    StockDaily,
     StockSnapshot,
     StorageLocation,
 )
@@ -33,9 +38,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from .demo_layout import FACILITIES, HOSPITAL_ID, HOSPITAL_NAME, LOCATIONS, data_dir
+from .demo_layout import END_DATE, FACILITIES, HOSPITAL_ID, HOSPITAL_NAME, LOCATIONS, data_dir
 
 BATCH = 5000
+
+# The committed run's identity is derived, not random, so reseeding is
+# idempotent and the run a screenshot cites is the same run every time.
+DEMO_RUN_ID = str(uuid.uuid5(uuid.NAMESPACE_URL, "medstock-demo-forecast"))
 
 
 def _read_gz(path: Path) -> list[dict]:
@@ -162,6 +171,75 @@ def _seed_consumption(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> 
         s.execute(insert(ConsumptionDaily), payload[i : i + BATCH])
 
 
+def _seed_stock_history(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+    """Bulk series: delete the demo tenant's slice, reload in batches — same
+    treatment as consumption. Ends exactly at stock_snapshot's quantities so
+    the forecasts page's history meets its projection without a jump."""
+    s.execute(delete(StockDaily).where(StockDaily.hospital_id == HOSPITAL_ID))
+    payload = [
+        {
+            "hospital_id": HOSPITAL_ID,
+            "facility_id": fac_ids[row["facility"]],
+            "ndc": row["ndc"],
+            "date": row["date"],
+            "qty_on_hand": int(row["qty"]),
+        }
+        for row in rows
+    ]
+    for i in range(0, len(payload), BATCH):
+        s.execute(insert(StockDaily), payload[i : i + BATCH])
+
+
+def _seed_forecast(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+    """The canonical demo run (issue #7): delete-and-reload like the other
+    bulk series. data_through = END_DATE — pinned, so the artifact stays
+    stable as calendar time passes; POST /forecast/runs recomputes live."""
+    s.execute(delete(ForecastPoint).where(ForecastPoint.hospital_id == HOSPITAL_ID))
+    payload = [
+        {
+            "hospital_id": HOSPITAL_ID,
+            "facility_id": fac_ids[row["facility"]],
+            "ndc": row["ndc"],
+            "run_id": DEMO_RUN_ID,
+            "data_through": END_DATE,
+            "target_date": row["date"],
+            "p10": row["p10"],
+            "p50": row["p50"],
+            "p90": row["p90"],
+            "model_version": MODEL_VERSION,
+        }
+        for row in rows
+    ]
+    for i in range(0, len(payload), BATCH):
+        s.execute(insert(ForecastPoint), payload[i : i + BATCH])
+
+
+def _seed_shortages(s: Session, drugs: list[dict]) -> int:
+    """Plant an active shortage_event on the stockout-prone drugs so the
+    at-risk list's in_shortage flag has something true to say (issue #7).
+    shortage_event is a global reference table; the ENVIRONMENT=demo gate in
+    run() is what keeps this out of real databases."""
+    planted = 0
+    for drug in drugs:
+        if drug["stockout_prone"] != "True":
+            continue
+        s.execute(
+            insert(ShortageEvent)
+            .values(
+                source_id=f"demo-shortage-{drug['ndc']}",
+                ndc=drug["ndc"],
+                status="Current",
+                raw={"note": "planted by seed_demo", "name": drug["name"]},
+            )
+            .on_conflict_do_update(
+                index_elements=["source_id"],
+                set_={"ndc": drug["ndc"], "status": "Current"},
+            )
+        )
+        planted += 1
+    return planted
+
+
 def _seed_conditions(
     s: Session, rows: list[dict], loc_ids: dict[tuple[str, str], int]
 ) -> None:
@@ -190,6 +268,8 @@ def run() -> dict[str, int]:
     stock = _read_gz(src / "stock.csv.gz")
     consumption = _read_gz(src / "consumption.csv.gz")
     conditions = _read_gz(src / "conditions.csv.gz")
+    forecast = _read_gz(src / "forecast.csv.gz")
+    stock_history = _read_gz(src / "stock_history.csv.gz")
 
     with Session(engine) as s:
         _seed_hospital(s)
@@ -198,6 +278,9 @@ def run() -> dict[str, int]:
         _seed_stock(s, stock, fac_ids)
         _seed_consumption(s, consumption, fac_ids)
         _seed_conditions(s, conditions, loc_ids)
+        _seed_forecast(s, forecast, fac_ids)
+        _seed_stock_history(s, stock_history, fac_ids)
+        shortages = _seed_shortages(s, drugs)
         s.commit()
 
     return {
@@ -207,6 +290,9 @@ def run() -> dict[str, int]:
         "stock": len(stock),
         "consumption": len(consumption),
         "conditions": len(conditions),
+        "forecast": len(forecast),
+        "stock_history": len(stock_history),
+        "shortages": shortages,
     }
 
 
