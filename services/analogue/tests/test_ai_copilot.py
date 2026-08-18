@@ -318,12 +318,43 @@ def test_chat_requires_copilot_permission():
     assert res.status_code == 403
 
 
+def test_check_stock_by_ndc_sums_across_locations(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    from medstock_shared.ai.tools.pharmacy import CheckStockArgs, check_stock_by_ndc
+
+    rows = [
+        ("main-pharmacy", 30, datetime(2026, 8, 18, tzinfo=timezone.utc)),
+        ("icu", 12, datetime(2026, 8, 17, tzinfo=timezone.utc)),
+    ]
+
+    @contextmanager
+    def fake_scope(*args, **kwargs):
+        session = MagicMock()
+        session.execute.return_value.all.return_value = rows
+        yield session
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy.session_scope", fake_scope)
+
+    result = check_stock_by_ndc(CheckStockArgs(ndc="00069406101"), PHARMACIST)
+    assert result == {
+        "ndc": "00069406101",
+        "total_quantity": 42,
+        "locations": [
+            {"location_id": "main-pharmacy", "quantity": 30, "updated_at": "2026-08-18T00:00:00+00:00"},
+            {"location_id": "icu", "quantity": 12, "updated_at": "2026-08-17T00:00:00+00:00"},
+        ],
+    }
+
+
 def test_declarations_are_scoped_to_the_caller_role():
     """No mocking -- the real registry, populated by the real pharmacy.py."""
     from medstock_shared.ai.tools import declarations_for
 
     names = {d["name"] for d in declarations_for(PHARMACIST)}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+    assert names == {"search_analogues_rxnorm", "verify_batch_cert", "check_stock_by_ndc"}
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
@@ -335,7 +366,7 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
 
     assert denied_tools_for(PHARMACIST) == []
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
-    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+    assert names == {"search_analogues_rxnorm", "verify_batch_cert", "check_stock_by_ndc"}
 
 
 def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch, audit_calls):
@@ -360,6 +391,6 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
     instruction = fake.configs[0].system_instruction
     assert "verify_batch_cert" in instruction
     assert "don't have permission" in instruction
-    # still-granted tool stays callable, not just named in the prompt
+    # still-granted tools stay callable, not just named in the prompt
     declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
-    assert declared_names == {"search_analogues_rxnorm"}
+    assert declared_names == {"search_analogues_rxnorm", "check_stock_by_ndc"}

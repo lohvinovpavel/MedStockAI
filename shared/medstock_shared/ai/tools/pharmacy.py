@@ -94,6 +94,40 @@ def _ndcs_or_empty(rxcui: str) -> list[str]:
         return []
 
 
+class CheckStockArgs(BaseModel):
+    ndc: str = Field(description="NDC of the drug to check on-hand stock for")
+
+
+@tool(
+    permission="inventory:read",
+    description=(
+        "Look up this hospital's on-hand stock for one NDC, broken down by "
+        "storage location. Use when the user asks how much of a drug is in "
+        "stock, in addition to whatever is already shown on screen -- this "
+        "reads the database directly rather than the page's last snapshot."
+    ),
+    args=CheckStockArgs,
+)
+def check_stock_by_ndc(args: CheckStockArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        rows = session.execute(
+            select(StockSnapshot.location_id, StockSnapshot.quantity, StockSnapshot.updated_at)
+            .where(StockSnapshot.ndc == args.ndc)
+        ).all()
+    return {
+        "ndc": args.ndc,
+        "total_quantity": sum(int(qty or 0) for _, qty, _ in rows),
+        "locations": [
+            {
+                "location_id": location_id or "hospital-wide",
+                "quantity": int(qty or 0),
+                "updated_at": updated_at.isoformat(),
+            }
+            for location_id, qty, updated_at in rows
+        ],
+    }
+
+
 class VerifyBatchCertArgs(BaseModel):
     ndc: str = Field(description="NDC of the drug/batch to check compliance status for")
 
