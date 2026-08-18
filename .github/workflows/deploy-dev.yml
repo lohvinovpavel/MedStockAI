@@ -34,10 +34,18 @@ on:
         description: "Also (re)create the 4 demo users in St Mary's General — safe to re-run, skips existing ones"
         type: boolean
         default: false
+      seed_patients:
+        description: "Also seed demo patients (8 curated + generated) — safe to re-run, skips existing ones"
+        type: boolean
+        default: false
       patient_count:
-        description: "Generated demo patients to seed on top of the 8 curated ones (blank = the manifest default, 1000)"
+        description: "Generated demo patients to seed on top of the 8 curated ones (blank = the manifest default, 1000). Only used when seed_patients is checked."
         type: string
         default: ""
+      seed_stock:
+        description: "Also seed demo stock onto the dashboard shelf, then certify it immediately — safe to re-run (upsert)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-dev
