@@ -37,6 +37,28 @@ _client: genai.Client | None = None
 _breaker = CircuitBreaker()
 
 
+def shared_breaker() -> CircuitBreaker:
+    """The process-wide breaker, for callers that talk to Gemini without
+    going through `ask_ai()` -- today, only the copilot's own streaming
+    calls (services/analogue/app/copilot.py), which aren't cacheable and so
+    can't use `ask_ai` directly, but still hit the same provider and must
+    trip the same breaker.
+
+    Named `shared_breaker`, not `breaker`: this module already has a
+    `breaker` submodule (`from .breaker import CircuitBreaker` above), and a
+    same-named function here would shadow that submodule as an attribute of
+    this module -- exactly the bug this comment is here so nobody
+    reintroduces."""
+    return _breaker
+
+
+def client() -> genai.Client:
+    """Public alias of `_get_client()`, for the same non-`ask_ai` callers
+    `shared_breaker()` is for -- one lazily-built client per process either
+    way."""
+    return _get_client()
+
+
 def _get_client() -> genai.Client:
     """Built on first use, not at import. Five of the seven services have no
     Gemini key and must still be able to `import medstock_shared`. Belt and

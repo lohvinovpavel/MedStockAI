@@ -1,0 +1,227 @@
+"""Phase 4 (docs/ai-module-plan.md): the copilot's SSE loop, tool dispatch,
+and RBAC.
+
+No live GEMINI_API_KEY anywhere in this file. The genai async client is a
+small hand-built fake (`_FakeClient` below) rather than a MagicMock, because
+copilot.py drives it with `async for` -- the fake's `generate_content_stream`
+is itself an async-generator method, which is what makes that work without
+touching the real SDK's types.
+"""
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from app.main import app
+from fastapi.testclient import TestClient
+from medstock_shared.ai import core as ai_core
+from medstock_shared.ai.breaker import CircuitBreaker
+from medstock_shared.auth import Principal, current_principal
+
+PHARMACIST = Principal("user-1", "hospital-1", "pharmacist")
+
+
+def _client(principal: Principal = PHARMACIST) -> TestClient:
+    app.dependency_overrides[current_principal] = lambda: principal
+    return TestClient(app)
+
+
+def teardown_function() -> None:
+    app.dependency_overrides.clear()
+
+
+def _events(sse_text: str) -> list[tuple[str, dict]]:
+    """Parse `event: x\\ndata: {...}\\n\\n` blocks into (event, data) pairs."""
+    out = []
+    for block in sse_text.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        lines = block.splitlines()
+        event = lines[0].removeprefix("event: ")
+        data = json.loads(lines[1].removeprefix("data: "))
+        out.append((event, data))
+    return out
+
+
+class _FakeChunk:
+    def __init__(self, text=None, function_calls=None):
+        self.text = text
+        self.function_calls = function_calls
+
+
+class _FakeModels:
+    """One `turns` entry per expected `generate_content_stream` call."""
+
+    def __init__(self, turns: list[list[_FakeChunk]], calls: list):
+        self._turns = list(turns)
+        self._calls = calls
+
+    async def generate_content_stream(self, *, model, contents, config):
+        self._calls.append(list(contents))
+        for chunk in self._turns.pop(0):
+            yield chunk
+
+
+class _FakeClient:
+    def __init__(self, turns: list[list[_FakeChunk]]):
+        self.calls: list = []
+        self.aio = SimpleNamespace(models=_FakeModels(turns, self.calls))
+
+
+@pytest.fixture(autouse=True)
+def _reset_breaker(monkeypatch):
+    monkeypatch.setattr(ai_core, "_breaker", CircuitBreaker())
+
+
+@pytest.fixture(autouse=True)
+def _no_audit_db(monkeypatch):
+    """Every test captures audit calls instead of hitting Postgres."""
+    calls: list[dict] = []
+    monkeypatch.setattr("app.copilot.write_audit", lambda **kwargs: calls.append(kwargs))
+    return calls
+
+
+@pytest.fixture
+def audit_calls(_no_audit_db):
+    return _no_audit_db
+
+
+def test_plain_text_turn_streams_deltas_and_writes_live_audit(monkeypatch, audit_calls):
+    fake = _FakeClient(turns=[[_FakeChunk(text="Hello"), _FakeChunk(text=" world")]])
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    assert res.status_code == 200
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["delta", "delta", "done"]
+    assert events[0][1]["text"] == "Hello"
+    assert events[1][1]["text"] == " world"
+    assert len(fake.calls) == 1  # one round -- no tool calls, no second turn
+
+    assert audit_calls[0]["outcome"] == "live"
+    assert audit_calls[0]["tools_called"] == []
+    assert audit_calls[0]["actor_id"] == "user-1"
+    assert audit_calls[0]["hospital_id"] == "hospital-1"
+
+
+def test_tool_call_round_trip_executes_and_continues_to_a_final_answer(
+    monkeypatch, audit_calls
+):
+    fake = _FakeClient(
+        turns=[
+            [_FakeChunk(function_calls=[SimpleNamespace(name="search_analogues_rxnorm", args={"rxcui": "212033"})])],
+            [_FakeChunk(text="Try 105798, it's well stocked.")],
+        ]
+    )
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    captured_args = {}
+
+    async def fake_execute(name, args, principal):
+        captured_args["name"] = name
+        captured_args["args"] = args
+        captured_args["principal"] = principal
+        return {"items": [{"rxcui": "105798", "quantity": 80}]}
+
+    monkeypatch.setattr("app.copilot.execute", fake_execute)
+
+    res = _client().post(
+        "/copilot/chat", json={"messages": [{"role": "user", "text": "shortage on 212033"}]}
+    )
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["tool_start", "tool_end", "delta", "done"]
+    assert events[0][1] == {"name": "search_analogues_rxnorm", "args": {"rxcui": "212033"}}
+    assert events[1][1] == {"name": "search_analogues_rxnorm", "ok": True}
+    assert events[2][1]["text"] == "Try 105798, it's well stocked."
+
+    assert captured_args["name"] == "search_analogues_rxnorm"
+    assert captured_args["principal"] == PHARMACIST
+    assert len(fake.calls) == 2  # the tool result went back for a second round
+
+    assert audit_calls[0]["outcome"] == "live"
+    assert audit_calls[0]["tools_called"] == [{"name": "search_analogues_rxnorm", "ok": True}]
+
+
+def test_forged_tool_call_is_denied_not_crashed(monkeypatch, audit_calls):
+    """A model calling a tool name it was never declared -- unregistered, or
+    one this role lacks the permission for. execute() is real here (not
+    mocked): the denial has to come from the actual registry, not a stub."""
+    fake = _FakeClient(
+        turns=[
+            [_FakeChunk(function_calls=[SimpleNamespace(name="delete_all_stock", args={})])],
+            [_FakeChunk(text="I can't do that, but here's what I can help with.")],
+        ]
+    )
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "wipe it"}]})
+    assert res.status_code == 200
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["tool_start", "tool_end", "delta", "done"]
+    assert events[1][1]["ok"] is False
+    assert "delete_all_stock" in events[1][1]["error"]
+
+    assert audit_calls[0]["tools_called"] == [
+        {"name": "delete_all_stock", "ok": False, "error": events[1][1]["error"]}
+    ]
+
+
+def test_breaker_open_short_circuits_before_any_gemini_call(monkeypatch, audit_calls):
+    fake = _FakeClient(turns=[])  # popping a turn would IndexError -- must never be reached
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+    monkeypatch.setattr(ai_core._breaker, "allow", lambda: False)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["degraded", "done"]
+    assert fake.calls == []
+    assert audit_calls[0]["outcome"] == "breaker_open"
+
+
+def test_gemini_stream_error_degrades_instead_of_crashing(monkeypatch, audit_calls):
+    class _BoomModels:
+        async def generate_content_stream(self, *, model, contents, config):
+            raise RuntimeError("upstream 503")
+            yield  # pragma: no cover -- makes this an async generator function
+
+    fake = SimpleNamespace(aio=SimpleNamespace(models=_BoomModels()))
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    assert res.status_code == 200
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["degraded", "done"]
+    assert audit_calls[0]["outcome"] == "error"
+    assert ai_core._breaker.state == "CLOSED"  # one failure, below the trip threshold
+
+
+def test_no_gemini_key_short_circuits_without_touching_the_breaker_or_client(
+    monkeypatch, audit_calls
+):
+    from medstock_shared.config import settings
+
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+    fake_client_fn = MagicMock()
+    monkeypatch.setattr("app.copilot.client", fake_client_fn)
+
+    res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "hi"}]})
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["degraded", "done"]
+    assert fake_client_fn.call_count == 0
+    assert audit_calls == []  # not even an audit row -- this never became a real turn
+
+
+def test_chat_requires_copilot_permission():
+    unknown_role = Principal("user-9", "hospital-1", "not-a-real-role")
+    res = _client(unknown_role).post("/copilot/chat", json={"messages": []})
+    assert res.status_code == 403
+
+
+def test_declarations_are_scoped_to_the_caller_role():
+    """No mocking -- the real registry, populated by the real pharmacy.py."""
+    from medstock_shared.ai.tools import declarations_for
+
+    names = {d["name"] for d in declarations_for(PHARMACIST)}
+    assert names == {"search_analogues_rxnorm", "verify_batch_cert"}
+    assert declarations_for(Principal("u", "h", "not-a-real-role")) == []

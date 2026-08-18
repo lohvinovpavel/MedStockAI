@@ -25,6 +25,8 @@ from medstock_shared.stock import stock_fields
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
+from app.copilot import copilot
+
 app = FastAPI(title="analogue")
 drugs = APIRouter()
 _log = logging.getLogger("analogue")
@@ -371,3 +373,6 @@ def get_analogues(
 
 app.include_router(drugs)
 app.include_router(drugs, prefix="/api/analogue")
+
+app.include_router(copilot)
+app.include_router(copilot, prefix="/api/analogue")

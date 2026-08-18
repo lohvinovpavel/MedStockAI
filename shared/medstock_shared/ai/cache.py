@@ -74,26 +74,32 @@ def write_audit(
     model_name: str,
     outcome: str,
     latency_ms: int,
+    tools_called: list | None = None,
 ) -> None:
     """Best-effort, same fail-open posture as cache_get/cache_put above: an
     audit write failure must not turn into a 500 for the request it is
     describing. `ask_ai()` calls this exactly once per call, after the
-    outcome (cache_hit / live / breaker_open / error) is already decided."""
+    outcome (cache_hit / live / breaker_open / error) is already decided.
+
+    `tools_called` is copilot-only (docs/ai-module-plan.md Phase 4); every
+    other caller leaves it `None` and gets the column's `[]` default."""
+    values: dict = {
+        "hospital_id": hospital_id,
+        "actor_id": actor_id,
+        "request_id": request_id,
+        "task_type": task_type,
+        "dedupe_key": dedupe_key,
+        "prompt_version": prompt_version,
+        "model_name": model_name,
+        "outcome": outcome,
+        "latency_ms": latency_ms,
+    }
+    if tools_called is not None:
+        values["tools_called"] = tools_called
+
     session = SessionLocal()
     try:
-        session.execute(
-            insert(AIAuditLog).values(
-                hospital_id=hospital_id,
-                actor_id=actor_id,
-                request_id=request_id,
-                task_type=task_type,
-                dedupe_key=dedupe_key,
-                prompt_version=prompt_version,
-                model_name=model_name,
-                outcome=outcome,
-                latency_ms=latency_ms,
-            )
-        )
+        session.execute(insert(AIAuditLog).values(**values))
         session.commit()
     except SQLAlchemyError:
         session.rollback()
