@@ -1,7 +1,7 @@
 # B2 — Facility-scoped stock read
 
 **Service:** `inventory` · **Flows:** 3, 4, 7, 14 · **Depends on:** B1
-**Status:** ✅ (wave 2). `GET /stock?rxcui=&facility_id=` and `GET /items` read `stock_snapshot`; the inventory page uses `InventoryProvider` → live API, not `mock-data.ts`.
+**Status:** ✅ (wave 2). `GET /stock?rxcui=&facility_id=` and `GET /items` read `stock_snapshot`; the inventory page uses `InventoryProvider` → live API.
 
 ## Goal
 

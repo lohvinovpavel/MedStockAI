@@ -5,7 +5,7 @@
 
 ## Goal
 
-Flow 18's Export button fires a toast and produces nothing. The export is the artefact the
+Flow 18's Export button downloads `GET /export/compliance.csv`. The export is the artefact the
 whole compliance story exists to produce: a file a regulator or auditor reads without needing
 access to the application.
 

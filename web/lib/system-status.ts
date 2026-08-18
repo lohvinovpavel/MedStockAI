@@ -1,4 +1,4 @@
-/** Footer telemetry. Static on purpose — not a second mock catalog. */
+/** Footer telemetry. Static on purpose — display-only copy, not a live feed. */
 export const systemStatus = {
   rxNormSyncMinutesAgo: 4,
   gkeCluster: "gke-europe-west3-a",

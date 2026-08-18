@@ -19,8 +19,8 @@ pack list, so resolvers union this map with `ndcs_for_rxcui`.
 Wave 4: partner-site stock for the three shortage SKUs and the four
 suppliers (unit costs, lead times) so G1/F2 stay live.
 
-Wave 5: `DEMO_ORDERS` plants the purchase-order history `/orders` used
-to keep in browser memory (PO-2026-0141 … 0148).
+Wave 5: `DEMO_ORDERS` plants the purchase-order history `/orders` shows
+(PO-2026-0141 … 0148).
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ DASHBOARD_SHELF: tuple[dict, ...] = (
 )
 
 # Per-site depth: clinics omit ICU SKUs; warehouse is bulk.
-# burnFactor stays on the mock (orders/forecasts/shortages still read it).
+# `stock_factor` scales on-hand qty; forecasts read `consumption_daily`, not a burn factor.
 FACILITY_SHELF_PROFILE: dict[str, dict] = {
     "central": {"stock_factor": 1.0, "absent": ()},
     "riverside": {"stock_factor": 0.35, "absent": ("inv-002", "inv-005")},
@@ -211,7 +211,7 @@ FACILITY_SHELF_PROFILE: dict[str, dict] = {
 
 
 def lot_for(item: dict, facility_code: str) -> str:
-    """Same suffix rule as mock `inventoryFor()` (`facilityId.slice(-2)`)."""
+    """Lot suffix: last two chars of the facility code, uppercased."""
     lot = str(item["lot"])
     if facility_code == "central":
         return lot
@@ -249,7 +249,7 @@ def shelf_stock_rows(hospital_id, fac_ids: dict[str, int]) -> list[dict]:
     return rows
 
 
-# Mock shortageAlerts sa-01/02/03 (Norepinephrine, Ceftriaxone, Heparin).
+# Demo shortage alerts (Norepinephrine, Ceftriaxone, Heparin).
 # Those SKUs sit at/below par from the B5 seed, so B3 `uncovered` is a real claim.
 # Identified by shelf `id` so the COMP-1 NDC regex still sees exactly 11 NDCs.
 DEMO_SHORTAGE_SPECS: tuple[dict, ...] = (
@@ -276,9 +276,9 @@ DEMO_SHORTAGE_SPECS: tuple[dict, ...] = (
     },
 )
 
-# Partner-facility figures from mock PARTNER_SHORTAGE_STOCK. Missing entries
-# mean no visibility (omit the snapshot), not zero stock. Units match the
-# mock; days_of_supply is planted as trailing consumption so G1/E2 agree.
+# Partner-facility figures for the shortage matrix. Missing entries mean
+# no visibility (omit the snapshot), not zero stock. days_of_supply is
+# planted as trailing consumption so G1/E2 agree.
 PARTNER_SHORTAGE_STOCK: dict[str, dict[str, dict]] = {
     "inv-005": {
         "st-luke": {"units": 0, "days_of_supply": 0},
@@ -294,7 +294,7 @@ PARTNER_SHORTAGE_STOCK: dict[str, dict[str, dict]] = {
 }
 
 # Demo suppliers — catalog keyed by shelf `id`.
-# Pack size 1 / min 1 so later F3 can consume these unit costs as the mock did.
+# Pack size 1 / min 1 so F3 can consume these unit costs as-is.
 DEMO_SUPPLIERS: tuple[dict, ...] = (
     {
         "name": "PharmaSource Global Ltd.",
@@ -370,7 +370,7 @@ DEMO_SUPPLIERS: tuple[dict, ...] = (
     },
 )
 
-# Seeded purchase orders so /orders matches the old in-memory demo after regen.
+# Seeded purchase orders so /orders is populated after a regen.
 # Dates are offsets from today. unit_cost is taken from DEMO_SUPPLIERS at seed time.
 DEMO_ORDERS: tuple[dict, ...] = (
     {
@@ -485,7 +485,7 @@ def formulary_rxcuis() -> list[str]:
 
 
 def demo_shortage_rows() -> list[dict]:
-    """`shortage_event` payloads aligned with mock shortage alerts."""
+    """`shortage_event` payloads aligned with DEMO_SHORTAGE_SPECS."""
     by_id = {item["id"]: item for item in DASHBOARD_SHELF}
     rows: list[dict] = []
     for spec in DEMO_SHORTAGE_SPECS:
@@ -572,7 +572,7 @@ def partner_shortage_consumption_rows(
 
 
 def demo_supplier_rows(hospital_id) -> tuple[list[dict], list[dict]]:
-    """Supplier + catalog rows keyed by mock names / dashboard NDCs."""
+    """Supplier + catalog rows keyed by DEMO_SUPPLIERS names / dashboard NDCs."""
     by_id = {item["id"]: item for item in DASHBOARD_SHELF}
     suppliers: list[dict] = []
     catalog: list[dict] = []

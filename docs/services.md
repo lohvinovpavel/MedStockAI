@@ -539,9 +539,10 @@ schedule caught by `startingDeadlineSeconds`.
    exempt. Any new tenant table (`purchase_order`, `transfer_request`, …) must get a
    policy in the same migration that creates it. The app role must not own the tables.
    (`ai_cache` remains global on purpose — no `hospital_id`.)
-3. **Stock data source for the MVP** — CSV, synthetic generator, or a self-written mock
-   distributor API. Days-of-supply is the core metric and no public feed provides it. Blocks
-   the `formulary_item` / `stock_snapshot` schema.
+3. **Stock data source for the MVP** — decided: synthetic demo seed
+   (`shared/medstock_shared/demo_shelf.py`, loaded by `seed_demo` / `seed_stock`).
+   Days-of-supply is the core metric and no public feed provides it. Tenant stock
+   lives in `stock_snapshot` / `stock_batch`; it is not a frontend catalog.
 4. **User ↔ hospital cardinality** — one, or many via `membership`. Decided default: one per
    user *now*, but role stored in `membership` from day one so the change is a migration, not
    an auth rewrite.

@@ -79,7 +79,7 @@ Start at the bottom of the ladder and only climb if the error demands it:
 2. If that is materially wrong, `statsforecast` (`AutoETS`/`AutoTheta`) — a single small
    dependency, native quantile output.
 3. Gradient boosting with **quantile loss** only if 1 and 2 both fail on real data. Not
-   MSE-with-a-guessed-band, which is the mock's current dishonesty in a costlier form.
+   MSE-with-a-guessed-band, which is a guessed interval dressed as a quantile.
 
 Whatever ships, `model_version` records it per row, so a chart can always say what drew it.
 

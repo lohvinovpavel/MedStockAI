@@ -23,9 +23,10 @@ HOSPITAL_ID = uuid.uuid5(uuid.NAMESPACE_URL, "https://medstock.ai/demo/st-marys-
 LEGACY_DEMO_HOSPITAL_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 LEGACY_DEMO_HOSPITAL_NAME = "DEMO GENERAL HOSPITAL"
 
-# B1 rule 1: codes are the mock's slugs so the web app migrates without a
-# translation table. lat/lon are placed so haversine reproduces the mock's
-# distanceKm from central (0 / 19 / 41 / 34 / 12 / 27 km).
+# B1 rule 1: codes are the dashboard slugs the web client sends (`central`,
+# `riverside`, …) so there is no translation table. lat/lon are placed so
+# haversine reproduces the original distances from central
+# (0 / 19 / 41 / 34 / 12 / 27 km).
 # `scale` sizes consumption relative to central; None = partner site, no
 # consumption history (their stock only feeds the shortage matrix).
 FACILITIES: list[dict] = [

@@ -3,7 +3,7 @@
 **Service:** `inventory` · **Flows:** 4, 16 · **Status:** ✅ (wave 3) · **Depends on:** B2, B6, `ingest-shortages`
 
 > The hourly FDA feed in `services/ingest/app/shortages.py` is still unverified. B3 joins
-> the existing `shortage_event` table; the demo plants the three mock-aligned rows
+> the existing `shortage_event` table; the demo plants the three dashboard-aligned rows
 > (Norepinephrine, Ceftriaxone, Heparin) so `uncovered` is a real claim.
 >
 > NDC resolution uses `demo_shelf` / `Drug.raw` / `consumption_daily` first and only

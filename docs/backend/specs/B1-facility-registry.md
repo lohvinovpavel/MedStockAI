@@ -11,14 +11,15 @@
 > A `storage_location` table backs `GET /locations`, with `kind` driving condition
 > monitoring (see backend-features B7). Cross-tenant 404 is A4 (wave 2). Wave 1: the
 > sidebar switcher reads `GET /facilities?operated=true` and sends `code`. Wave 2: the
-> inventory table reads `GET /inventory/items`; orders/shortage keys stay mock codes.
+> inventory table reads `GET /inventory/items`. Orders and shortages key on the same
+> B1 `code`s via live APIs (`GET /orders`, `GET /shortages`).
 
 ## Goal
 
 `stock_snapshot.location_id` used to be a bare `Text` column where `''` meant "hospital-wide".
 Give facilities a table (`code`, type, geo, `operated`) before anything else keys on
 `facility_id`. Wave 1: the sidebar reads `GET /facilities?operated=true` and stores `code`;
-orders/shortage mock keys were renamed to those codes. Distances in the sidebar
+order and shortage keys were renamed to those codes. Distances in the sidebar
 are haversine from the **selected** site (`web/lib/geo.ts`). Wave 2: the inventory table
 reads `GET /items?facility_id=` (B2/B4/B5).
 
@@ -73,12 +74,12 @@ RLS policy per A4.
 
 ## Rules
 
-1. `code` is what the web client sends; `id` is internal. Seed with the mock's slugs
+1. `code` is what the web client sends; `id` is internal. Seed with the dashboard slugs
    (`central`, `riverside`, `westend`, `warehouse-north`, plus the two partner sites) so the
-   front end migrates without a translation table.
+   front end needs no translation table.
 2. `operated = false` marks partner sites (St. Luke, Mercy) whose stock the shortage matrix
    displays but which never appear in the facility switcher.
-3. Distance is **computed, not stored**. The mock's `distanceKm` is measured from Central,
+3. Distance is **computed, not stored**. The original dashboard's `distanceKm` was measured from Central,
    which is what produced the "Central Hospital · 0km away" bug when viewing from a clinic.
    Haversine over `lat`/`lon`, relative to the requesting facility.
    `ponytail: haversine in Python at six rows; PostGIS when this becomes a real geo query.`

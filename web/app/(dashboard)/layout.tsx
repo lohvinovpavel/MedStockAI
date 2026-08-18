@@ -12,7 +12,7 @@ import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
 import { systemStatus } from "@/lib/system-status";
 
 // Footer's live telemetry strip — ticks the RxNorm sync clock forward once
-// a minute so the footer reads as a monitored system, not a static mock.
+// a minute so the footer reads as a monitored system, not a frozen timestamp.
 function LiveTelemetry() {
   const [elapsedMin, setElapsedMin] = useState(0);
   useEffect(() => {

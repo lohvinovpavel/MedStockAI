@@ -5,9 +5,8 @@
 
 ## Goal
 
-Flow 17 selects a surplus facility, a quantity, and renders a dispatch reference. No stock
-moves, nothing is recorded, and the transfer never becomes anything. Make it a real movement
-with a lifecycle — it is the cheaper answer to a shortage than a purchase order, and the
+Flow 17 selects a surplus facility, a quantity, and posts a `transfer_request`. Dispatch
+debits source stock. It is the cheaper answer to a shortage than a purchase order, and the
 product's "redistribution network" claim rests on it.
 
 ## API

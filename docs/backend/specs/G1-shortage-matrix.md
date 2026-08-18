@@ -7,9 +7,9 @@
 
 Flow 16 picks a shortage alert and shows coverage across every facility, colour-coded, with
 surplus donors identified. It is the input to G2's transfer and the reason the product claims a
-"live regional shortage-redistribution network". Today the entire matrix is a fixture — and
-`docs/specs/UX-07` records that it contradicts the inventory page, because two mock datasets
-disagree.
+"live regional shortage-redistribution network". Coverage is derived from live `stock_snapshot`
+plus trailing-mean days-of-supply (E2) — one derivation, not a second fixture.
+(`docs/specs/UX-07` existed because two client-side datasets used to disagree.)
 
 ## API
 
@@ -54,8 +54,8 @@ warehouse surplus).
 
 ## Rules
 
-1. One derivation of coverage, shared with B2's `status`. Two implementations is how the mock
-   ended up contradicting itself; the fix is a shared helper, not two carefully-matched copies.
+1. One derivation of coverage, shared with B2's `status`. Two implementations is how the old
+   client fixtures contradicted each other; the fix is a shared helper, not two carefully-matched copies.
 2. `distance_km` is relative to `viewing_from`, not to a fixed origin. Reintroducing an
    absolute origin recreates the "Central Hospital · 0km away" bug.
 3. Partner facilities (`operated = false`) appear in coverage — seeing a partner's surplus is

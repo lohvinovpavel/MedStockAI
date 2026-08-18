@@ -1,6 +1,6 @@
 # MedStock AI — User Flows
 
-Derived from the shipped mock dashboard in `web/` (pages, dialogs, and context
+Derived from the shipped dashboard in `web/` (pages, dialogs, and context
 providers as wired today), not from marketing copy. Each row is one flow from
 its entry point to its terminal state.
 
@@ -47,7 +47,7 @@ services and tables that have to exist behind them.
 
 ## Data source per screen
 
-User-facing screens must not mix a mock catalog with a live API on the same table.
+User-facing screens must not mix a client-side fixture with a live API on the same table.
 
 | Screen | Source of truth |
 |---|---|

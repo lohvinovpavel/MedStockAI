@@ -6,8 +6,8 @@
 ## Goal
 
 Flow 12's card is the product's headline moment: the system notices a depletion and proposes an
-order a human accepts or declines. Today "Create Draft Order" writes to React state. Make the
-proposal a stored, auditable decision — and make declining it as first-class as accepting it.
+order a human accepts or declines. "Create Draft Order" materialises a `review_decision` and
+approves it; declining is a first-class write, not discarded client state.
 
 ## API
 

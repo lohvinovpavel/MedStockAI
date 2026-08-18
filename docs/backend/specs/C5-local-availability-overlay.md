@@ -51,8 +51,8 @@ caller breaks.
    Mixing the two would make a mediocre substitute outrank a good one because a shelf happened
    to be full.
 3. Distance is relative to `facility_id`, not to Central. This is the exact bug already fixed
-   on the mock side (`Math.abs(f.distanceKm - facility.distanceKm)`); do not reintroduce it
-   server-side.
+   in the facility switcher (`web/lib/geo.ts` — relative haversine, not an absolute origin);
+   do not reintroduce it server-side.
 4. If the stock query fails, return the analogue list with `availability: null` and a
    `stock_degraded: true` flag rather than failing the whole request — same degradation
    principle as `ask_ai` failing back to the unfiltered list.

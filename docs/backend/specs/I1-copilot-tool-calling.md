@@ -5,9 +5,8 @@
 
 ## Goal
 
-The drawer returns hardcoded strings from a `switch` in `CopilotDrawer.tsx`. Make it a real
-model conversation whose answers come from the services that already own the data — never from
-the model's own knowledge of drugs.
+The drawer is a real model conversation (`POST /api/copilot/messages`) whose answers come from
+the services that already own the data — never from the model's own knowledge of drugs.
 
 **No framework.** `ask_ai()` is already the orchestration layer: registry, cache, validation,
 degradation, in ~150 commented lines the team owns. LangChain would replace that with control

@@ -7,8 +7,8 @@
 
 "Days of supply is the core metric of the whole product" (`docs/services.md` §3). The formula
 lives in `GET /at-risk` and `GET /days-of-supply`. `/forecasts` is the consumer that is live;
-the inventory table uses B5 par status (wave 2). The shortage matrix still computes a local
-mock days-of-supply.
+the inventory table uses B5 par status (wave 2). G1 shortage coverage attaches trailing-mean
+`days_of_supply` when consumption exists.
 
 ## API
 

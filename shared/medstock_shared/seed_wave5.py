@@ -1,4 +1,4 @@
-"""Wave 5 demo seed: purchase orders matching the old in-memory order history.
+"""Wave 5 demo seed: purchase orders matching DEMO_ORDERS (PO-2026-0141 … 0148).
 
 Called from seed_demo and seed_stock. Actor GUC must already be set (H1).
 Does not receive delivered orders into stock — shelf quantities are planted

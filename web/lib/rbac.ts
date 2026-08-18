@@ -51,7 +51,7 @@ export function canAccessPage(role: string | undefined, path: string): boolean {
   return !!role && allowed.includes(role as Role);
 }
 
-/** In-page action gates for the mock pages above — see docs/rbac-matrix.md. */
+/** In-page action gates for the pages above — see docs/rbac-matrix.md. Hiding a button is a courtesy; endpoints still 403. */
 export const CAN: Record<string, Role[]> = {
   receiveBatch: ["pharmacist", "admin"],
   placeOrder: ["admin"],

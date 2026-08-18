@@ -4,10 +4,10 @@
 
 ## Goal
 
-The drawer's conversation lives in `useState` and dies on refresh or navigation. Two reasons to
-store it: continuity across a page change (the drawer follows the user between inventory and
-forecasts), and evidence — a copilot that influenced a substitution decision must leave
-something the audit trail can point at.
+Conversations persist in `copilot_conversation` / `copilot_message` so a reload does not wipe
+the drawer. Two reasons to store it: continuity across a page change (the drawer follows the
+user between inventory and forecasts), and evidence — a copilot that influenced a substitution
+decision must leave something the audit trail can point at.
 
 ## API
 

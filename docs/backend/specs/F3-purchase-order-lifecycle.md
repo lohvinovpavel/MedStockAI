@@ -5,9 +5,9 @@
 
 ## Goal
 
-Both order entry points — the AI draft from flow 12 and the manual form in flow 14 — converge
-on one store today (`web/lib/orders-context.tsx`) that vanishes on refresh. Give it a table, a
-state machine the server enforces, and a delivery step that actually moves stock.
+Both order entry points — the AI draft from flow 12 and the manual form in flow 14 — write
+`purchase_order` in Postgres. `web/lib/orders-context.tsx` is a fetch cache over `GET /orders`,
+not the store. The server enforces the state machine; `delivered` moves stock through B4.
 
 ## API
 
@@ -81,8 +81,8 @@ Any other transition is 409 with the current status in the body.
 
 ## Rules
 
-1. `ref` is allocated by a Postgres sequence, formatted `PO-<year>-<seq:04d>`. The mock's
-   in-memory `nextRef = 149` counter is not portable across replicas.
+1. `ref` is allocated by a Postgres sequence, formatted `PO-<year>-<seq:04d>`. A client-side
+   counter is not portable across replicas.
 2. `unit_cost` is copied from F2 at creation. An order total must stay reproducible after a
    price update — the same reasoning as `drug_certification.ruleset_version`.
 3. **`delivered` writes stock.** The transition creates a `stock_batch` (B4) per line, in the
