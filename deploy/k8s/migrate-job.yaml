@@ -5,7 +5,19 @@ kind: Job
 metadata:
   name: migrate
 spec:
-  backoffLimit: 1
+  # Two attempts. One is too few on a spot node pool, where a preemption mid-run
+  # is ordinary rather than exceptional and says nothing about the migration.
+  # More would be wrong: a migration that genuinely fails fails identically on
+  # every retry, and each attempt takes the schema lock again.
+  backoffLimit: 2
+  # A ceiling on the whole Job, retries included, and deliberately SHORTER than
+  # the wait in .github/workflows/deploy-dev.yml. Without it a stuck attempt has
+  # no terminal state at all: the Job neither completes nor fails, so CI hits its
+  # own timeout and reports the one message that distinguishes nothing. With it
+  # the Job always reaches Complete or Failed first, and CI can say which.
+  # Comfortably above the real runtime -- the whole chain applies in seconds
+  # against an empty schema.
+  activeDeadlineSeconds: 480
   template:
     spec:
       restartPolicy: Never
@@ -18,3 +30,12 @@ spec:
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef: { name: medstock-db, key: url }
+        # Declared so the pod is Burstable rather than BestEffort. With no
+        # requests at all the scheduler places this last and the kubelet evicts
+        # it first -- on a spot e2-medium pool (infra/terraform/dev/gke.tf) that
+        # is a pod which sits Pending, produces no logs, and looks exactly like
+        # a migration that hung. Small on purpose: alembic is idle on the
+        # network for most of its run.
+        resources:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits: { memory: 512Mi }

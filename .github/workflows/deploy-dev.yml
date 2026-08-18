@@ -207,8 +207,11 @@ jobs:
           # neither does inside the window, the job is genuinely stuck — most
           # often blocked on a lock, because this runs before the rollout and
           # the old pods still hold their connections.
-          kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s & ok=$!
-          kubectl -n medstock wait --for=condition=failed   job/migrate --timeout=300s & bad=$!
+          # 600s > the Job's activeDeadlineSeconds (480), so the Job reaches a
+          # terminal condition before this gives up. If this ever fires first,
+          # something is wrong with the Job spec rather than the migration.
+          kubectl -n medstock wait --for=condition=complete job/migrate --timeout=600s & ok=$!
+          kubectl -n medstock wait --for=condition=failed   job/migrate --timeout=600s & bad=$!
           wait -n "$ok" "$bad" || true
 
           if kubectl -n medstock get job migrate -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' | grep -q True; then

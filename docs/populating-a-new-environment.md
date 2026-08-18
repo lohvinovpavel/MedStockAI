@@ -41,6 +41,46 @@ CPIC, accessdata.fda.gov and a news index.
 
 ---
 
+## 1a. When `migrate` times out
+
+`error: timed out waiting for the condition on jobs/migrate` is not a diagnosis.
+`kubectl wait --for=condition=complete` only watches for success, so that exact
+message appears when the job **failed**, when it is **still running**, and when
+its pod **never started**. Do not read it as "the migration is slow".
+
+The Job now bounds itself (`activeDeadlineSeconds`, deliberately shorter than
+CI's wait) so it always reaches Complete or Failed, and the workflow prints
+`describe`, the pod list and the pod logs on anything other than success. Start
+there.
+
+If the logs say `cannot reach the database, so no migration ran`, the schema was
+never touched — check the instance is up before looking at anything else:
+
+```bash
+gcloud sql instances list --project <project>
+```
+
+If there are **no logs at all**, the container never ran. That is a scheduling
+problem, not a migration one: the dev node pool is spot `e2-medium`
+(`infra/terraform/dev/gke.tf`), so capacity comes and goes.
+
+```bash
+kubectl -n medstock describe job/migrate | tail -30
+kubectl -n medstock get events --sort-by=.lastTimestamp | tail -20
+```
+
+Cloud Logging keeps pod output after the Job is deleted, which matters because
+every CI run starts with `kubectl delete job migrate` — re-running destroys the
+evidence from the last failure:
+
+```
+resource.type="k8s_container"
+resource.labels.namespace_name="medstock"
+labels."k8s-pod/job-name"="migrate"
+```
+
+---
+
 ## 2. Run them once, in this order
 
 ```bash
