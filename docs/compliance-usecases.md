@@ -217,7 +217,7 @@ same convention as `services/ingest`. Do not schedule anything marked `verify`.
 | **openFDA Enforcement** | `api.fda.gov/drug/enforcement.json` | none | Recall class I/II/III, `status` ongoing/terminated, reason text | daily |
 | **openFDA Drug Label** | `api.fda.gov/drug/label.json` | none | SPL text — the input to `extract` in COMP-2 | on demand |
 | **FDA Import Alerts (DWPE)** | `accessdata.fda.gov/cms_ia/ialist.html` — alerts **66-40** (GMP failure) and **66-41** (unapproved drugs) | none | **The import-certification source.** Foreign manufacturers detained without physical examination | weekly · `verify` |
-| **FDA Warning Letters** | `fda.gov` compliance-actions listing | none | Open enforcement action against a labeler | weekly · `verify` |
+| **FDA Warning Letters** | `…/warning-letters/datatables-data` — an **XLSX export**, not JSON | none | A letter issued to a labeler. **Not** whether it is still open — see below | weekly · **built** |
 | **FDA Inspection Classification** | FDA inspections dataset export | none | OAI / VAI / NAI per site — OAI is the Yellow signal | monthly · `verify` |
 | **FDA Drug Establishment Registration** | DECRS export | none | Is the foreign establishment registered at all | monthly · `verify` |
 | **EMA / EudraGMDP** | EudraGMDP portal | none | GMP certificates and **non-compliance statements** for non-US sites | monthly · `verify` |
@@ -330,7 +330,23 @@ findings are replayed, not re-fetched.
    says so, rather than wrong ones. `--dry-run` shows what the parser found before anything is
    written.
 
-   Warning letters and EudraGMDP remain unscraped; import alerts were the load-bearing one.
+   **Warning letters are built too**, and verifying the source changed the design twice. The
+   listing posts to a `datatables-data` endpoint that answers with an XLSX workbook despite the
+   URL, which is sturdier than the rendered table and needs no Excel dependency — the sheet is
+   flat, so `zipfile` plus shared strings is enough.
+
+   More important: **the export cannot say whether an action is open.** It carries a
+   `Closeout Letter` column that is empty on all 1 000 rows, while `Response Letter` is populated
+   on 128 — the closeout hyperlink does not survive the export. So the finding says a letter *was
+   issued*, names the firm, date and subject, and states that closeout status is not published.
+   Claiming an open investigation from a source that does not publish closure would be the one
+   dishonest finding in the module, and a test asserts the words never appear.
+
+   The endpoint caps at 1 000 rows however it is paged, but they are recent (newest 2026-04-09 on
+   the last run, 219 of 989 from CDER), and anything older than three years is dropped at finding
+   time anyway.
+
+   EudraGMDP and inspection classifications remain unscraped.
 4. **Two calls vs. a SQL join** for the inventory badge — §2.2.
 5. ~~**New permissions.**~~ **Done.** `certificate:read` and `certification:explore` are in
    `shared/medstock_shared/auth.py`, and `/status`, `/certificates/{ndc}` and `/explore` are on

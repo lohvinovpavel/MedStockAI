@@ -147,6 +147,12 @@ RULES: dict[str, Rule] = {
         False,
         "Labeler is on FDA Import Alert 66-41 — detained as an unapproved drug",
     ),
+    "WARNING_LETTER": Rule(
+        Category.ENFORCEMENT,
+        Severity.YELLOW,
+        True,
+        "FDA issued a warning letter to this labeler",
+    ),
     # News. §4.3 makes this structural: an article is an unverified claim about
     # a third party, so it can raise yellow and never red. Acting on one as fact
     # would let the system call a drug uncertified because a blog said so.
@@ -257,6 +263,23 @@ class Shortage:
 
 
 @dataclass(frozen=True)
+class WarningAction:
+    """One FDA warning letter, already matched to this NDC's labeler.
+
+    No `closed` field, deliberately. FDA's export publishes a Closeout Letter
+    column and leaves it empty on every row, so whether the action is still
+    open is simply not in the data — and a field for it would invite a caller
+    to assume one.
+    """
+
+    company_name: str
+    issue_date: date | None = None
+    issuing_office: str = ""
+    subject: str = ""
+    source_url: str = ""
+
+
+@dataclass(frozen=True)
 class AlertListing:
     """One Red List entry, already matched to this NDC's labeler."""
 
@@ -282,6 +305,9 @@ ENFORCEMENT = "openFDA Enforcement"
 SHORTAGES = "openFDA Drug Shortages"
 RXNORM = "RxNorm NDC Status (NLM)"
 IMPORT_ALERTS = "FDA Import Alerts (DWPE)"
+WARNING_LETTERS = "FDA Warning Letters"
+# A letter from six years ago is history, not something to act on today.
+WARNING_LETTER_WINDOW_DAYS = 3 * 365
 NEWS = "Press reporting"
 _IMPORT_ALERT_RULES = {"66-40": "IMPORT_ALERT_GMP", "66-41": "IMPORT_ALERT_UNAPPROVED"}
 _NDC_URL = "https://api.fda.gov/drug/ndc.json"
@@ -366,6 +392,7 @@ def evaluate(
     recalls: Sequence[Recall] = (),
     shortages: Sequence[Shortage] = (),
     import_alerts: Sequence[AlertListing] = (),
+    warning_letters: Sequence[WarningAction] = (),
     news: Sequence[NewsItem] = (),
     ndc_status: object | None = None,
     in_directory: bool = True,
@@ -486,6 +513,30 @@ def evaluate(
             IMPORT_ALERTS,
             listing.source_url,
             listing.alert_number,
+        )
+
+    # --- open enforcement (§4.1) -------------------------------------------
+    # Yellow, and transient because a warning letter is an event that resolves.
+    #
+    # The message says a letter *was issued* and never that an investigation is
+    # open, because FDA's feed does not publish closeout status — see
+    # models.WarningLetter. Claiming "open" from a source that cannot say so
+    # would be the one dishonest finding in this module.
+    for letter in warning_letters:
+        if letter.issue_date is not None:
+            age = (today - letter.issue_date).days
+            if age > WARNING_LETTER_WINDOW_DAYS or age < 0:
+                continue
+        when_issued = f" on {letter.issue_date.isoformat()}" if letter.issue_date else ""
+        office = f" ({letter.issuing_office})" if letter.issuing_office else ""
+        topic = f" — {letter.subject}" if letter.subject else ""
+        add(
+            "WARNING_LETTER",
+            f"FDA warning letter to '{letter.company_name}'{when_issued}{office}{topic}. "
+            "Closeout status is not published in this feed; check FDA before "
+            "treating it as resolved.",
+            WARNING_LETTERS,
+            letter.source_url,
         )
 
     # --- news (§4.2, and §4.3 for why it stops at yellow) -------------------

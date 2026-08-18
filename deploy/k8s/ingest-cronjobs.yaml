@@ -216,3 +216,37 @@ spec:
             resources:
               requests: { cpu: 50m, memory: 64Mi }
               limits: { memory: 256Mi }
+---
+# Open enforcement: FDA warning letters -> warning_letter.
+# Weekly, alongside import alerts. The source is an XLSX export behind the
+# warning-letters listing, not a scrape — sturdier, and it needs no Excel
+# dependency because the sheet is flat.
+#
+# The export does not publish closeout status, so the finding this feeds says a
+# letter was issued and never that an investigation is open. See
+# compliance-usecases.md §4.1.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-warning-letters
+spec:
+  schedule: "30 4 * * 1"   # Mondays, after import alerts at 04:00
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: warning-letters
+            image: ghcr.io/medstockai/ingest:latest
+            command: ["python", "-m", "app.warning_letters"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: medstock-db, key: url }
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { memory: 256Mi }

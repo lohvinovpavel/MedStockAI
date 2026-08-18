@@ -36,6 +36,7 @@ from medstock_shared.certification import (
     AlertListing,
     Recall,
     Shortage,
+    WarningAction,
     evaluate,
     firm_key,
     ndc11,
@@ -49,6 +50,7 @@ from medstock_shared.models import (
     DrugCertification,
     ImportAlert,
     StockSnapshot,
+    WarningLetter,
 )
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
@@ -147,6 +149,29 @@ def import_alerts_for(labeler: str | None) -> list[AlertListing]:
                     firm_name=r.firm_name,
                     country=r.country or "",
                     listed_at=r.listed_at,
+                    source_url=r.source_url or "",
+                )
+                for r in rows
+            ]
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+
+
+def warning_letters_for(labeler: str | None) -> list[WarningAction]:
+    """Warning letters naming this labeler. Same exact match as import alerts."""
+    if not labeler:
+        return []
+    try:
+        with SessionLocal() as session:
+            rows = session.scalars(
+                select(WarningLetter).where(WarningLetter.firm_key == firm_key(labeler))
+            ).all()
+            return [
+                WarningAction(
+                    company_name=r.company_name,
+                    issue_date=r.issue_date,
+                    issuing_office=r.issuing_office or "",
+                    subject=r.subject or "",
                     source_url=r.source_url or "",
                 )
                 for r in rows
@@ -292,6 +317,7 @@ def _product_to_rows(
     # The scheduled path applies the same rule as the on-demand one so a badge
     # does not change colour depending on which produced it.
     listings = import_alerts_for(product.get("labeler_name"))
+    letters = warning_letters_for(product.get("labeler_name"))
 
     rows: list[tuple[dict, list[dict]]] = []
     for key in keys:
@@ -300,6 +326,7 @@ def _product_to_rows(
             recalls=recalls,
             shortages=shortages.get(key, ()),
             import_alerts=listings,
+            warning_letters=letters,
             today=today,
         )
         certification = {

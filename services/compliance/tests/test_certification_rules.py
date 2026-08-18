@@ -19,6 +19,7 @@ from medstock_shared.certification import (
     Severity,
     Shortage,
     Status,
+    WarningAction,
     attention_for,
     evaluate,
     ndc11,
@@ -312,6 +313,7 @@ def test_every_published_rule_is_reachable():
                 AlertListing(alert_number="66-41", firm_name="B"),
             ],
             news=[NewsItem(headline="story", url="https://x.test/1")],
+            warning_letters=[WarningAction(company_name="A", issue_date=TODAY)],
             today=TODAY,
         )
     )

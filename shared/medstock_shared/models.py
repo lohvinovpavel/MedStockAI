@@ -427,6 +427,46 @@ class Patient(Base):
     )
 
 
+class WarningLetter(Base):
+    """An FDA warning letter naming a firm — an enforcement action, not a defect.
+
+    Reference class. docs/compliance-usecases.md §4.1 lists this as "open
+    enforcement action against a labeler".
+
+    **This table cannot tell you whether the action is still open**, and that is
+    a property of the source rather than a shortcut taken here. FDA's export
+    carries a `Closeout Letter` column and it is empty on every one of the
+    1 000 rows it returns, while `Response Letter` is populated on 128 of them —
+    so the closeout hyperlink simply does not survive the export. Any finding
+    built on this therefore says a letter *was issued* and says plainly that
+    closeout status is not published, rather than claiming an investigation is
+    open when the data cannot support it.
+    """
+
+    __tablename__ = "warning_letter"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    company_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Normalised for the labeler match — see certification.firm_key.
+    firm_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    issue_date: Mapped[date | None] = mapped_column(Date)
+    posted_date: Mapped[date | None] = mapped_column(Date)
+    # "Center for Drug Evaluation and Research | CDER" and friends. Kept because
+    # a tobacco letter and a drug letter are very different conversations.
+    issuing_office: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(Text)
+    # Whether the firm has responded. Present in the export, unlike closeout.
+    has_response: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("company_name", "issue_date", "subject", name="uq_warning_letter"),
+    )
+
+
 class ImportAlert(Base):
     """A foreign establishment on an FDA Import Alert Red List.
 
