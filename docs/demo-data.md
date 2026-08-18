@@ -15,7 +15,7 @@ That line is not a demo convenience — it is exactly the table split already in
 | Class | Tables | In the demo |
 |---|---|---|
 | **Reference** | `drug`, `shortage_event`, `drug_price`, `rxnorm_edge`, rule tables | **Real.** FDA, RxNorm and NADAC are public — there is no reason to fake them, and faking them would hide feed bugs until a hospital found them |
-| **Tenant** | `formulary_item`, `stock_snapshot`, `facility`, `storage_location`, `consumption_daily`, `location_condition`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
+| **Tenant** | `formulary_item`, `stock_snapshot`, `stock_batch`, `par_level`, `facility`, `storage_location`, `consumption_daily`, `location_condition`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
 
 Because synthetic patients are built on *real* RxCUIs and NDCs, every join, every interaction
 lookup and every certification check behaves in the demo exactly as it will in production. The
@@ -133,9 +133,13 @@ Order matters, because tenant data references real reference data:
    `prediction` needs multi-winter history for annual seasonality to be learnable — plus
    90 days of hourly storage-condition telemetry (`location_condition`).
    `seed_demo` then overlays the 11 dashboard-page NDCs from
-   `shared/medstock_shared/demo_shelf.py` (cloned consumption from a same-class donor) so
-   Warehouse charts are not empty for the SKUs the inventory mock shows. `scripts/seed_stock.py`
-   upserts those same NDCs onto the right shelf (`location_for`: insulin → fridge).
+   `shared/medstock_shared/demo_shelf.py` — same NDC, name, quantity, lot and
+   expiry as `web/lib/mock-data.ts`, plus B5 par levels so `/inventory` status
+   is a real claim. Depth per site follows the mock `inventoryFor()` profile
+   (clinics omit ICU SKUs; warehouse is bulk). Consumption is cloned from a
+   same-class donor so Warehouse charts are not empty for those SKUs.
+   `scripts/seed_stock.py` upserts the same shelf (and UC-2 analogue NDCs)
+   after clearing leftover lots, so a second run cannot stack quantities.
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly

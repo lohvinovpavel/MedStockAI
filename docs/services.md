@@ -305,9 +305,13 @@ every item is `false` and the JSON shape does not change.
 `GET /api/analogue/drugs/{rxcui}/packages` — `drug:search`. NDCs for the chosen concept
 (step 2 of identity).
 
-`GET /api/inventory/stock?rxcui=` — `inventory:read`. Inventory asks the shared RxNorm client
-for those NDCs, then returns matching `stock_snapshot` rows for the hospital. Empty stock is
-an empty `items` list, not an error.
+`GET /api/inventory/stock?rxcui=&facility_id=` — `inventory:read`. Inventory asks the shared RxNorm client
+for those NDCs, then returns matching `stock_snapshot` rows for the hospital (and facility, when
+sent). Empty stock is an empty `items` list, not an error. On NLM failure the service matches
+the query string as an NDC and sets `rxnorm_degraded: true`.
+
+`GET /api/inventory/items?facility_id=` — `inventory:read`. The inventory table: on-hand rolled
+up from `stock_batch`, status from `par_level` (B5), soonest expiry for the FEFO lot.
 
 RxNorm is US English. Ukrainian trade names are out of scope (same capstone feed choice as §7).
 
@@ -525,13 +529,14 @@ schedule caught by `startingDeadlineSeconds`.
    unverified placeholders (`ponytail:` comments in `services/ingest/app/*.py`), there is no
    migration for the four reference tables yet, and `rxnorm.py` has no real RXCUI seed list.
    Do not point the CronJobs at a live schedule until those are resolved.
-2. **RLS policies are not written on most tenant tables.** `session_scope()` sets
-   `app.hospital_id` / `app.actor_id` / `app.actor_system`. H1 ENABLE/FORCE RLS on
-   `review_decision` and `audit_log_entry` only; the rest still leak across tenants.
-   The app role must not own the tables — an owner ignores its own policies. (The old
-   cross-tenant claim problem this item used to mention — the `ai-handler` runner claiming
-   a `job` row before it knew the hospital — no longer applies: there is no runner, and
-   `ai_cache` was deliberately designed without `hospital_id`.)
+2. **RLS policies on future tenant tables.** Wave 2 (`20260818_wave2_stock`) ENABLE/FORCE RLS
+   plus `tenant_isolation` on every tenant table that exists today, including subquery
+   policies on `storage_location` / `location_condition`. `session_scope()` sets
+   `app.hospital_id` / `app.actor_id` / `app.actor_system` and `SET LOCAL ROLE app_role`
+   so a docker/CI superuser cannot bypass FORCE RLS. Identity and reference tables stay
+   exempt. Any new tenant table (`purchase_order`, `transfer_request`, …) must get a
+   policy in the same migration that creates it. The app role must not own the tables.
+   (`ai_cache` remains global on purpose — no `hospital_id`.)
 3. **Stock data source for the MVP** — CSV, synthetic generator, or a self-written mock
    distributor API. Days-of-supply is the core metric and no public feed provides it. Blocks
    the `formulary_item` / `stock_snapshot` schema.

@@ -68,6 +68,61 @@ def test_no_duplicate_ndcs_on_the_shelf():
     assert len(ui) == len(set(ui)), "the same NDC appears on two dashboard rows"
 
 
+_UI_ROW = re.compile(
+    r'id: "(inv-\d+)"[\s\S]*?'
+    r'drugName: "([^"]+)"[\s\S]*?'
+    r'ndc: "(\d{11})"[\s\S]*?'
+    r'batchNumber: "([^"]+)"[\s\S]*?'
+    r'currentStock: (\d+)[\s\S]*?'
+    r'expiryDate: iso\(addDays\(today, (\d+)\)\)',
+)
+
+
+def test_seeded_shelf_copies_mock_qty_lot_and_expiry():
+    """Wave 2 inventory reads Postgres. If quantity/lot/expiry drift from the
+    mock table, the demo story (critical ceftriaxone, 8-day expiry, named lots)
+    silently becomes a different product."""
+    from medstock_shared.demo_shelf import DASHBOARD_SHELF
+    from medstock_shared.stock import derive_status
+
+    mock = {
+        ndc: {"id": iid, "name": name, "lot": lot, "quantity": int(qty), "expiry_days": int(days)}
+        for iid, name, ndc, lot, qty, days in _UI_ROW.findall(_MOCK_DATA.read_text(encoding="utf-8"))
+    }
+    assert len(mock) == len(DASHBOARD_SHELF)
+    critical = []
+    for item in DASHBOARD_SHELF:
+        expected = mock[item["ndc"]]
+        assert item["id"] == expected["id"], item["ndc"]
+        assert item["name"] == expected["name"], item["ndc"]
+        assert item["lot"] == expected["lot"], item["ndc"]
+        assert item["quantity"] == expected["quantity"], item["ndc"]
+        assert item["expiry_days"] == expected["expiry_days"], item["ndc"]
+        status, par = derive_status(item["quantity"], item["par_reorder"], item["par_target"])
+        assert par is True
+        if status == "critical":
+            critical.append(item["name"])
+    assert critical == [
+        "Ceftriaxone 1g",
+        "Norepinephrine 4mg/4mL",
+        "Insulin Glargine 100U/mL",
+        "Heparin Sodium 5000IU/mL",
+    ]
+
+
+def test_facility_profile_matches_mock_inventory_for():
+    from medstock_shared.demo_shelf import FACILITY_SHELF_PROFILE, lot_for
+
+    assert FACILITY_SHELF_PROFILE["riverside"]["absent"] == ("inv-002", "inv-005")
+    assert FACILITY_SHELF_PROFILE["westend"]["absent"] == ("inv-002", "inv-005", "inv-008")
+    assert FACILITY_SHELF_PROFILE["warehouse-north"]["absent"] == ("inv-007",)
+    assert FACILITY_SHELF_PROFILE["riverside"]["stock_factor"] == 0.35
+    assert FACILITY_SHELF_PROFILE["westend"]["stock_factor"] == 0.22
+    assert FACILITY_SHELF_PROFILE["warehouse-north"]["stock_factor"] == 7.0
+    assert lot_for({"lot": "AMX-24118-B"}, "central") == "AMX-24118-B"
+    assert lot_for({"lot": "AMX-24118-B"}, "riverside") == "AMX-24118-B-DE"
+
+
 def test_the_seed_targets_a_constraint_that_still_exists():
     """`seed_stock.py` names a constraint in its ON CONFLICT clause, and a
     migration renamed it out from under the script.
@@ -85,7 +140,7 @@ def test_the_seed_targets_a_constraint_that_still_exists():
     """
     import re
 
-    from medstock_shared.models import FormularyItem, StockSnapshot
+    from medstock_shared.models import FormularyItem, ParLevel, StockBatch, StockSnapshot
 
     named = re.findall(r'constraint="([^"]+)"', (_ROOT / "scripts" / "seed_stock.py").read_text(encoding="utf-8"))
     assert named, "seed_stock.py should pin its upserts to named constraints"
@@ -94,7 +149,7 @@ def test_the_seed_targets_a_constraint_that_still_exists():
     # against whichever one happens to be first.
     declared = {
         c.name
-        for model in (StockSnapshot, FormularyItem)
+        for model in (StockSnapshot, FormularyItem, StockBatch, ParLevel)
         for c in model.__table__.constraints
         if c.name
     }

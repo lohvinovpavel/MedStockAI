@@ -15,6 +15,7 @@ import argparse
 import random
 import sys
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 
 # scripts/ → repo root on sys.path is not enough; shared lives in shared/.
@@ -22,7 +23,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.demo_shelf import DASHBOARD_SHELF
+from medstock_shared.demo_shelf import DASHBOARD_SHELF, shelf_stock_rows
 from medstock_shared.demo_tenant import (
     FACILITIES,
     HOSPITAL_NAME,
@@ -31,13 +32,13 @@ from medstock_shared.demo_tenant import (
     location_for,
     upsert_registry,
 )
-from medstock_shared.models import Drug, FormularyItem, Hospital, StockSnapshot
+from medstock_shared.models import Drug, FormularyItem, Hospital, ParLevel, StockBatch, StockSnapshot
 from medstock_shared.rxnorm import (
     CURATED_NDCS_WHEN_EMPTY,
     RxNormError,
     ndcs_for_rxcui,
 )
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -157,31 +158,26 @@ def build_stock_rows(
 
 
 def build_shelf_rows(hospital_id: uuid.UUID, fac_ids: dict[str, int]) -> list[dict]:
-    """The dashboard shelf, one line each at Central's main room.
-
-    No RNG and no RxNorm round-trip: these NDCs are fixed so that what the
-    CronJob certifies is exactly what the screen shows.
-    """
-    facility_id = fac_ids[SHELF_FACILITY]
-    rows = []
-    for drug in DASHBOARD_SHELF:
-        location_id = location_for(SHELF_FACILITY, drug["storage_class"]) or SHELF_LOCATION
-        rows.append(
-            {
-                "hospital_id": hospital_id,
-                "ndc": drug["ndc"],
-                "facility_id": facility_id,
-                "location_id": location_id,
-                "quantity": int(drug["quantity"]),
-            }
-        )
-        print(f"{drug['ndc']} {drug['name']} → {SHELF_FACILITY}/{location_id}")
+    """Mock inventory rows at every operated site, same profile as inventoryFor()."""
+    rows = shelf_stock_rows(hospital_id, fac_ids)
+    for row in rows:
+        print(f"{row['ndc']} {row['lot']} → facility={row['facility_id']}/{row['location_id']} qty={row['quantity']}")
     return rows
 
 
 def upsert(session: Session, hospital_id: uuid.UUID, rows: list[dict], formulary: list[str]) -> None:
     if rows:
-        stmt = insert(StockSnapshot).values(rows)
+        snaps = [
+            {
+                "hospital_id": row["hospital_id"],
+                "ndc": row["ndc"],
+                "facility_id": row["facility_id"],
+                "location_id": row["location_id"],
+                "quantity": row["quantity"],
+            }
+            for row in rows
+        ]
+        stmt = insert(StockSnapshot).values(snaps)
         # uq_stock_hospital_ndc_fac_loc, not uq_stock_hospital_ndc_loc: the
         # warehouse migration (20260817_warehouse) added facility_id to the
         # natural key, because location codes repeat across facilities — every
@@ -193,6 +189,67 @@ def upsert(session: Session, hospital_id: uuid.UUID, rows: list[dict], formulary
             set_={"quantity": stmt.excluded.quantity, "updated_at": func.now()},
         )
         session.execute(stmt)
+        batches = []
+        pars = []
+        seen_par: set[tuple[int, str]] = set()
+        shelf_by_ndc = {d["ndc"]: d for d in DASHBOARD_SHELF}
+        for row in rows:
+            shelf = shelf_by_ndc.get(row["ndc"], {})
+            expiry = date.today() + timedelta(
+                days=int(row.get("expiry_days") or shelf.get("expiry_days", 365))
+            )
+            lot = row.get("lot") or f"SEED-{row['facility_id']}-{row['ndc']}-{row['location_id']}"
+            batches.append(
+                {
+                    "hospital_id": row["hospital_id"],
+                    "facility_id": row["facility_id"],
+                    "ndc": row["ndc"],
+                    "lot": lot,
+                    "expiry_date": expiry,
+                    "quantity": row["quantity"],
+                    "location_id": row["location_id"],
+                }
+            )
+            key = (row["facility_id"], row["ndc"])
+            if key in seen_par:
+                continue
+            seen_par.add(key)
+            qty = int(row["quantity"])
+            reorder = int(row["par_reorder"]) if "par_reorder" in row else (
+                int(shelf["par_reorder"]) if "par_reorder" in shelf else max(1, qty // 4)
+            )
+            target = int(row["par_target"]) if "par_target" in row else (
+                int(shelf["par_target"]) if "par_target" in shelf else max(reorder + 1, qty + reorder)
+            )
+            pars.append(
+                {
+                    "hospital_id": row["hospital_id"],
+                    "facility_id": row["facility_id"],
+                    "ndc": row["ndc"],
+                    "reorder_point": reorder,
+                    "target_qty": target,
+                }
+            )
+        bstmt = insert(StockBatch).values(batches)
+        bstmt = bstmt.on_conflict_do_update(
+            constraint="uq_stock_batch_natural",
+            set_={
+                "quantity": bstmt.excluded.quantity,
+                "location_id": bstmt.excluded.location_id,
+                "expiry_date": bstmt.excluded.expiry_date,
+            },
+        )
+        session.execute(bstmt)
+        pstmt = insert(ParLevel).values(pars)
+        pstmt = pstmt.on_conflict_do_update(
+            constraint="uq_par_level_natural",
+            set_={
+                "reorder_point": pstmt.excluded.reorder_point,
+                "target_qty": pstmt.excluded.target_qty,
+                "updated_at": func.now(),
+            },
+        )
+        session.execute(pstmt)
     if formulary:
         form_rows = [{"hospital_id": hospital_id, "rxcui": rxcui} for rxcui in formulary]
         fstmt = insert(FormularyItem).values(form_rows)
@@ -238,10 +295,31 @@ def main() -> int:
     session = SessionLocal()
     try:
         hospital_id = resolve_hospital_id(session, args.hospital_id, args.hospital_name)
+        session.execute(
+            text(
+                "SELECT set_config('app.hospital_id', :h, true), "
+                "set_config('app.actor_id', '', true), "
+                "set_config('app.actor_system', 'seed_stock', true)"
+            ),
+            {"h": str(hospital_id)},
+        )
         fac_ids, _loc_ids = upsert_registry(session, hospital_id)
         rng = random.Random(RNG_SEED)
+        shelf_ndcs = {d["ndc"] for d in DASHBOARD_SHELF}
         rows = build_stock_rows(hospital_id, DRUGS, rng, fac_ids)
         rows.extend(build_stock_rows(hospital_id, ANALOGUE_DRUGS, rng, fac_ids, demo_edges=False))
+        rows = [r for r in rows if r["ndc"] not in shelf_ndcs]
+        session.execute(
+            delete(ParLevel).where(ParLevel.hospital_id == hospital_id, ParLevel.ndc.in_(shelf_ndcs))
+        )
+        session.execute(
+            delete(StockBatch).where(StockBatch.hospital_id == hospital_id, StockBatch.ndc.in_(shelf_ndcs))
+        )
+        session.execute(
+            delete(StockSnapshot).where(
+                StockSnapshot.hospital_id == hospital_id, StockSnapshot.ndc.in_(shelf_ndcs)
+            )
+        )
         rows.extend(build_shelf_rows(hospital_id, fac_ids))
         formulary = [d["rxcui"] for d in (*DRUGS, *ANALOGUE_DRUGS) if d["in_formulary"]]
         for item in DASHBOARD_SHELF:

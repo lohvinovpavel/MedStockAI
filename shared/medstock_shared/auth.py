@@ -83,6 +83,7 @@ PERMS: dict[str, set[str]] = {
         # PAGE_ROLES and the rbac matrix give the pharmacist the audit page;
         # without this grant GET /audit 403s a role that can already open it.
         "audit:read",
+        "batch:write",
     },
     "physician": {
         "alert:read",
@@ -123,8 +124,19 @@ PERMS: dict[str, set[str]] = {
         "profile:review",
         "certificate:read",
         "certification:explore",
+        "batch:write",
+        "par:write",
     },
 }
+
+# Must stay in lockstep with membership.role's CHECK (A4). A role in one and
+# not the other fails closed at the first require() — confusing, so fail at
+# import instead.
+_MEMBERSHIP_ROLES = {"pharmacist", "physician", "director", "admin"}
+if set(PERMS) != _MEMBERSHIP_ROLES:
+    raise RuntimeError(
+        f"PERMS keys {sorted(PERMS)} != membership CHECK {_MEMBERSHIP_ROLES}"
+    )
 
 
 def require(permission: str):

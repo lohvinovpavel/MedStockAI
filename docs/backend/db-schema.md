@@ -34,15 +34,14 @@ boundary is real, the data boundary is not). This is the schema behind the featu
 | `storage_location` | tenant | `warehouse` | ✅ B1 — flat list per facility, `kind` ∈ room/fridge/freezer/cold_room |
 | `consumption_daily` | tenant | `warehouse` writes (seed; later B4 rollup), `prediction` reads | ✅ — 3y daily usage history, `stockout` marks censored days |
 | `location_condition` | tenant (via `storage_location` → `facility`) | `warehouse` | ✅ — hourly temp/humidity telemetry |
-| `stock_batch` | tenant | `inventory` | ❌ B4 |
-| `par_level` | tenant | `inventory` | ❌ B5 |
+| `stock_batch` | tenant | `inventory` | ✅ B4 |
+| `par_level` | tenant | `inventory` | ✅ B5 |
 | `supplier` | tenant | `warehouse` | ❌ F2 |
 | `supplier_catalog` | tenant | `warehouse` | ❌ F2 |
 | `purchase_order` | tenant | `inventory` | ❌ F3 |
 | `purchase_order_line` | tenant | `inventory` | ❌ F3 |
 | `transfer_request` | tenant | `warehouse` | ❌ G2 |
 | `review_decision` | tenant | `inventory` | ✅ H1 table; F1 writers still open |
-| `forecast_point` | tenant | `prediction` | ✅ E1 |
 | `forecast_point` | tenant | `prediction` | ✅ E1 |
 | `stock_daily` | tenant | `prediction` | ✅ issue #7 — on-hand history for the stock chart |
 | `patient` | tenant | `patient-profiling` | ✅ |
@@ -209,12 +208,13 @@ erDiagram
     }
     stock_batch {
         bigint id PK
-        uuid hospital_id FK
+        uuid hospital_id FK "uq hospital_id facility_id ndc lot"
+        bigint facility_id FK
         text ndc
-        bigint location_id FK
-        text lot "uq hospital_id ndc location_id lot"
+        text lot
         date expiry_date "FEFO ordering; the expiry-waste pitch lives here"
         int quantity
+        text location_id "intra-facility shelf code"
     }
     par_level {
         bigint id PK
@@ -226,10 +226,9 @@ erDiagram
     }
 ```
 
-`stock_batch` is the missing half of the product story: `stock_snapshot` today has no lot and
-no expiry, so nothing in the schema can support FEFO, expiry alerts, or the "-84% expiry
-waste" headline. Once batches exist, `stock_snapshot.quantity` should be a trigger-maintained
-rollup rather than an independently written number.
+`stock_batch` is the lot/expiry half of the product story. `stock_snapshot.quantity` is a
+trigger-maintained rollup of batches rather than an independently written number. The
+inventory table reads the rollup and joins the soonest-expiring lot for the expiry column.
 
 ---
 
@@ -395,7 +394,7 @@ The proposed tables have a dependency order; taking them out of order means rewr
 
 1. **Fix `hospital_id` typing.** ✅ wave 0 (`20260818_hospital_uuid`): every tenant
    table is `uuid` FK to `hospital.id`. DEMO GENERAL HOSPITAL (all-zeros UUID) is
-   remapped onto St Mary's General. RLS (A4) is still open except H1's two tables.
+   remapped onto St Mary's General.
 2. `facility` — B1 blocks stock scoping, orders, transfers, and forecasts alike. ✅ done
    (migration `20260817_warehouse`, with `storage_location`, `consumption_daily`,
    `location_condition`, storage-requirement columns on `drug`, and
@@ -404,7 +403,8 @@ The proposed tables have a dependency order; taking them out of order means rewr
 3. `audit_log_entry` + `review_decision` + the trigger — H1. ✅ wave 1
    (`20260818_h1_audit`). Trigger on `review_decision` only; F1 writers still
    open so the live `/audit` trail is empty until a recommendation is stored.
-4. `stock_batch` + `par_level` — B4/B5, which make "critical" and "expiring" objective.
+4. `stock_batch` + `par_level` — B4/B5. ✅ wave 2 (`20260818_wave2_stock`), with
+   A4 FORCE RLS on remaining tenant tables. `critical` and `expiring` are objective.
 5. `supplier` → `supplier_catalog` → `purchase_order` → `purchase_order_line` — F2/F3.
 6. `forecast_point` — E1. ✅ table exists; writer today is `POST /forecast/runs`, not a CronJob.
 7. `transfer_request`, `otp_challenge`, `copilot_message` — leaf tables, any order.

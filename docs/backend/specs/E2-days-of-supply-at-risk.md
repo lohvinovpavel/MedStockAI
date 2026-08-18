@@ -1,13 +1,14 @@
 # E2 — Days of supply and at-risk list
 
-**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ✅ `GET /at-risk` and `GET /days-of-supply` — `/forecasts` consumes them; inventory and shortage pages still compute locally from mock-data
+**Service:** `prediction` · **Flows:** 4, 9, 16 · **Status:** ✅ `GET /at-risk` and `GET /days-of-supply` — `/forecasts` consumes them; inventory status is B5 par; shortage page still computes locally from mock-data
 **Depends on:** B1, E1 · **Scope:** `forecast:read`
 
 ## Goal
 
 "Days of supply is the core metric of the whole product" (`docs/services.md` §3). The formula
 lives in `GET /at-risk` and `GET /days-of-supply`. `/forecasts` is the consumer that is live;
-the inventory table, shortage matrix and KPI row still compute a local mock days-of-supply.
+the inventory table uses B5 par status (wave 2). The shortage matrix still computes a local
+mock days-of-supply.
 
 ## API
 

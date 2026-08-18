@@ -1,9 +1,9 @@
 """Warehouse API against the real schema (CI migrates, then runs these).
 
 Fixture rows carry their own throwaway hospital so runs never collide with
-seeded demo data; everything is deleted afterwards. RLS policies are still a
-repo-wide open item (docs/services.md §8), so cross-tenant invisibility is not
-asserted here yet — 404s are exercised via unknown ids.
+seeded demo data; everything is deleted afterwards. A4 FORCE RLS is on; these
+tests seed as the table owner (superuser bypass) and 404 unknown ids rather
+than asserting a second tenant.
 """
 
 import uuid
@@ -20,6 +20,8 @@ from medstock_shared.models import (
     Facility,
     Hospital,
     LocationCondition,
+    ParLevel,
+    StockBatch,
     StockSnapshot,
     StorageLocation,
 )
@@ -101,6 +103,8 @@ def seeded():
 
     with Session(engine) as s:
         s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == HOSPITAL_ID))
+        s.execute(delete(ParLevel).where(ParLevel.hospital_id == HOSPITAL_ID))
+        s.execute(delete(StockBatch).where(StockBatch.hospital_id == HOSPITAL_ID))
         s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == HOSPITAL_ID))
         s.execute(delete(LocationCondition).where(
             LocationCondition.location_id.in_([ids["room"], ids["fridge"]])

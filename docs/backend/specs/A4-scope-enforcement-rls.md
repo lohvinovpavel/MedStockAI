@@ -1,14 +1,16 @@
 # A4 — Scope enforcement and row-level security
 
-**Services:** all seven · **Flows:** every · **Status:** ⚠️ `PERMS` exists; FORCE RLS on `review_decision` + `audit_log_entry` only (H1). The rest of the tenant tables are still open.
+**Services:** all seven · **Flows:** every · **Status:** ✅ (wave 2, migration `20260818_wave2_stock`)
 
 ## Goal
 
-Two halves of one guarantee. The scope half exists: `require("inventory:read")` in
+Two halves of one guarantee. The scope half is `require("inventory:read")` in
 `shared/medstock_shared/auth.py`, with `PERMS` mapping role → scopes. The tenant half is
-partial: H1 ENABLE/FORCE RLS on `review_decision` and `audit_log_entry`. Every other tenant
-table still has no `CREATE POLICY`, so a mistake in one service's query can still leak
-another hospital's rows.
+FORCE RLS plus `tenant_isolation` on every existing tenant table (wave 2). `session_scope`
+sets the GUCs **and** `SET LOCAL ROLE app_role`, because docker/CI connect as a superuser
+that would otherwise bypass FORCE RLS. Identity and reference tables stay exempt
+(`[services.md](../../services.md)` §1.1). Future tenant tables (`purchase_order`, …) must
+get a policy in the same migration that creates them.
 
 ## Current scope matrix
 
@@ -18,12 +20,12 @@ roles; `forecast:read` / `forecast:run` on pharmacist and director; `audit:read`
 **pharmacist** (so `GET /audit` matches `PAGE_ROLES`). D3 export must not assume
 `audit:read` is director/admin-only.
 
+Wave 2 added `batch:write` (pharmacist, admin) and `par:write` (admin).
+
 ## Scopes still to add
 
 | Scope | Roles | Used by |
 |---|---|---|
-| `batch:write` | pharmacist, admin | B4 |
-| `par:write` | admin | B5 |
 | `order:read` | pharmacist, director, admin | F4 |
 | `order:write` | pharmacist, admin | F3 |
 | `transfer:write` | pharmacist, director | G2 |
@@ -35,8 +37,10 @@ a confusing outage. Add a startup assertion comparing the two.
 
 ## Row-level security
 
-H1 already applied this pattern to `review_decision` and `audit_log_entry`. Every other
-tenant table (see the registry in [db-schema.md](../db-schema.md)) still needs:
+H1 applied this pattern to `review_decision` and `audit_log_entry`. Wave 2 applied it to
+every other tenant table that exists today (see the registry in
+[db-schema.md](../db-schema.md)). `storage_location` and `location_condition` have no
+`hospital_id`; their policies subquery through `facility`. The predicate is:
 
 ```sql
 ALTER TABLE stock_snapshot ENABLE ROW LEVEL SECURITY;
@@ -83,18 +87,18 @@ connection cannot leak the previous request's tenant into the next one.
    `FORCE ROW LEVEL SECURITY` is required, not just `ENABLE`.
 4. `audit_log_entry` additionally carries `REVOKE UPDATE, DELETE FROM app_role` (see H1).
 5. `hospital_id` is `uuid` on every tenant table (wave 0, migration
-   `20260818_hospital_uuid`). FORCE RLS is on `review_decision` and
-   `audit_log_entry` only (H1). Do not paper over the rest with an application
-   `WHERE`. `GET /audit` SETs `LOCAL ROLE app_role` because docker/CI connect as
+   `20260818_hospital_uuid`). Wave 2 FORCE RLS + `tenant_isolation` is on every
+   existing tenant table. Do not paper over a missing policy with an application
+   `WHERE`. `session_scope` SETs `LOCAL ROLE app_role` because docker/CI connect as
    a superuser that would otherwise bypass FORCE RLS.
 
 ## Acceptance criteria
 
-- [ ] A test inserts as hospital A, opens a session as hospital B, and reads zero rows.
-- [ ] A test writing a row with a mismatched `hospital_id` fails on `WITH CHECK`.
-- [ ] A query run **without** `session_scope` returns zero rows rather than every row.
-- [ ] Startup asserts `set(PERMS)` equals the roles in `membership`'s CHECK constraint.
-- [ ] A route-table test enumerates every registered route and fails on a missing `require()`.
+- [x] A test inserts as hospital A, opens a session as hospital B, and reads zero rows.
+- [x] A test writing a row with a mismatched `hospital_id` fails on `WITH CHECK`.
+- [x] A query run **without** `session_scope` returns zero rows rather than every row.
+- [x] Startup asserts `set(PERMS)` equals the roles in `membership`'s CHECK constraint.
+- [x] A route-table test enumerates every registered route and fails on a missing `require()`.
 
 ## Out of scope
 

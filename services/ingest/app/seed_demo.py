@@ -18,10 +18,11 @@ import os
 import sys
 import uuid
 from collections import defaultdict
+from datetime import date, timedelta
 from pathlib import Path
 
 from medstock_shared import engine
-from medstock_shared.demo_shelf import DASHBOARD_SHELF
+from medstock_shared.demo_shelf import DASHBOARD_SHELF, shelf_stock_rows
 from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
@@ -29,19 +30,19 @@ from medstock_shared.models import (
     ForecastPoint,
     FormularyItem,
     LocationCondition,
+    ParLevel,
     ShortageEvent,
+    StockBatch,
     StockDaily,
     StockSnapshot,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .demo_layout import (
     END_DATE,
-    FACILITIES,
     data_dir,
-    location_for,
     resolve_or_create_hospital,
     upsert_registry,
 )
@@ -84,9 +85,93 @@ def _seed_drugs(s: Session, drugs: list[dict], hospital_id: uuid.UUID) -> None:
         )
 
 
+def _clear_shelf(s: Session, hospital_id: uuid.UUID) -> None:
+    """Dashboard NDCs must not stack with leftover lots — unique is on lot."""
+    ndcs = [d["ndc"] for d in DASHBOARD_SHELF]
+    s.execute(delete(ParLevel).where(ParLevel.hospital_id == hospital_id, ParLevel.ndc.in_(ndcs)))
+    s.execute(delete(StockBatch).where(StockBatch.hospital_id == hospital_id, StockBatch.ndc.in_(ndcs)))
+    s.execute(
+        delete(StockSnapshot).where(
+            StockSnapshot.hospital_id == hospital_id, StockSnapshot.ndc.in_(ndcs)
+        )
+    )
+
+
+def _upsert_batches(s: Session, rows: list[dict]) -> None:
+    """Mirror snapshot rows into stock_batch + par_level (B4/B5).
+
+    Dashboard rows carry mock lot / par / expiry_days. Other seed rows get a
+    stable SEED- lot so a later run replaces rather than stacking. Actor GUC
+    must already be set — the H1 trigger CHECKs it.
+    """
+    if not rows:
+        return
+    shelf = {d["ndc"]: d for d in DASHBOARD_SHELF}
+    batches: list[dict] = []
+    pars: list[dict] = []
+    seen: set[tuple[int, str]] = set()
+    for row in rows:
+        meta = shelf.get(row["ndc"], {})
+        expiry = date.today() + timedelta(days=int(row.get("expiry_days") or meta.get("expiry_days", 365)))
+        lot = row.get("lot") or f"SEED-{row['facility_id']}-{row['ndc']}-{row['location_id']}"
+        batches.append(
+            {
+                "hospital_id": row["hospital_id"],
+                "facility_id": row["facility_id"],
+                "ndc": row["ndc"],
+                "lot": lot,
+                "expiry_date": expiry,
+                "quantity": int(row["quantity"]),
+                "location_id": row["location_id"],
+            }
+        )
+        key = (row["facility_id"], row["ndc"])
+        if key in seen:
+            continue
+        seen.add(key)
+        qty = int(row["quantity"])
+        reorder = int(row["par_reorder"]) if "par_reorder" in row else (
+            int(meta["par_reorder"]) if "par_reorder" in meta else max(1, (qty // 4) or 1)
+        )
+        target = int(row["par_target"]) if "par_target" in row else (
+            int(meta["par_target"]) if "par_target" in meta else max(reorder + 1, qty + reorder)
+        )
+        pars.append(
+            {
+                "hospital_id": row["hospital_id"],
+                "facility_id": row["facility_id"],
+                "ndc": row["ndc"],
+                "reorder_point": reorder,
+                "target_qty": target,
+            }
+        )
+    for i in range(0, len(batches), BATCH):
+        stmt = insert(StockBatch).values(batches[i : i + BATCH])
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_stock_batch_natural",
+            set_={
+                "quantity": stmt.excluded.quantity,
+                "location_id": stmt.excluded.location_id,
+                "expiry_date": stmt.excluded.expiry_date,
+            },
+        )
+        s.execute(stmt)
+    for i in range(0, len(pars), BATCH):
+        stmt = insert(ParLevel).values(pars[i : i + BATCH])
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_par_level_natural",
+            set_={
+                "reorder_point": stmt.excluded.reorder_point,
+                "target_qty": stmt.excluded.target_qty,
+            },
+        )
+        s.execute(stmt)
+
+
 def _seed_stock(
     s: Session, rows: list[dict], fac_ids: dict[str, int], hospital_id: uuid.UUID
 ) -> None:
+    payload = []
     for row in rows:
         values = {
             "hospital_id": hospital_id,
@@ -95,6 +180,7 @@ def _seed_stock(
             "location_id": row["location"],
             "quantity": int(row["qty"]),
         }
+        payload.append(values)
         s.execute(
             insert(StockSnapshot)
             .values(**values)
@@ -103,6 +189,7 @@ def _seed_stock(
                 set_={"quantity": values["quantity"]},
             )
         )
+    _upsert_batches(s, payload)
 
 
 def _seed_consumption(
@@ -227,10 +314,6 @@ def _overlay_dashboard_shelf(
     for row in stock_history:
         hist_by_ndc[row["ndc"]].append(row)
 
-    extra_stock: list[dict] = []
-    extra_cons: list[dict] = []
-    extra_hist: list[dict] = []
-
     for item in DASHBOARD_SHELF:
         cls = item["storage_class"]
         donor = donor_by_class.get(cls)
@@ -256,59 +339,69 @@ def _overlay_dashboard_shelf(
             .values(hospital_id=hospital_id, rxcui=rxcui)
             .on_conflict_do_nothing(index_elements=["hospital_id", "rxcui"])
         )
-        for fac in FACILITIES:
-            if not fac["operated"]:
+
+    _clear_shelf(s, hospital_id)
+    extra_stock = shelf_stock_rows(hospital_id, fac_ids)
+    id_by_fac = {fid: code for code, fid in fac_ids.items()}
+    item_by_ndc = {d["ndc"]: d for d in DASHBOARD_SHELF}
+
+    extra_cons: list[dict] = []
+    extra_hist: list[dict] = []
+    for row in extra_stock:
+        item = item_by_ndc[row["ndc"]]
+        donor = donor_by_class.get(item["storage_class"])
+        if donor is None:
+            continue
+        rxcui = donor["rxcui"]
+        fac_code = id_by_fac[row["facility_id"]]
+        qty = int(row["quantity"])
+        for cons in cons_by_ndc[donor["ndc"]]:
+            if cons["facility"] != fac_code:
                 continue
-            loc = location_for(fac["code"], cls)
-            if loc is None:
-                continue
-            scale = float(fac["scale"] or 1.0)
-            qty = max(0, round(int(item["quantity"]) * scale))
-            extra_stock.append(
+            extra_cons.append(
                 {
                     "hospital_id": hospital_id,
-                    "ndc": item["ndc"],
-                    "facility_id": fac_ids[fac["code"]],
-                    "location_id": loc,
-                    "quantity": qty,
+                    "facility_id": row["facility_id"],
+                    "ndc": row["ndc"],
+                    "rxcui": rxcui,
+                    "date": cons["date"],
+                    "qty_consumed": int(cons["qty"]),
+                    "stockout": cons["stockout"] == "1",
                 }
             )
-            for row in cons_by_ndc[donor["ndc"]]:
-                if row["facility"] != fac["code"]:
-                    continue
-                extra_cons.append(
-                    {
-                        "hospital_id": hospital_id,
-                        "facility_id": fac_ids[fac["code"]],
-                        "ndc": item["ndc"],
-                        "rxcui": rxcui,
-                        "date": row["date"],
-                        "qty_consumed": int(row["qty"]),
-                        "stockout": row["stockout"] == "1",
-                    }
-                )
-            donor_hist = [r for r in hist_by_ndc[donor["ndc"]] if r["facility"] == fac["code"]]
-            donor_last = int(donor_hist[-1]["qty"]) if donor_hist else 0
-            factor = (qty / donor_last) if donor_last else 1.0
-            for i, row in enumerate(donor_hist):
-                extra_hist.append(
-                    {
-                        "hospital_id": hospital_id,
-                        "facility_id": fac_ids[fac["code"]],
-                        "ndc": item["ndc"],
-                        "date": row["date"],
-                        "qty_on_hand": qty if i == len(donor_hist) - 1 else max(0, round(int(row["qty"]) * factor)),
-                    }
-                )
+        donor_hist = [r for r in hist_by_ndc[donor["ndc"]] if r["facility"] == fac_code]
+        donor_last = int(donor_hist[-1]["qty"]) if donor_hist else 0
+        factor = (qty / donor_last) if donor_last else 1.0
+        for i, hist in enumerate(donor_hist):
+            extra_hist.append(
+                {
+                    "hospital_id": hospital_id,
+                    "facility_id": row["facility_id"],
+                    "ndc": row["ndc"],
+                    "date": hist["date"],
+                    "qty_on_hand": qty if i == len(donor_hist) - 1 else max(0, round(int(hist["qty"]) * factor)),
+                }
+            )
 
     if extra_stock:
-        for i in range(0, len(extra_stock), BATCH):
-            stmt = insert(StockSnapshot).values(extra_stock[i : i + BATCH])
+        snaps = [
+            {
+                "hospital_id": row["hospital_id"],
+                "ndc": row["ndc"],
+                "facility_id": row["facility_id"],
+                "location_id": row["location_id"],
+                "quantity": row["quantity"],
+            }
+            for row in extra_stock
+        ]
+        for i in range(0, len(snaps), BATCH):
+            stmt = insert(StockSnapshot).values(snaps[i : i + BATCH])
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_stock_hospital_ndc_fac_loc",
                 set_={"quantity": stmt.excluded.quantity},
             )
             s.execute(stmt)
+        _upsert_batches(s, extra_stock)
     if extra_cons:
         s.execute(
             delete(ConsumptionDaily).where(
@@ -363,6 +456,14 @@ def run() -> dict[str, int]:
 
     with Session(engine) as s:
         hospital_id = resolve_or_create_hospital(s)
+        s.execute(
+            text(
+                "SELECT set_config('app.hospital_id', :h, true), "
+                "set_config('app.actor_id', '', true), "
+                "set_config('app.actor_system', 'seed_demo', true)"
+            ),
+            {"h": str(hospital_id)},
+        )
         fac_ids, loc_ids = upsert_registry(s, hospital_id)
         _seed_drugs(s, drugs, hospital_id)
         _seed_stock(s, stock, fac_ids, hospital_id)

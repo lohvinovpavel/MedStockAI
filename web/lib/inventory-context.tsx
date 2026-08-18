@@ -1,28 +1,40 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { inventoryFor, type InventoryItem } from "@/lib/mock-data";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { apiFetch } from "@/lib/api";
+import { useFacility } from "@/lib/facility-context";
 
-// Session-only overlay on top of the canonical `inventory` array —
-// inventoryFor() itself stays a pure function (every other page still calls
-// it directly and is unaffected); this composes on top of it for the one
-// page that needs to write. "Receive Batch" used to validate a full form
-// and then discard it; this makes the write real for the table and KPIs on
-// this page. Scoped deliberately: other pages (Forecasts, Orders, Audit,
-// Shortages) don't read through this overlay, so a batch received here
-// doesn't yet ripple into a forecast's stock baseline or a shortage row —
-// a real limitation, not a currently-solved one.
-export interface ReceivedBatch {
-  itemId?: string; // existing SKU being topped up; omitted for a new SKU
-  drugName: string;
-  batchNumber: string;
+export type ShelfStatus = "stockout" | "critical" | "normal" | "surplus";
+
+export type ShelfItem = {
+  ndc: string;
+  name: string | null;
+  facility_id: number;
+  location_id: string | null;
+  quantity: number;
+  lot: string | null;
+  earliest_expiry: string | null;
+  status: ShelfStatus;
+  par_defined: boolean;
+  reorder_point: number | null;
+  target_qty: number | null;
+  suggested_qty: number | null;
+};
+
+export type ReceivedBatch = {
+  ndc: string;
+  lot: string;
   quantity: number;
   expiryDate: string;
-}
+  location_id: string | null;
+};
 
 type InventoryContextValue = {
-  itemsFor: (facilityId: string) => InventoryItem[];
-  receiveBatch: (facilityId: string, batch: ReceivedBatch) => InventoryItem;
+  items: ShelfItem[];
+  loading: boolean;
+  error: string | null;
+  reload: () => void;
+  receiveBatch: (batch: ReceivedBatch) => Promise<void>;
 };
 
 const InventoryContext = createContext<InventoryContextValue | null>(null);
@@ -33,73 +45,60 @@ export function useInventory() {
   return ctx;
 }
 
-let nextNewItemId = 1;
-
-interface TopUp {
-  extraStock: number;
-  batchNumber: string; // the most recent batch received wins the display
-}
-
 export function InventoryProvider({ children }: { children: ReactNode }) {
-  // facilityId -> itemId -> accumulated top-up for this session
-  const [topUps, setTopUps] = useState<Record<string, Record<string, TopUp>>>({});
-  // facilityId -> items received that aren't in the base catalogue
-  const [newItems, setNewItems] = useState<Record<string, InventoryItem[]>>({});
+  const { facility } = useFacility();
+  const facilityPk = facility.id;
+  const [items, setItems] = useState<ShelfItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
-  const receiveBatch = useCallback((facilityId: string, batch: ReceivedBatch) => {
-    if (batch.itemId) {
-      const itemId = batch.itemId;
-      setTopUps((prev) => ({
-        ...prev,
-        [facilityId]: {
-          ...prev[facilityId],
-          [itemId]: {
-            extraStock: (prev[facilityId]?.[itemId]?.extraStock ?? 0) + batch.quantity,
-            batchNumber: batch.batchNumber,
-          },
-        },
-      }));
-      const existing = inventoryFor(facilityId).find((i) => i.id === itemId)!;
-      return { ...existing, currentStock: existing.currentStock + batch.quantity, batchNumber: batch.batchNumber };
-    }
+  const reload = useCallback(() => setTick((n) => n + 1), []);
 
-    const created: InventoryItem = {
-      id: `rb-${nextNewItemId++}`,
-      facilityId,
-      drugName: batch.drugName,
-      form: "Received batch",
-      inn: "—",
-      atcCode: "—",
-      // Deliberately empty. Someone typing a free-text drug name has given us
-      // nothing to certify, so the badge reads "unknown" rather than assuming
-      // the best — that gap is precisely what COMP-2 exploration is for.
-      ndc: "",
-      batchNumber: batch.batchNumber,
-      currentStock: batch.quantity,
-      unit: "units",
-      dailyBurnRate: 1,
-      expiryDate: batch.expiryDate,
-      certStatus: "pending",
-      certAuthority: "FDA",
-      certNumber: "Pending review",
-      analogues: [],
-    };
-    setNewItems((prev) => ({ ...prev, [facilityId]: [...(prev[facilityId] ?? []), created] }));
-    return created;
-  }, []);
-
-  const itemsFor = useCallback(
-    (facilityId: string) => {
-      const base = inventoryFor(facilityId).map((item) => {
-        const topUp = topUps[facilityId]?.[item.id];
-        return topUp ? { ...item, currentStock: item.currentStock + topUp.extraStock, batchNumber: topUp.batchNumber } : item;
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiFetch("inventory", `/items?facility_id=${facilityPk}&limit=200`)
+      .then((body: { items: ShelfItem[] }) => {
+        if (cancelled) return;
+        setItems(body.items ?? []);
+        setError(null);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setItems([]);
+        setError(err.message || "Cannot load inventory.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-      return [...base, ...(newItems[facilityId] ?? [])];
+    return () => {
+      cancelled = true;
+    };
+  }, [facilityPk, tick]);
+
+  const receiveBatch = useCallback(
+    async (batch: ReceivedBatch) => {
+      await apiFetch("inventory", "/batches", {
+        method: "POST",
+        body: JSON.stringify({
+          facility_id: facilityPk,
+          ndc: batch.ndc,
+          lot: batch.lot,
+          expiry_date: batch.expiryDate,
+          quantity: batch.quantity,
+          location_id: batch.location_id ?? "",
+        }),
+      });
+      reload();
     },
-    [topUps, newItems],
+    [facilityPk, reload],
   );
 
-  const value = useMemo(() => ({ itemsFor, receiveBatch }), [itemsFor, receiveBatch]);
+  const value = useMemo(
+    () => ({ items, loading, error, reload, receiveBatch }),
+    [items, loading, error, reload, receiveBatch],
+  );
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;
 }

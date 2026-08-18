@@ -43,6 +43,9 @@ def session_scope(hospital_id: str, actor_id: str, actor_system: str = ""):
                  "set_config('app.actor_system', :s, true)"),
             {"h": hospital_id, "a": actor_id or "", "s": actor_system or ""},
         )
+        # Docker/CI connect as a superuser that would otherwise bypass FORCE
+        # RLS (A4). SET LOCAL dies with the transaction, same as the GUCs.
+        session.execute(text("SET LOCAL ROLE app_role"))
         yield session
         session.commit()
     except Exception:

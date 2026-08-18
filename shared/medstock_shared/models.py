@@ -188,8 +188,8 @@ class Membership(Base):
 # filter, not a working guarantee today.
 #
 # hospital_id is uuid FK to hospital.id on every tenant table (wave 0).
-# RLS policies (A4) still open — do not paper over that with an application
-# WHERE.
+# Wave 2 (A4) ENABLE/FORCE RLS on tenant tables; session_scope SETs ROLE
+# app_role so a superuser connection cannot bypass FORCE.
 
 
 class FormularyItem(Base):
@@ -213,8 +213,11 @@ class FormularyItem(Base):
 
 
 class StockSnapshot(Base):
-    """On-hand quantity per hospital / NDC / location. Empty string location
-    is the hospital-wide bucket until warehouse locations exist.
+    """On-hand quantity per hospital / NDC / location.
+
+    `quantity` is a derived rollup of `stock_batch` (B4 trigger). Empty
+    string location is the intra-facility shelf code (matches
+    `storage_location.code`).
     """
 
     __tablename__ = "stock_snapshot"
@@ -243,6 +246,62 @@ class StockSnapshot(Base):
             name="uq_stock_hospital_ndc_fac_loc",
             postgresql_nulls_not_distinct=True,
         ),
+    )
+
+
+class StockBatch(Base):
+    """One received lot. `stock_snapshot.quantity` is the rollup of these
+    rows (B4 trigger), never authored by the receive endpoint itself.
+    """
+
+    __tablename__ = "stock_batch"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    lot: Mapped[str] = mapped_column(Text, nullable=False)
+    expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    location_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("quantity >= 0", name="ck_stock_batch_qty"),
+        UniqueConstraint(
+            "hospital_id", "facility_id", "ndc", "lot", name="uq_stock_batch_natural"
+        ),
+        Index("ix_stock_batch_fefo", "hospital_id", "ndc", "expiry_date"),
+    )
+
+
+class ParLevel(Base):
+    """Reorder point and target per facility + NDC (B5). Status on B2 is
+    derived from this, never stored.
+    """
+
+    __tablename__ = "par_level"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hospital.id"), nullable=False
+    )
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    reorder_point: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("reorder_point >= 0", name="ck_par_reorder_nonneg"),
+        CheckConstraint("target_qty > reorder_point", name="ck_par_target_above_reorder"),
+        UniqueConstraint("hospital_id", "facility_id", "ndc", name="uq_par_level_natural"),
     )
 
 

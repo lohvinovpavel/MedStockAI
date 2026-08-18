@@ -1,13 +1,13 @@
 # B2 — Facility-scoped stock read
 
 **Service:** `inventory` · **Flows:** 3, 4, 7, 14 · **Depends on:** B1
-**Status:** ⚠️ `GET /stock?rxcui=` reads `stock_snapshot`. No `facility_id` filter, no `/items`. The inventory page still uses `web/lib/mock-data.ts`.
+**Status:** ✅ (wave 2). `GET /stock?rxcui=&facility_id=` and `GET /items` read `stock_snapshot`; the inventory page uses `InventoryProvider` → live API, not `mock-data.ts`.
 
 ## Goal
 
 The one read the whole dashboard sits on: given a clinical RxCUI — or nothing at all — return
-the shelf rows for one facility. `GET /stock?rxcui=` exists and joins RxNorm NDCs to
-`stock_snapshot`. `GET /items` (the inventory table) and `facility_id` scoping are still open.
+the shelf rows for one facility. `GET /stock?rxcui=` joins RxNorm NDCs to `stock_snapshot`.
+`GET /items` is the inventory table (flow 4); status is derived per B5, lot/expiry per B4.
 
 ## API
 
@@ -56,11 +56,11 @@ ATC code. `status` is derived per B5, never stored: `stockout | critical | norma
 
 ## Acceptance criteria
 
-- [ ] Two facilities holding different SKUs return disjoint lists for the same tenant.
-- [ ] A drug with zero on-hand returns 200 with an empty list, never 404.
-- [ ] With RxNorm stubbed to raise, the endpoint still answers 200 and flags degradation.
-- [ ] The 10-SKU demo dataset resolves in one query plus at most one RxNorm call.
-- [ ] Pagination is stable across pages (deterministic ORDER BY including a tiebreak on `id`).
+- [x] Two facilities holding different SKUs return disjoint lists for the same tenant.
+- [x] A drug with zero on-hand returns 200 with an empty list, never 404.
+- [x] With RxNorm stubbed to raise, the endpoint still answers 200 and flags degradation.
+- [x] The 10-SKU demo dataset resolves in one query plus at most one RxNorm call.
+- [x] Pagination is stable across pages (deterministic ORDER BY including a tiebreak on `id`).
 
 ## Out of scope
 

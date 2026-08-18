@@ -1,12 +1,11 @@
 # B5 — Par level / reorder point
 
-**Service:** `inventory` · **Flows:** 4, 12 · **Status:** ❌ (`docs/specs/UX-21`) · **Depends on:** B1
+**Service:** `inventory` · **Flows:** 4, 12 · **Status:** ✅ (wave 2, migration `20260818_wave2_stock`) · **Depends on:** B1
 
 ## Goal
 
-The inventory table paints rows red and the forecast page suggests a quantity, but nothing in
-the system defines "low" — both are mock tones today. A par level makes `critical` an objective
-claim and gives F1 a target to order up to.
+The inventory table paints rows red and the forecast page suggests a quantity. A par level
+makes `critical` an objective claim and gives F1 a target to order up to.
 
 ## API
 
@@ -61,11 +60,11 @@ CREATE TABLE par_level (
 
 ## Acceptance criteria
 
-- [ ] `PUT` twice on the same `(facility, ndc)` updates rather than duplicating.
-- [ ] `target_qty <= reorder_point` is rejected by the database even when the API validator is bypassed.
-- [ ] An SKU with no par row reports `par_defined: false` and never `critical`.
-- [ ] All four status bands are covered by one table-driven test.
-- [ ] The suggested-quantity helper is unit-tested independently of any endpoint.
+- [x] `PUT` twice on the same `(facility, ndc)` updates rather than duplicating.
+- [x] `target_qty <= reorder_point` is rejected by the database even when the API validator is bypassed.
+- [x] An SKU with no par row reports `par_defined: false` and never `critical`.
+- [x] All four status bands are covered by one table-driven test.
+- [x] The suggested-quantity helper is unit-tested independently of any endpoint.
 
 ## Out of scope
 

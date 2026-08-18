@@ -9,19 +9,18 @@
 > `location_id` remains the intra-facility shelf code matching `storage_location.code`,
 > with the stock natural key widened to `(hospital_id, ndc, facility_id, location_id)`.
 > A `storage_location` table backs `GET /locations`, with `kind` driving condition
-> monitoring (see backend-features B7). Cross-tenant 404 awaits the repo-wide RLS
-> policies (A4). Wave 1: the sidebar switcher reads `GET /facilities?operated=true`
-> and sends `code`; mock inventory/orders/shortage keys were renamed to those codes.
-> The inventory table itself stays mock until B2 `/items` and B4.
+> monitoring (see backend-features B7). Cross-tenant 404 is A4 (wave 2). Wave 1: the
+> sidebar switcher reads `GET /facilities?operated=true` and sends `code`. Wave 2: the
+> inventory table reads `GET /inventory/items`; orders/shortage keys stay mock codes.
 
 ## Goal
 
 `stock_snapshot.location_id` used to be a bare `Text` column where `''` meant "hospital-wide".
 Give facilities a table (`code`, type, geo, `operated`) before anything else keys on
 `facility_id`. Wave 1: the sidebar reads `GET /facilities?operated=true` and stores `code`;
-mock inventory/orders/shortage keys were renamed to those codes. Distances in the sidebar
-are haversine from the **selected** site (`web/lib/geo.ts`). The inventory **table** stays
-mock until B2 `/items` and B4.
+orders/shortage mock keys were renamed to those codes. Distances in the sidebar
+are haversine from the **selected** site (`web/lib/geo.ts`). Wave 2: the inventory table
+reads `GET /items?facility_id=` (B2/B4/B5).
 
 ## API
 
