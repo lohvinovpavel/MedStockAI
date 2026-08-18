@@ -38,6 +38,7 @@ from medstock_shared.forecasting import (
     trailing_means,
 )
 from medstock_shared.models import ConsumptionDaily, ShortageEvent, StockDaily
+from medstock_shared.restock import compute_recommendations
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 
@@ -320,6 +321,22 @@ def ruleset(principal: Principal = Depends(require("forecast:read"))) -> dict:
             ),
         ],
     }
+
+
+@api.get("/recommendations")
+def recommendations(
+    facility_id: int | None = Query(None),
+    surge_pct: int = Query(100, ge=100, le=300),
+    ndc: str | None = Query(None),
+    principal: Principal = Depends(require("forecast:read")),
+) -> dict:
+    """F1: computed on read from par + on-hand + F2 catalog. Not stored."""
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        return {
+            "items": compute_recommendations(
+                session, facility_id=facility_id, surge_pct=surge_pct, ndc=ndc
+            )
+        }
 
 
 app.include_router(api)

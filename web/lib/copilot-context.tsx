@@ -16,13 +16,8 @@ const OPEN_STORAGE_KEY = "medstock-copilot-open";
 // replies (analogue/certificate/PO) instead of returning canned data that
 // ignores whatever SKU is actually focused.
 export type CopilotFocus =
-  // `ndc` is the one identifier every NDC-keyed tool (check_stock_by_ndc,
-  // verify_batch_cert, ...) actually needs. Without it in the context the
-  // model has nothing to call those tools with but its own guess at a
-  // real-world NDC for the drug name -- which is a different, real product,
-  // not this hospital's seeded stock, and returns a confident zero.
-  | { kind: "sku"; label: string; detail: string; itemId: string; ndc: string }
-  | { kind: "alert"; label: string; detail: string }
+  | { kind: "sku"; label: string; detail: string; itemId: string; ndc?: string; rxcui?: string | null }
+  | { kind: "alert"; label: string; detail: string; ndc?: string }
   | { kind: "patient"; label: string; detail: string; patientId: string; rxcui?: string; drugName?: string }
   | null;
 

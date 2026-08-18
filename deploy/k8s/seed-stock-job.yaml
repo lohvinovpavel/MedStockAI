@@ -16,7 +16,9 @@
 # rather than leaving the dashboard grey until 05:00.
 #
 # Re-running is safe. Every write is ON CONFLICT DO UPDATE on
-# (hospital_id, ndc, location_id).
+# (hospital_id, ndc, facility_id, location_id). Also upserts the B1 facility
+# registry so GET /warehouse/facilities?operated=true returns the four sites
+# after auth seed + this job, without a separate seed_demo run.
 apiVersion: batch/v1
 kind: Job
 metadata:

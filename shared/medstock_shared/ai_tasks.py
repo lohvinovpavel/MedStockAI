@@ -20,6 +20,10 @@ class AITask:
     # since-edited prompt is a stale answer, not a valid cache hit, and
     # bumping this is what makes that cache miss instead of replaying it.
     prompt_version: str = "v1"
+    # Pinned per task (H2). Empty means "use settings.gemini_model at call time"
+    # for tasks that have not moved yet; a model change still invalidates the
+    # cache because the key includes the resolved model id.
+    model: str = ""
     validate: Callable[[dict], None] | None = None   # raise to reject the answer (raises AIError)
     # Seconds, when this task needs longer than settings.llm_timeout_seconds.
     # Only for offline work: a request-path task that needs 90 s does not need a
@@ -118,14 +122,16 @@ TASKS: dict[str, AITask] = {
         owner="Pavlo",
         prompt=(
             "Given the drug {drug_name} (RxCUI {rxcui}) which is in shortage, filter the "
-            "therapeutic alternatives below. Keep about 5 commonly used substitutes; drop "
-            "the rest. Do not invent rxcui values. Return JSON: "
-            '{{"source_text": str, '
-            '"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
-            "Copy source_text from the Source text section unchanged. Every citation must "
-            "be a verbatim sentence from the source text.\n\n"
+            "therapeutic alternatives below. Keep at most 5 commonly used substitutes; "
+            "drop the rest. Do not invent rxcui values. Do not copy source_text into the "
+            "JSON — the caller already has it. Return only: "
+            '{{"items": [{{"rxcui": str, "rationale": str, "citation": str}}]}}. '
+            "items must have 1–5 entries. rationale is one short sentence. citation is a "
+            "verbatim substring of the Source text, at most 80 characters.\n\n"
             "Candidates: {candidates}\nSource text: {source_text}"
         ),
+        prompt_version="v2",
+        model="gemini-3.5-flash-lite",
         validate=_citation_must_be_verbatim,
     ),
     "prognosis": AITask(
@@ -157,6 +163,8 @@ TASKS: dict[str, AITask] = {
             "be a verbatim sentence from it.\n\n"
             "Label text: {source_text}"
         ),
+        prompt_version="v1",
+        model="gemini-3.5-flash-lite",
         validate=_prognosis_is_applicable,
         # Measured: reading a boxed warning and emitting structured factors takes
         # far longer than ranking a candidate list, and 20 s times out on every

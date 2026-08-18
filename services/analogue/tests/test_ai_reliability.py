@@ -15,6 +15,7 @@ from medstock_shared.ai.breaker import CircuitBreaker, CircuitBreakerConfig
 from medstock_shared.ai.core import AIError, ask_ai
 from medstock_shared.ai_tasks import TASKS, AITask
 from medstock_shared.auth import Principal
+from medstock_shared.config import settings
 
 # conftest.py's autouse `_gemini_configured` fixture already sets a fake
 # GEMINI_API_KEY for every test in this directory; nothing below ever calls
@@ -155,7 +156,7 @@ def fake_task():
 
 def test_bumping_prompt_version_is_a_cache_miss(monkeypatch, fake_cache, fake_task):
     calls: list[str] = []
-    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None: calls.append(prompt) or {"ok": True})
+    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None, model=None: calls.append(prompt) or {"ok": True})
 
     payload = {"x": "same question"}
     ask_ai("_test_task", payload)
@@ -205,7 +206,8 @@ def test_5xx_trips_the_breaker_and_then_short_circuits(monkeypatch, fake_cache, 
 
 
 def test_cache_hit_bypasses_an_open_breaker(monkeypatch, fake_cache, fake_task):
-    key = ai_core.dedupe_key("_test_task", {"x": "cached"})
+    model = fake_task.model or settings.gemini_model
+    key = ai_core.dedupe_key("_test_task", {"x": "cached"}, fake_task.prompt_version, model)
     fake_cache[("_test_task", "v1", key)] = {"ok": True}
     monkeypatch.setattr(ai_core._breaker, "allow", lambda: False)
 
@@ -223,7 +225,7 @@ PHARMACIST = Principal("user-1", "hospital-1", "pharmacist")
 
 
 def test_live_call_writes_one_audit_row_attributed_to_the_caller(monkeypatch, audit_calls, fake_task):
-    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None: {"ok": True})
+    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None, model=None: {"ok": True})
 
     ask_ai("_test_task", {"x": "1"}, principal=PHARMACIST, request_id="req-1")
 
@@ -234,7 +236,9 @@ def test_live_call_writes_one_audit_row_attributed_to_the_caller(monkeypatch, au
     assert row["request_id"] == "req-1"
     assert row["task_type"] == "_test_task"
     assert row["outcome"] == "live"
-    assert row["dedupe_key"] == ai_core.dedupe_key("_test_task", {"x": "1"})
+    assert row["dedupe_key"] == ai_core.dedupe_key(
+        "_test_task", {"x": "1"}, fake_task.prompt_version, fake_task.model or settings.gemini_model
+    )
 
 
 def test_repeat_call_is_a_cache_hit_audit_row_and_no_second_gemini_call(
@@ -242,7 +246,7 @@ def test_repeat_call_is_a_cache_hit_audit_row_and_no_second_gemini_call(
 ):
     calls: list[str] = []
     monkeypatch.setattr(
-        ai_core, "_generate_json", lambda prompt, timeout_seconds=None: calls.append(prompt) or {"ok": True}
+        ai_core, "_generate_json", lambda prompt, timeout_seconds=None, model=None: calls.append(prompt) or {"ok": True}
     )
 
     payload = {"x": "same"}
@@ -258,12 +262,41 @@ def test_repeat_call_is_a_cache_hit_audit_row_and_no_second_gemini_call(
 def test_no_principal_is_attributed_to_system_ingest_with_no_hospital(
     monkeypatch, audit_calls, fake_task
 ):
-    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None: {"ok": True})
+    monkeypatch.setattr(ai_core, "_generate_json", lambda prompt, timeout_seconds=None, model=None: {"ok": True})
 
     ask_ai("_test_task", {"x": "offline"})  # ingest's CronJob call shape: no principal
 
     assert audit_calls[0]["actor_id"] == "system:ingest"
     assert audit_calls[0]["hospital_id"] is None
+
+
+def test_two_models_produce_different_keys_and_miss_cache(monkeypatch, fake_cache):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ai_core,
+        "_generate_json",
+        lambda prompt, timeout_seconds=None, model=None: calls.append(model or "") or {"ok": True},
+    )
+    TASKS["_test_task"] = AITask(
+        name="_test_task", owner="test", prompt="hello {x}", prompt_version="v1", model="model-a"
+    )
+    ask_ai("_test_task", {"x": "same"})
+    TASKS["_test_task"] = AITask(
+        name="_test_task", owner="test", prompt="hello {x}", prompt_version="v1", model="model-b"
+    )
+    ask_ai("_test_task", {"x": "same"})
+    assert len(calls) == 2
+    a = ai_core.dedupe_key("_test_task", {"x": "same"}, "v1", "model-a")
+    b = ai_core.dedupe_key("_test_task", {"x": "same"}, "v1", "model-b")
+    assert a != b
+    TASKS.pop("_test_task", None)
+
+
+def test_payload_must_not_carry_request_ids():
+    """Volatile request ids in the payload destroy the cache (H2 rule 3)."""
+    stable = ai_core.dedupe_key("t", {"ndc": "1"}, "v1", "m")
+    volatile = ai_core.dedupe_key("t", {"ndc": "1", "request_id": "abc"}, "v1", "m")
+    assert stable != volatile
 
 
 def test_breaker_open_still_writes_an_audit_row_before_raising(monkeypatch, audit_calls, fake_task):

@@ -18,8 +18,7 @@ import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import { useSession } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { forecastFor, inventoryFor, isoPlusDays, parLevel, suppliers } from "@/lib/mock-data";
-import { apiFetch, streamCopilotChat, type CopilotMessage, type PatientCandidate } from "@/lib/api";
+import { apiFetch, streamCopilotMessage, type PatientCandidate } from "@/lib/api";
 import {
   CERT_LABELS,
   CERT_TONE,
@@ -32,6 +31,7 @@ type ResponseCard =
   | {
       kind: "po";
       itemId: string;
+      ndc: string;
       drugName: string;
       supplier: string;
       quantity: number;
@@ -41,6 +41,7 @@ type ResponseCard =
       coverageDays: number;
       leadTimeDays: number;
       confidence: number;
+      payload: Record<string, unknown>;
     }
   | { kind: "analogues"; items: { name: string; matchScore: number; stockHere: number }[] }
   | {
@@ -84,10 +85,8 @@ function id() {
   return `m-${nextId++}`;
 }
 
-// Past conversations, persisted so "history" survives a refresh — same
-// localStorage pattern as the open/collapsed flag in copilot-context.tsx.
-type SavedConversation = { id: string; savedAt: number; messages: Message[] };
-const HISTORY_STORAGE_KEY = "medstock-copilot-history";
+// Past conversations, persisted by I2 (`GET /api/copilot/conversations`).
+type SavedConversation = { id: string; savedAt: number; title?: string | null; messages: Message[] };
 const GREETING: Message = {
   id: "m-greeting",
   role: "assistant",
@@ -241,11 +240,12 @@ function certificateText(drugName: string, status: CertStatus): string {
   return `${drugName} has open findings against it — details below.`;
 }
 
-// Reads the same mock-data every other page reads, keyed off whatever SKU
-// is actually focused — the quick actions used to return fixed literals
-// (a hardcoded PO regardless of drug, analogues from facilities that no
-// longer exist) with no connection to what was on screen.
-async function replyFor(action: string, focus: CopilotFocus, facilityId: string): Promise<Message> {
+// Live F1 / analogue / compliance reads — no model required (I1 rule 5).
+async function replyFor(
+  action: string,
+  focus: CopilotFocus,
+  facilityPk: number,
+): Promise<Message> {
   if (focus?.kind !== "sku") {
     return {
       id: id(),
@@ -254,81 +254,109 @@ async function replyFor(action: string, focus: CopilotFocus, facilityId: string)
     };
   }
 
-  const item = inventoryFor(facilityId).find((i) => i.id === focus.itemId);
-  if (!item) {
-    return { id: id(), role: "assistant", text: `${focus.label} isn't stocked at the active facility.` };
+  const ndc = focus.ndc || focus.itemId;
+  let rxcui = focus.rxcui ?? null;
+  let onHand: number | null = null;
+  try {
+    const body = (await apiFetch(
+      "inventory",
+      `/items?facility_id=${facilityPk}&limit=200`,
+    )) as { items: { ndc: string; name: string | null; quantity: number; rxcui?: string | null }[] };
+    const row = (body.items ?? []).find((i) => i.ndc === ndc);
+    if (!row) {
+      return { id: id(), role: "assistant", text: `${focus.label} isn't stocked at the active facility.` };
+    }
+    onHand = row.quantity;
+    rxcui = rxcui || row.rxcui || null;
+  } catch {
+    return { id: id(), role: "assistant", text: `I could not reach inventory for ${focus.label}.` };
   }
 
   if (action === "po") {
-    const forecast = forecastFor(facilityId, item.id);
-    if (!forecast) {
+    try {
+      const body = (await apiFetch(
+        "prediction",
+        `/recommendations?facility_id=${facilityPk}&ndc=${encodeURIComponent(ndc)}`,
+      )) as { items: Record<string, unknown>[] };
+      const rec = body.items?.[0];
+      if (!rec) {
+        return {
+          id: id(),
+          role: "assistant",
+          text: `${focus.label} has no restock recommendation — either it is already at par or no supplier lists this NDC.`,
+        };
+      }
+      const quantity = Number(rec.quantity) || 0;
+      const unitCost = Number(rec.unit_cost) || 0;
       return {
         id: id(),
         role: "assistant",
-        text: `${item.drugName} has no trained forecast model, so I can't draft a data-backed purchase order for it.`,
+        text: `Drafted a purchase order for ${rec.name ?? focus.label} from live par, on-hand (${onHand ?? "—"}), and the supplier catalog.`,
+        card: {
+          kind: "po",
+          itemId: ndc,
+          ndc,
+          drugName: String(rec.name ?? focus.label),
+          supplier: String(rec.supplier_name ?? ""),
+          quantity,
+          unit: String(rec.unit ?? "units"),
+          unitCost,
+          totalCost: Number(rec.estimated_total) || quantity * unitCost,
+          coverageDays: Number(rec.coverage_days) || 30,
+          leadTimeDays: Number(rec.lead_time_days) || 0,
+          confidence: 0,
+          payload: rec,
+        },
       };
+    } catch {
+      return { id: id(), role: "assistant", text: `I could not load a restock recommendation for ${focus.label}.` };
     }
-    const { supplier, unit, unitCost, leadTimeDays } = forecast.purchaseOrder;
-    // Order enough to reach a 30-day par level at the model's own predicted
-    // rate, same derivation as the Forecasts page — not a stored literal.
-    const points = forecast.series.filter((p) => p.forecast != null).map((p) => p.forecast!);
-    const avgDailyForecast = points.length > 0 ? points.reduce((sum, v) => sum + v, 0) / points.length : 0;
-    const coverageDays = 30;
-    const quantity = Math.max(1, parLevel(avgDailyForecast, coverageDays) - item.currentStock);
-    return {
-      id: id(),
-      role: "assistant",
-      text: `Drafted a purchase order for ${item.drugName} based on the current burn rate and a ${coverageDays}-day coverage target.`,
-      card: {
-        kind: "po",
-        itemId: item.id,
-        drugName: item.drugName,
-        supplier,
-        quantity,
-        unit,
-        unitCost,
-        totalCost: quantity * unitCost,
-        coverageDays,
-        leadTimeDays,
-        confidence: forecast.confidence,
-      },
-    };
   }
   if (action === "analogue") {
-    const ranked = [...item.analogues].sort((a, b) => b.matchScore - a.matchScore);
-    if (ranked.length === 0) {
-      return { id: id(), role: "assistant", text: `No RxNorm or ATC equivalents are registered for ${item.drugName}.` };
+    if (!rxcui) {
+      return { id: id(), role: "assistant", text: `${focus.label} has no RxCUI on file, so I cannot look up bio-equivalents.` };
     }
-    return {
-      id: id(),
-      role: "assistant",
-      text: `Found ${ranked.length} bio-equivalent analogue${ranked.length === 1 ? "" : "s"} for ${item.drugName}, best match first.`,
-      card: {
-        kind: "analogues",
-        items: ranked.slice(0, 3).map((a) => ({
-          name: a.drugName,
-          matchScore: a.matchScore,
-          stockHere: a.stockByFacility[facilityId] ?? 0,
-        })),
-      },
-    };
+    try {
+      const body = (await apiFetch(
+        "analogue",
+        `/analogues/${encodeURIComponent(rxcui)}?facility_id=${facilityPk}&use_ai=false`,
+      )) as {
+        items: {
+          name: string;
+          quantity?: number;
+          availability?: { quantity?: number };
+        }[];
+      };
+      const ranked = body.items ?? [];
+      if (ranked.length === 0) {
+        return { id: id(), role: "assistant", text: `No RxNorm equivalents are registered for ${focus.label}.` };
+      }
+      return {
+        id: id(),
+        role: "assistant",
+        text: `Found ${ranked.length} bio-equivalent analogue${ranked.length === 1 ? "" : "s"} for ${focus.label}, best stocked first.`,
+        card: {
+          kind: "analogues",
+          items: ranked.slice(0, 3).map((a, i) => ({
+            name: a.name,
+            matchScore: Math.max(10, 100 - i * 12),
+            stockHere: a.availability?.quantity ?? a.quantity ?? 0,
+          })),
+        },
+      };
+    } catch {
+      return { id: id(), role: "assistant", text: `I could not reach analogue search for ${focus.label}.` };
+    }
   }
   if (action === "certificate") {
-    // Real compliance data, same source as the shelf badge. Fetched here rather
-    // than in the card view so the message keeps working the way every other
-    // card does: it carries its data, which is what makes copy-to-clipboard
-    // able to quote a status it can actually see.
-    //
-    // A chat message is a snapshot by nature -- it records what was true when
-    // asked, and is not expected to repaint later.
-    const result = await certificateStatus(item.ndc);
+    const result = await certificateStatus(ndc);
     return {
       id: id(),
       role: "assistant",
-      text: certificateText(item.drugName, result.status),
+      text: certificateText(focus.label, result.status),
       card: {
         kind: "certificate",
-        ndc: item.ndc,
+        ndc,
         status: result.status,
         reasons: result.reasons ?? 0,
         transient: result.transient ?? 0,
@@ -339,7 +367,7 @@ async function replyFor(action: string, focus: CopilotFocus, facilityId: string)
   return {
     id: id(),
     role: "assistant",
-    text: `I can help with ${item.drugName}. Ask about stock coverage, bio-equivalents, restock timing, or certificate status.`,
+    text: `I can help with ${focus.label}. Ask about stock coverage, bio-equivalents, restock timing, or certificate status.`,
   };
 }
 
@@ -542,44 +570,85 @@ export function CopilotDrawer() {
   const router = useRouter();
   const { user } = useSession();
   const { open, setOpen, focus, emergencyRequest } = useCopilot();
-  const { facilityId, facility } = useFacility();
-  const { addOrder } = useOrders();
+  const { facility } = useFacility();
+  const { reload: reloadOrders } = useOrders();
   const role = user?.role ?? "pharmacist";
   const quickActions = ROLE_ACTIONS[role] ?? ROLE_ACTIONS.pharmacist;
-  // Below `lg` the panel opens as a Sheet instead of a flex sibling of
-  // `main` (there's no room for a fixed 380px column at phone/tablet
-  // widths). Branching on a real viewport check — rather than mounting
-  // both an inline aside and a Sheet and CSS-hiding one — matters here
-  // because this component owns live conversation state; two mounted
-  // instances would silently diverge.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<SavedConversation[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
-  useEffect(() => {
-    const stored = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-    if (stored) setHistory(JSON.parse(stored));
-  }, []);
-  // Message ids whose PO card has already been turned into a real draft
-  // order — keyed by message, not by drug, so two suggestions for the same
-  // SKU in one conversation stay independent.
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [draftedMessageIds, setDraftedMessageIds] = useState<Set<string>>(new Set());
-  // Drives aria-busy on the message log while a reply is in flight — the
-  // 300ms canned-reply delay is otherwise imperceptible to assistive tech.
   const [pending, setPending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastHandledNonce = useRef<number | null>(null);
-  // The in-flight /copilot/chat stream, if any — a new message aborts the
-  // previous one rather than letting two streams write into the same
-  // conversation, and unmounting the drawer aborts whatever's still open.
   const streamAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => streamAbortRef.current?.abort(), []);
 
-  // A page (e.g. the forecast scenario simulator) can fire a one-shot
-  // "emergency plan" ask via the copilot context — post it as a user
-  // message and stream back the structured plan, same as a quick action.
+  function mapApiMessages(items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[]): Message[] {
+    const mapped = items
+      .filter((row) => row.role === "user" || row.role === "assistant")
+      .map((row) => ({
+        id: `api-${row.id}`,
+        role: row.role as "user" | "assistant",
+        text: row.text ?? "",
+        card: row.card ?? undefined,
+        live: true,
+      }));
+    return mapped.length === 0 ? [GREETING] : mapped;
+  }
+
+  async function refreshHistory() {
+    const body = (await apiFetch("copilot", "/conversations?limit=10")) as {
+      items: { id: string; title: string | null; created_at: string | null }[];
+    };
+    setHistory(
+      (body.items ?? []).map((row) => ({
+        id: row.id,
+        savedAt: row.created_at ? new Date(row.created_at).getTime() : 0,
+        title: row.title,
+        messages: [],
+      })),
+    );
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const body = (await apiFetch("copilot", "/conversations?limit=10")) as {
+          items: { id: string; title: string | null; created_at: string | null }[];
+        };
+        if (cancelled) return;
+        const items = body.items ?? [];
+        setHistory(
+          items.map((row) => ({
+            id: row.id,
+            savedAt: row.created_at ? new Date(row.created_at).getTime() : 0,
+            title: row.title,
+            messages: [],
+          })),
+        );
+        if (!items[0]) return;
+        const conv = (await apiFetch("copilot", `/conversations/${items[0].id}`)) as {
+          id: string;
+          items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[];
+        };
+        if (cancelled) return;
+        setConversationId(conv.id);
+        setMessages(mapApiMessages(conv.items ?? []));
+      } catch {
+        /* stay on greeting if the gateway is down */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!emergencyRequest || emergencyRequest.nonce === lastHandledNonce.current) return;
     lastHandledNonce.current = emergencyRequest.nonce;
@@ -599,15 +668,14 @@ export function CopilotDrawer() {
     if (pending) return; // one stream at a time, same rule send() follows
     const action = quickActions.find((a) => a.key === actionKey);
     const label = action?.label ?? actionKey;
-    const priorMessages = messages;
     setMessages((m) => [...m, { id: id(), role: "user", text: focus ? `${label} — ${focus.label}` : label }]);
     setPending(true);
     if (action?.prompt) {
-      void streamReply(action.prompt, priorMessages);
+      void streamReply(action.prompt);
       return;
     }
     window.setTimeout(async () => {
-      const reply = await replyFor(actionKey, focus, facilityId);
+      const reply = await replyFor(actionKey, focus, facility.id);
       setMessages((m) => [...m, reply]);
       setPending(false);
     }, 300);
@@ -617,70 +685,66 @@ export function CopilotDrawer() {
     setMessages([GREETING]);
   }
 
-  // Archives the active conversation (if anything actually happened beyond
-  // the canned greeting) then persists it — this backs both "start a new
-  // chat" and "switch to a past one", so neither one silently drops what
-  // was on screen.
-  function archiveCurrent(current: Message[]) {
-    if (current.length <= 1) return;
-    setHistory((prev) => {
-      const next = [{ id: id(), savedAt: Date.now(), messages: current }, ...prev];
-      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }
-
-  function startNewConversation() {
-    archiveCurrent(messages);
+  async function startNewConversation() {
+    try {
+      const created = (await apiFetch("copilot", "/conversations", {
+        method: "POST",
+        body: JSON.stringify({ facility_id: facility.id }),
+      })) as { id: string };
+      setConversationId(created.id);
+      await refreshHistory();
+    } catch {
+      setConversationId(null);
+    }
     setMessages([GREETING]);
     setHistoryOpen(false);
   }
 
-  function openConversation(saved: SavedConversation) {
-    archiveCurrent(messages);
-    setMessages(saved.messages);
+  async function openConversation(saved: SavedConversation) {
+    try {
+      const conv = (await apiFetch("copilot", `/conversations/${saved.id}`)) as {
+        id: string;
+        items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[];
+      };
+      setConversationId(conv.id);
+      setMessages(mapApiMessages(conv.items ?? []));
+    } catch {
+      toast.error("Could not load that conversation.");
+    }
     setHistoryOpen(false);
   }
 
-  // Same order pipeline the Forecasts page suggestion writes to — lands in
-  // /orders as a draft awaiting review, not a dispatch. Previously
-  // "Generate PO" here produced a card and nothing else, while the
-  // identically-named action on Forecasts created a real order.
-  function createDraftFromCard(messageId: string, card: Extract<ResponseCard, { kind: "po" }>) {
-    const supplier = suppliers.find((s) => s.name === card.supplier) ?? suppliers[0];
-    const order = addOrder({
-      facilityId,
-      supplierId: supplier.id,
-      drugId: card.itemId,
-      drugName: card.drugName,
-      quantity: card.quantity,
-      unit: card.unit,
-      unitCost: card.unitCost,
-      shipping: supplier.shippingFlat,
-      status: "draft",
-      source: "ai_suggestion",
-      expectedDelivery: isoPlusDays(card.leadTimeDays),
-      note: `Generated from ${card.confidence}% confidence forecast via AI MedStock Assistant.`,
-    });
-    setDraftedMessageIds((prev) => new Set(prev).add(messageId));
-    toast.success(`Draft order ${order.id} created.`, {
-      description: `${card.quantity} ${card.unit} of ${card.drugName} for ${facility.name}.`,
-      action: { label: "Review", onClick: () => router.push("/orders") },
-    });
+  async function createDraftFromCard(messageId: string, card: Extract<ResponseCard, { kind: "po" }>) {
+    try {
+      const rec = (await apiFetch("inventory", "/recommendations", {
+        method: "POST",
+        body: JSON.stringify({ facility_id: facility.id, payload: card.payload }),
+      })) as { id: number };
+      const order = (await apiFetch("inventory", `/recommendations/${rec.id}/approve`, {
+        method: "POST",
+      })) as { ref: string };
+      reloadOrders();
+      setDraftedMessageIds((prev) => new Set(prev).add(messageId));
+      toast.success(`Draft order ${order.ref} created.`, {
+        description: `${card.quantity} ${card.unit} of ${card.drugName} for ${facility.name}.`,
+        action: { label: "Review", onClick: () => router.push("/orders") },
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create draft order.");
+    }
   }
 
-  // Real turns only — the greeting is UI chrome, not something the assistant
-  // actually said, and sending it back as a prior "model" turn would have
-  // Gemini responding to a message it never produced. `role: "model"` (not
-  // "assistant") is Gemini's own vocabulary — services/analogue/app/copilot.py
-  // passes it straight through to `types.Content(role=...)`.
-  function toCopilotHistory(history: Message[]): CopilotMessage[] {
-    return history
-      .filter((m) => m.id !== GREETING.id)
-      .map((m) => ({ role: m.role === "assistant" ? ("model" as const) : ("user" as const), text: m.text }));
+  async function ensureConversation(): Promise<string> {
+    if (conversationId) return conversationId;
+    const created = (await apiFetch("copilot", "/conversations", {
+      method: "POST",
+      body: JSON.stringify({ facility_id: facility.id }),
+    })) as { id: string };
+    setConversationId(created.id);
+    return created.id;
   }
 
-  async function streamReply(userText: string, priorMessages: Message[]) {
+  async function streamReply(userText: string) {
     streamAbortRef.current?.abort();
     const controller = new AbortController();
     streamAbortRef.current = controller;
@@ -692,16 +756,22 @@ export function CopilotDrawer() {
       setMessages((m) => m.map((msg) => (msg.id === replyId ? fn(msg) : msg)));
 
     try {
-      // The "Context: …" banner is UI chrome — it's shown, not said. Gemini
-      // never sees the page unless it's folded into the turn's own text, so
-      // whatever SKU/alert is focused when the user hits send goes in here.
-      // Re-added on every turn (not just the first) because focus can change
-      // mid-conversation and each call resends the full history from scratch.
-      const ndcTag = focus?.kind === "sku" ? ` (NDC ${focus.ndc})` : "";
+      const cid = await ensureConversation();
+      const focusPayload =
+        focus?.kind === "sku"
+          ? { type: "sku", ndc: focus.ndc ?? focus.itemId, facility_id: facility.id }
+          : focus?.kind === "alert" && focus.ndc
+            ? { type: "alert", ndc: focus.ndc, facility_id: facility.id }
+            : focus?.kind === "patient"
+              ? { type: "patient", patient_id: focus.patientId, rxcui: focus.rxcui, drug_name: focus.drugName, facility_id: facility.id }
+              : null;
+      const ndcTag = focus?.kind === "sku" ? (focus.ndc ? ` (NDC ${focus.ndc})` : "") : "";
       const patientTag = focus?.kind === "patient" ? ` [Patient ID: ${focus.patientId}]` : "";
       const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag}${patientTag} — ${focus.detail}]\n\n` : "";
-      const history = [...toCopilotHistory(priorMessages), { role: "user" as const, text: contextPrefix + userText }];
-      for await (const evt of streamCopilotChat(history, controller.signal)) {
+      for await (const evt of streamCopilotMessage(
+        { conversation_id: cid, text: contextPrefix + userText, focus: focusPayload },
+        controller.signal,
+      )) {
         if (evt.event === "delta") {
           applyToReply((msg) => ({ ...msg, text: msg.text + evt.data.text }));
         } else if (evt.event === "tool_start") {
@@ -730,10 +800,10 @@ export function CopilotDrawer() {
             patientPicker: { query, candidates },
           }));
         }
-        // "done" carries only a request_id — nothing left to apply to the message.
       }
+      void refreshHistory();
     } catch {
-      if (controller.signal.aborted) return; // superseded by a newer message, not a failure
+      if (controller.signal.aborted) return;
       applyToReply((msg) => ({
         ...msg,
         text: msg.text || "Something went wrong reaching the AI assistant. Try again in a moment.",
@@ -760,22 +830,18 @@ export function CopilotDrawer() {
     const text = `Use patient_id ${candidate.id} for my previous request.`;
     setMessages([...priorMessages, { id: id(), role: "user", text }]);
     setPending(true);
-    void streamReply(text, priorMessages);
+    void streamReply(text);
   }
 
   function send() {
-    if (pending) return; // one stream at a time — the real turn can take seconds, not the old 300ms mock delay
+    if (pending) return;
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    // The textarea auto-grows with content; reset it back to one line once
-    // the message is sent rather than leaving it at whatever height the
-    // last message left it.
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    const priorMessages = messages;
     setMessages((m) => [...m, { id: id(), role: "user", text }]);
     setPending(true);
-    void streamReply(text, priorMessages);
+    void streamReply(text);
   }
 
   if (!open) {
@@ -951,7 +1017,7 @@ export function CopilotDrawer() {
           <DialogTitle>Conversation history</DialogTitle>
           <DialogDescription>Past AI MedStock Assistant conversations at {facility.name}.</DialogDescription>
         </DialogHeader>
-        <Button variant="outline" size="sm" className="w-fit gap-1.5 text-xs" onClick={startNewConversation}>
+        <Button variant="outline" size="sm" className="w-fit gap-1.5 text-xs" onClick={() => void startNewConversation()}>
           <Plus data-icon="inline-start" />
           New chat
         </Button>
@@ -959,21 +1025,20 @@ export function CopilotDrawer() {
           <p className="py-6 text-center text-xs text-muted-foreground">No past conversations yet.</p>
         ) : (
           <div className="flex flex-col gap-1">
-            {history.map((h) => {
-              const preview = h.messages.find((m) => m.role === "user")?.text ?? "New conversation";
-              return (
-                <button
-                  key={h.id}
-                  onClick={() => openConversation(h)}
-                  className="flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted"
-                >
-                  <span className="truncate font-medium">{preview}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {new Date(h.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} · {h.messages.length} messages
-                  </span>
-                </button>
-              );
-            })}
+            {history.map((h) => (
+              <button
+                key={h.id}
+                onClick={() => void openConversation(h)}
+                className="flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted"
+              >
+                <span className="truncate font-medium">{h.title || "New conversation"}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {h.savedAt
+                    ? new Date(h.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                    : ""}
+                </span>
+              </button>
+            ))}
           </div>
         )}
       </DialogContent>

@@ -1,6 +1,14 @@
 # B3 — Exposure query
 
-**Service:** `inventory` · **Flows:** 4, 16 · **Status:** ❌ · **Depends on:** B2, B6, `ingest-shortages`
+**Service:** `inventory` · **Flows:** 4, 16 · **Status:** ✅ (wave 3) · **Depends on:** B2, B6, `ingest-shortages`
+
+> The hourly FDA feed in `services/ingest/app/shortages.py` is still unverified. B3 joins
+> the existing `shortage_event` table; the demo plants the three dashboard-aligned rows
+> (Norepinephrine, Ceftriaxone, Heparin) so `uncovered` is a real claim.
+>
+> NDC resolution uses `demo_shelf` / `Drug.raw` / `consumption_daily` first and only
+> calls live RxNorm for RxCUIs with no local pack list — a full NLM fan-out per
+> `GET /exposure` is the same timeout B6 rule 5 forbids on import.
 
 ## Goal
 
@@ -24,8 +32,9 @@ and how covered are we?
   ]}
 ```
 
-`days_of_supply` appears only once E2 exists. Until then omit the key entirely — do not send a
-placeholder number the UI will render as fact.
+`days_of_supply` is attached from a 28-day trailing mean of `consumption_daily`
+(E2's fallback). The canonical formula still lives in `prediction` `summarize()`;
+B3 does not invent a placeholder when there is no history — the key is `null`.
 
 ## The query
 
@@ -59,11 +68,11 @@ in `docs/services.md` §1.1 — one shortage feed serves every tenant.
 
 ## Acceptance criteria
 
-- [ ] A formulary drug with an open `shortage_event` appears with its `source_id`.
-- [ ] A formulary drug with no stock row appears with `quantity: 0`, not missing.
-- [ ] A stocked drug absent from the formulary does **not** appear.
-- [ ] Two tenants with identical formularies see the same shortage rows and different quantities.
-- [ ] `totals` are computed in SQL, not by counting the serialized `items` array.
+- [x] A formulary drug with an open `shortage_event` appears with its `source_id`.
+- [x] A formulary drug with no stock row appears with `quantity: 0`, not missing.
+- [x] A stocked drug absent from the formulary does **not** appear.
+- [x] Two tenants with identical formularies see the same shortage rows and different quantities.
+- [x] `totals` are computed in SQL, not by counting the serialized `items` array.
 
 ## Out of scope
 

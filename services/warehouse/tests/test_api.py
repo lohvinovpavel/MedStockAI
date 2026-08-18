@@ -1,9 +1,9 @@
 """Warehouse API against the real schema (CI migrates, then runs these).
 
 Fixture rows carry their own throwaway hospital so runs never collide with
-seeded demo data; everything is deleted afterwards. RLS policies are still a
-repo-wide open item (docs/services.md §8), so cross-tenant invisibility is not
-asserted here yet — 404s are exercised via unknown ids.
+seeded demo data; everything is deleted afterwards. A4 FORCE RLS is on; these
+tests seed as the table owner (superuser bypass) and 404 unknown ids rather
+than asserting a second tenant.
 """
 
 import uuid
@@ -20,13 +20,15 @@ from medstock_shared.models import (
     Facility,
     Hospital,
     LocationCondition,
+    ParLevel,
+    StockBatch,
     StockSnapshot,
     StorageLocation,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
-HOSPITAL_ID = uuid.UUID("00000000-0000-0000-0000-00000000c0de")
+HOSPITAL_ID = uuid.uuid4()
 NDC_FRIDGE = "99999-test-01"
 NDC_ROOM = "99999-test-02"
 
@@ -53,28 +55,32 @@ def seeded():
             facility_id=central.id, code="t-fridge", name="Test Fridge", kind="fridge"
         )
         s.add_all([room, fridge])
-        s.flush()
-        s.merge(Drug(
-            ndc=NDC_FRIDGE, name="Testinsulin 100 UNT/ML", storage_class="refrigerated",
-            storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0, raw={"source": "test"},
-        ))
-        s.merge(Drug(
-            ndc=NDC_ROOM, name="Testformin 500 MG Oral Tablet", storage_class="crt",
-            storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0, raw={"source": "test"},
-        ))
+        from sqlalchemy import select
+        for d in [
+            Drug(
+                ndc=NDC_FRIDGE, name="Testinsulin 100 UNT/ML", storage_class="refrigerated",
+                storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0, raw={"source": "test"},
+            ),
+            Drug(
+                ndc=NDC_ROOM, name="Testformin 500 MG Oral Tablet", storage_class="crt",
+                storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0, raw={"source": "test"},
+            ),
+        ]:
+            if not s.execute(select(Drug).where(Drug.ndc == d.ndc)).scalar_one_or_none():
+                s.add(d)
         s.add_all([
             StockSnapshot(
-                hospital_id=str(HOSPITAL_ID), ndc=NDC_FRIDGE, facility_id=central.id,
+                hospital_id=HOSPITAL_ID, ndc=NDC_FRIDGE, facility_id=central.id,
                 location_id="t-fridge", quantity=40,
             ),
             StockSnapshot(
-                hospital_id=str(HOSPITAL_ID), ndc=NDC_ROOM, facility_id=central.id,
+                hospital_id=HOSPITAL_ID, ndc=NDC_ROOM, facility_id=central.id,
                 location_id="t-room", quantity=500,
             ),
         ])
         s.add_all([
             ConsumptionDaily(
-                hospital_id=str(HOSPITAL_ID), facility_id=central.id, ndc=NDC_ROOM,
+                hospital_id=HOSPITAL_ID, facility_id=central.id, ndc=NDC_ROOM,
                 rxcui="000000", date=f"2026-08-{day:02d}", qty_consumed=10 + day,
                 stockout=(day == 3),
             )
@@ -100,8 +106,10 @@ def seeded():
     yield ids
 
     with Session(engine) as s:
-        s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == str(HOSPITAL_ID)))
-        s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == str(HOSPITAL_ID)))
+        s.execute(delete(ConsumptionDaily).where(ConsumptionDaily.hospital_id == HOSPITAL_ID))
+        s.execute(delete(ParLevel).where(ParLevel.hospital_id == HOSPITAL_ID))
+        s.execute(delete(StockBatch).where(StockBatch.hospital_id == HOSPITAL_ID))
+        s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == HOSPITAL_ID))
         s.execute(delete(LocationCondition).where(
             LocationCondition.location_id.in_([ids["room"], ids["fridge"]])
         ))

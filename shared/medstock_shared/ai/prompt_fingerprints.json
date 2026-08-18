@@ -1,0 +1,10 @@
+{
+  "analogue": {
+    "prompt_version": "v2",
+    "sha256": "2e7712a6b1f9f1a229915735f093bdcc0c76f35f3b68dfbabac6d387c2466570"
+  },
+  "prognosis": {
+    "prompt_version": "v1",
+    "sha256": "58192cacf76987f5cac22fcce0e5ad338692404e37b12d02b6a3df94145c5372"
+  }
+}

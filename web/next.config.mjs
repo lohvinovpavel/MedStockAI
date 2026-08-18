@@ -37,6 +37,7 @@ export default {
       { source: "/api/compliance/:path*", destination: `${complianceOrigin}/:path*` },
       { source: "/api/warehouse/:path*", destination: `${warehouseOrigin}/:path*` },
       { source: "/api/prediction/:path*", destination: `${predictionOrigin}/:path*` },
+      { source: "/api/copilot/:path*", destination: `${analogueOrigin}/api/copilot/:path*` },
     ];
   },
 };

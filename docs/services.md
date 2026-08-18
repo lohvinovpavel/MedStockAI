@@ -257,12 +257,12 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 | Service | Owner | Ingress path | Responsibility | Endpoints (sketch) |
 |---|---|---|---|---|
 | `auth` | Tymur | `/api/auth` | Authenticate and authorize users; issue and rotate tokens. Holds the **private** signing key; everyone else holds the public one. | `POST /login` · `POST /logout` · `GET /me` |
-| `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. | `GET /stock?rxcui=` · `GET /exposure` · `POST /formulary/import` (CSV) |
-| `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
-| `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /export/compliance.csv` |
+| `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. Shortage matrix (G1) is a read of the same join plus E2 trailing days. Purchase orders (F3/F4) and F1 writers live here. | `GET /stock?rxcui=` · `GET /items` · `GET /exposure` · `GET /shortages` · `GET /shortages/{id}/coverage` · `POST /formulary/import` (CSV) · `GET\|POST /orders` · `POST /recommendations` |
+| `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. Local availability is an overlay on `?facility_id=`. Also hosts the copilot gateway at `/api/copilot`. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `POST /api/copilot/messages` |
+| `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /audit` · `GET /export/compliance.csv` |
 | `patient-profiling` | Andrii | `/api/patients` | Substitution safety for one patient (contraindications, allergies, interactions, label-derived prognosis), cohort demand and the PP-4 forecast, the demo patient CRUD behind the prescription cart, and the PP-5 queue where a pharmacist rules on extracted risk profiles. | `POST /assess` · `POST /demand` · `POST /forecast` · `GET /ruleset` · `GET /risk-profiles` · `POST /risk-profiles/{id}/review` · `GET\|POST /patients` · `GET\|PATCH /patients/{id}` · `POST /cart-check` |
-| `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
-| `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure (B1 facility registry), storage locations, stock placement, recorded consumption history, and storage-condition monitoring — hourly temperature/humidity telemetry checked against per-drug storage requirements, violations computed on read. Also hosts the connector admin endpoints (planned). | `GET /facilities` · `GET /locations` · `GET /stock` · `GET /consumption` · `GET /locations/{id}/conditions` · `GET /excursions` · `POST /connectors/{id}/propose-spec` (planned) |
+| `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. F1 restock recommendations are computed on read. | `GET /forecast/{rxcui}` · `GET /at-risk` · `GET /recommendations` |
+| `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure (B1 facility registry), storage locations, stock placement, recorded consumption history, and storage-condition monitoring — hourly temperature/humidity telemetry checked against per-drug storage requirements, violations computed on read. F2 supplier catalog and quotes. G2 transfers. Also hosts the connector admin endpoints (planned). | `GET /facilities` · `GET /locations` · `GET /stock` · `GET /consumption` · `GET /locations/{id}/conditions` · `GET /excursions` · `GET /suppliers` · `GET /suppliers/{id}/catalog` · `POST /quote` · `POST /transfers` · `POST /connectors/{id}/propose-spec` (planned) |
 
 Two of these — `analogue` and `prediction` — are AI consumers and call `ask_ai()` directly
 (§4). The other five are ordinary CRUD-plus-query services with no path to Gemini at all.
@@ -299,15 +299,21 @@ to 20 (max 50).
 ```
 
 Sort: `in_formulary` desc, then RxNorm score. `in_formulary` is a left join to
-`formulary_item.rxcui` for this hospital; until that table has rows (or does not exist yet)
-every item is `false` and the JSON shape does not change.
+`formulary_item.rxcui` for this hospital (B6 import / demo seed).
 
 `GET /api/analogue/drugs/{rxcui}/packages` — `drug:search`. NDCs for the chosen concept
 (step 2 of identity).
 
-`GET /api/inventory/stock?rxcui=` — `inventory:read`. Inventory asks the shared RxNorm client
-for those NDCs, then returns matching `stock_snapshot` rows for the hospital. Empty stock is
-an empty `items` list, not an error.
+`GET /api/analogue/analogues/{rxcui}?facility_id=` — `drug:search` (+ `inventory:read` when
+`facility_id` is sent). Ranked candidates; local availability is an overlay (C5).
+
+`GET /api/inventory/stock?rxcui=&facility_id=` — `inventory:read`. Inventory asks the shared RxNorm client
+for those NDCs, then returns matching `stock_snapshot` rows for the hospital (and facility, when
+sent). Empty stock is an empty `items` list, not an error. On NLM failure the service matches
+the query string as an NDC and sets `rxnorm_degraded: true`.
+
+`GET /api/inventory/items?facility_id=` — `inventory:read`. The inventory table: on-hand rolled
+up from `stock_batch`, status from `par_level` (B5), soonest expiry for the FEFO lot.
 
 RxNorm is US English. Ukrainian trade names are out of scope (same capstone feed choice as §7).
 
@@ -525,15 +531,18 @@ schedule caught by `startingDeadlineSeconds`.
    unverified placeholders (`ponytail:` comments in `services/ingest/app/*.py`), there is no
    migration for the four reference tables yet, and `rxnorm.py` has no real RXCUI seed list.
    Do not point the CronJobs at a live schedule until those are resolved.
-2. **RLS policies are not written.** `session_scope()` sets `app.hospital_id`, but no
-   `CREATE POLICY` exists yet, and the app role must not own the tables — an owner ignores
-   its own policies. First migration. (The old cross-tenant claim problem this item used to
-   mention — the `ai-handler` runner claiming a `job` row before it knew the hospital — no
-   longer applies: there is no runner, and `ai_cache` was deliberately designed without
-   `hospital_id` in the first place, so there's no cross-tenant claim to admit a policy for.)
-3. **Stock data source for the MVP** — CSV, synthetic generator, or a self-written mock
-   distributor API. Days-of-supply is the core metric and no public feed provides it. Blocks
-   the `formulary_item` / `stock_snapshot` schema.
+2. **RLS policies on future tenant tables.** Wave 2 (`20260818_wave2_stock`) ENABLE/FORCE RLS
+   plus `tenant_isolation` on every tenant table that exists today, including subquery
+   policies on `storage_location` / `location_condition`. `session_scope()` sets
+   `app.hospital_id` / `app.actor_id` / `app.actor_system` and `SET LOCAL ROLE app_role`
+   so a docker/CI superuser cannot bypass FORCE RLS. Identity and reference tables stay
+   exempt. Any new tenant table (`purchase_order`, `transfer_request`, …) must get a
+   policy in the same migration that creates it. The app role must not own the tables.
+   (`ai_cache` remains global on purpose — no `hospital_id`.)
+3. **Stock data source for the MVP** — decided: synthetic demo seed
+   (`shared/medstock_shared/demo_shelf.py`, loaded by `seed_demo` / `seed_stock`).
+   Days-of-supply is the core metric and no public feed provides it. Tenant stock
+   lives in `stock_snapshot` / `stock_batch`; it is not a frontend catalog.
 4. **User ↔ hospital cardinality** — one, or many via `membership`. Decided default: one per
    user *now*, but role stored in `membership` from day one so the change is a migration, not
    an auth rewrite.

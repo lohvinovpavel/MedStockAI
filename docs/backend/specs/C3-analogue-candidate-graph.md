@@ -7,7 +7,7 @@ by indication/form/dose, prices via NADAC. Reads `rxnorm_edge` (unique on
 `rxcui_from, rxcui_to, relationship`) and `drug_price` (unique on `ndc, effective_date`), both
 populated by the `ingest-rxnorm` (weekly) and `ingest-pricing` (daily) CronJobs.
 
-This produces the **candidate set**. C4 filters it; C5 will annotate it with local availability.
+This produces the **candidate set**. C4 filters it; C5 annotates it with local availability.
 The separation matters: the model never generates candidates, it only removes them.
 
 **No implementation work.** Verify:

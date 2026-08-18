@@ -36,19 +36,15 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "shared"))
 
 from medstock_shared.db import SessionLocal
+from medstock_shared.demo_tenant import HOSPITAL_NAME as DEFAULT_HOSPITAL_NAME
 from medstock_shared.models import Hospital, Patient
 from sqlalchemy import select
 
-# `patient.hospital_id` is Text with no foreign key, so seeding into a hospital
-# that does not exist succeeds and writes rows nobody can ever see — every user
-# is scoped to the hospital in their token. This script used to default to the
-# literal 00000000-0000-0000-0000-000000000001, which matches nothing: the only
-# place a `hospital` row is created is services/auth/app/seed.py, and it lets
-# Postgres generate the uuid. That default is how a demo ends up with a full
-# table and an empty screen.
-#
-# Resolve by name instead, and refuse to guess.
-DEFAULT_HOSPITAL_NAME = "St Mary's General"  # keep in step with auth's seed
+# `patient.hospital_id` is a uuid FK to hospital.id. This script used to
+# default to the literal 00000000-0000-0000-0000-000000000001, which matched
+# seed_demo's DEMO GENERAL HOSPITAL and nothing auth created. Resolve by name
+# instead so rows land in the hospital named in the user's token.
+# DEFAULT_HOSPITAL_NAME is imported from medstock_shared.demo_tenant.
 
 # Invented people. Nothing here belongs to anyone — the `patient` table is the
 # documented PHI exception for the prescribe demo (docs/phi-readiness.md), and

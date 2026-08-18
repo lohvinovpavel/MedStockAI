@@ -19,10 +19,8 @@ through `medstock_shared.ai.tools.execute()`, which re-checks the caller's
 permission and runs the tool in a threadpool -- see that module for why
 `declarations_for()` alone is not the security boundary.
 
-Never a write-approval tool here (docs/ai-module-plan.md Phase 4): nothing
-in `medstock_shared.ai.tools` sends a PO or approves anything. A copilot that
-reads drug-label text it was asked to summarise and can also approve
-purchases is a copilot that can be prompt-injected into approving purchases.
+`draft_order` is the only writing tool and always creates `status: draft`
+(I1). Nothing here places, cancels, or deletes an order.
 """
 
 import json

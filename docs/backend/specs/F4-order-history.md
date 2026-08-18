@@ -1,6 +1,6 @@
 # F4 — Order history query
 
-**Service:** `inventory` · **Flow:** 15 · **Status:** ❌ · **Depends on:** F3 · **Scope:** `order:read`
+**Service:** `inventory` · **Flow:** 15 · **Status:** ✅ (wave 5) · **Depends on:** F3 · **Scope:** `order:read`
 
 ## Goal
 
@@ -60,12 +60,12 @@ The KPI row:
 
 ## Acceptance criteria
 
-- [ ] Filtering by two statuses returns the union.
-- [ ] `total` on a multi-line order equals the sum of its lines plus shipping.
-- [ ] `drafts_awaiting_review` matches the sidebar badge count exactly.
-- [ ] Page 2 contains no row from page 1 when orders share a `created_at`.
-- [ ] One request renders the table — no per-order follow-up call for supplier or facility names.
-- [ ] `committed_spend.definition` is present in every response.
+- [x] Filtering by two statuses returns the union.
+- [x] `total` on a multi-line order equals the sum of its lines plus shipping.
+- [x] `drafts_awaiting_review` matches the sidebar badge count exactly.
+- [x] Page 2 contains no row from page 1 when orders share a `created_at`.
+- [x] One request renders the table — no per-order follow-up call for supplier or facility names.
+- [x] `committed_spend.definition` is present in every response.
 
 ## Out of scope
 

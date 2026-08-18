@@ -1,18 +1,22 @@
 # H1 — Append-only audit log
 
-**Owner:** Postgres itself — read through `compliance` · **Flows:** 8, 18 · **Status:** ❌
+**Owner:** Postgres itself — read through `compliance` · **Flows:** 8, 18 · **Status:** ✅ (wave 1, migration `20260818_h1_audit`)
 **Blocks:** B4, D3, F1, F3, G2 · **Scope:** `audit:read`
+
+> Implementation deviations: the trigger is attached to `review_decision` (wave 1)
+> plus `stock_batch` and `par_level` (wave 2), `formulary_item` (wave 3), and
+> `purchase_order` + `transfer_request` (wave 5). Seeds set `app.actor_system` so the CHECK
+> does not abort them. RLS FORCE on remaining tenant tables is A4 wave 2. `session_scope` SETs
+> `LOCAL ROLE app_role` because docker/CI connect as a superuser that would
+> otherwise bypass FORCE RLS. Pharmacist holds `audit:read` to match `PAGE_ROLES` and the rbac
+> matrix (D3 export stays director, `audit:export`).
 
 ## Goal
 
-`docs/services.md` §1.3 builds the entire compliance story on a trigger that writes to
-`audit_log_entry`, and on `review_decision` as the table it fires from. **Neither table exists
-in `shared/medstock_shared/models.py`.** Every "Dr. Smirnov confirmed the switch", "ML pipeline
-updated the forecast", "certificate verified by OCR" line in flow 18 is currently fabricated,
-and the ISO-13485 footer claims a guarantee the schema cannot make.
-
-This is the highest-leverage missing table in the system. Build it before the features that
-depend on being audited.
+`docs/services.md` §1.3 builds the compliance story on a trigger that writes to
+`audit_log_entry` whenever `review_decision` changes. Append-only is a grant
+(`REVOKE UPDATE, DELETE FROM app_role`), not an application `audit()` call.
+Flow 18's timeline is served from this table.
 
 ## Data model
 
@@ -62,8 +66,10 @@ CREATE TRIGGER audit_review_decision AFTER INSERT OR UPDATE ON review_decision
   FOR EACH ROW EXECUTE FUNCTION write_audit_entry();
 ```
 
-Attach the same trigger to: `review_decision`, `purchase_order`, `stock_batch`,
-`transfer_request`, `par_level`, `formulary_item`, `drug_certification`.
+Wave 1 attaches the trigger to `review_decision`. Wave 2 attaches it to `stock_batch`
+and `par_level` as well. Wave 3 attaches it to `formulary_item`. Attach the same trigger to `purchase_order`, `transfer_request`,
+and `drug_certification` when those writers go through `session_scope`
+with an actor — seeds that write certification without one would abort on the CHECK.
 
 ## Append-only is a grant
 
@@ -94,12 +100,12 @@ in zero. This is demonstrable in ten seconds at defense: connect as `app_role`, 
 
 ## Acceptance criteria
 
-- [ ] `DELETE FROM audit_log_entry` as `app_role` raises insufficient privilege.
-- [ ] `UPDATE` as `app_role` raises insufficient privilege.
-- [ ] Approving a recommendation produces an audit row with no application code calling `audit()`.
-- [ ] A write inside `session_scope` with no actor configured rolls back the whole transaction.
-- [ ] A CronJob write produces a row with `actor_system` set and `actor_id` null.
-- [ ] Flow 18's timeline is served entirely from this table — no fixture data remains.
+- [x] `DELETE FROM audit_log_entry` as `app_role` raises insufficient privilege.
+- [x] `UPDATE` as `app_role` raises insufficient privilege.
+- [x] Inserting a `review_decision` produces an audit row with no application code calling `audit()`. F1's approve endpoint is still open — until it writes this table the live trail stays empty.
+- [x] A write inside `session_scope` with no actor configured rolls back the whole transaction.
+- [x] A CronJob write produces a row with `actor_system` set and `actor_id` null.
+- [x] Flow 18's timeline is served entirely from this table — no fixture data remains.
 
 ## Out of scope
 

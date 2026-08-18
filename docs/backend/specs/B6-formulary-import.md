@@ -1,12 +1,17 @@
 # B6 — Formulary import
 
-**Service:** `inventory` · **Flow:** 4 · **Status:** ❌ · **Scope:** `formulary:write` (admin; already in `PERMS`)
+**Service:** `inventory` · **Flow:** 4 · **Status:** ✅ (wave 3, migration `20260818_wave3`) · **Scope:** `formulary:write` (admin; already in `PERMS`)
+
+> Implementation: `GET /formulary` fills `name` from `demo_shelf` when known rather than
+> calling live RxNorm per row (import rule 5 — NLM stays off the write/list path). UC-1
+> search still sorts formulary hits first from the table.
 
 ## Goal
 
-`formulary_item` exists and `analogue` already reads it to boost UC-1 search hits — but nothing
-writes it, so `in_formulary` is `false` for every drug in every response. One CSV upload
-endpoint closes the loop.
+`formulary_item` exists and `analogue` already reads it to boost UC-1 search hits.
+`POST /formulary/import` (admin) writes the table; the demo seed plants the dashboard
+RxCUIs so a fresh environment is not empty. After import, `in_formulary` is true and
+UC-1 search sorts those hits first.
 
 ## API
 
@@ -50,12 +55,12 @@ rxcui,name
 
 ## Acceptance criteria
 
-- [ ] Importing the same file twice reports 0 inserted the second time and leaves the row count unchanged.
-- [ ] A file with one bad row imports the rest and reports the offending line number.
-- [ ] A 6 MB upload is rejected before parsing begins.
-- [ ] A file with 10,001 rows is rejected with 422.
-- [ ] After import, `GET /api/analogue/drugs/search` sorts formulary hits first.
-- [ ] Import runs in a single transaction — a mid-file failure leaves zero rows written.
+- [x] Importing the same file twice reports 0 inserted the second time and leaves the row count unchanged.
+- [x] A file with one bad row imports the rest and reports the offending line number.
+- [x] A 6 MB upload is rejected before parsing begins.
+- [x] A file with 10,001 rows is rejected with 422.
+- [x] After import, `GET /api/analogue/drugs/search` sorts formulary hits first.
+- [x] Import runs in a single transaction — a mid-file failure leaves zero rows written.
 
 ## Out of scope
 

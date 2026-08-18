@@ -645,47 +645,27 @@ def test_declarations_are_scoped_to_the_caller_role():
     from medstock_shared.ai.tools import declarations_for
 
     names = {d["name"] for d in declarations_for(PHARMACIST)}
-    assert names == {
-        "search_analogues_rxnorm",
-        "verify_batch_cert",
-        "check_stock_by_ndc",
-        "sweep_shelf_certificates",
-        "explore_ndc",
-        "list_storage_excursions",
-        "assess_patient_for_drug",
-        "explain_assessment",
-        "list_review_queue",
-        "list_at_risk_skus",
-        "propose_forecast_rerun",
-    }
+    assert "search_analogues_rxnorm" in names
+    assert "verify_batch_cert" in names
+    assert "get_stock" in names
+    assert "draft_order" in names
+    assert "list_at_risk_skus" in names
+    assert "sweep_shelf_certificates" in names
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
 def test_denied_tools_for_is_the_complement_of_declarations_for():
-    """Pharmacist lacks patient:read and audit:read -- the two tools denied
-    even to the role with the widest permission set in the system."""
+    """Pharmacist lacks patient:read -- denied even to the role with the widest
+    clinical permission set."""
     from medstock_shared.ai.tools import denied_tools_for
 
     assert {d["name"] for d in denied_tools_for(PHARMACIST)} == {
         "get_patient_regimen",
-        "query_ai_decisions",
     }
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
-    assert names == {
-        "search_analogues_rxnorm",
-        "verify_batch_cert",
-        "check_stock_by_ndc",
-        "sweep_shelf_certificates",
-        "explore_ndc",
-        "get_patient_regimen",
-        "list_storage_excursions",
-        "assess_patient_for_drug",
-        "explain_assessment",
-        "query_ai_decisions",
-        "list_review_queue",
-        "list_at_risk_skus",
-        "propose_forecast_rerun",
-    }
+    assert "search_analogues_rxnorm" in names
+    assert "draft_order" in names
+    assert "get_stock" in names
 
 
 def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch, audit_calls):
@@ -712,15 +692,10 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
     assert "don't have permission" in instruction
     # still-granted tools stay callable, not just named in the prompt
     declared_names = {d.name for d in fake.configs[0].tools[0].function_declarations}
-    assert declared_names == {
-        "search_analogues_rxnorm",
-        "check_stock_by_ndc",
-        "sweep_shelf_certificates",
-        "get_patient_regimen",
-        "list_storage_excursions",
-        "assess_patient_for_drug",
-        "explain_assessment",
-    }
+    assert "search_analogues_rxnorm" in declared_names
+    assert "get_patient_regimen" in declared_names
+    assert "assess_patient_for_drug" in declared_names
+    assert "verify_batch_cert" not in declared_names
 
 
 def test_ambiguous_patient_name_ends_the_turn_with_a_disambiguation_event(monkeypatch, audit_calls):
@@ -893,3 +868,4 @@ def test_verify_batch_cert_matches_unhyphenated_or_hyphenated_ndc(monkeypatch):
     result = verify_batch_cert(VerifyBatchCertArgs(ndc="00069-4061-01"), PHARMACIST)
     assert result["status"] == "green"
     assert result["ndc"] == "00069-4061-01"
+

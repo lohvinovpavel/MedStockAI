@@ -25,10 +25,10 @@ from medstock_shared.models import (
     StockDaily,
     StockSnapshot,
 )
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-HOSPITAL_ID = uuid.UUID("00000000-0000-0000-0000-00000000f0de")
+HOSPITAL_ID = uuid.uuid4()
 END = date(2026, 8, 14)
 NDC_FLAT = "88888-test-01"  # 60 days flat 10/day, 100 on hand → 10 days
 RX_FLAT = "888801"
@@ -54,7 +54,8 @@ def seeded():
             (NDC_SHORT, "Testshort 20 MG"),
             (NDC_DRY, "Testdry 30 MG"),
         ]:
-            s.merge(Drug(ndc=ndc, name=name, raw={"source": "test"}))
+            if not s.execute(select(Drug).where(Drug.ndc == ndc)).scalar_one_or_none():
+                s.add(Drug(ndc=ndc, name=name, raw={"source": "test"}))
         spec = [
             (NDC_FLAT, RX_FLAT, 60, 10, 100),
             (NDC_SHORT, RX_SHORT, 10, 4, 200),
@@ -63,14 +64,14 @@ def seeded():
         for ndc, rxcui, days, qty, on_hand in spec:
             s.add_all(
                 ConsumptionDaily(
-                    hospital_id=str(HOSPITAL_ID), facility_id=fac.id, ndc=ndc, rxcui=rxcui,
+                    hospital_id=HOSPITAL_ID, facility_id=fac.id, ndc=ndc, rxcui=rxcui,
                     date=END - timedelta(days=i), qty_consumed=qty, stockout=False,
                 )
                 for i in range(days)
             )
             s.add(
                 StockSnapshot(
-                    hospital_id=str(HOSPITAL_ID), ndc=ndc, facility_id=fac.id,
+                    hospital_id=HOSPITAL_ID, ndc=ndc, facility_id=fac.id,
                     location_id="tf-room", quantity=on_hand,
                 )
             )
@@ -78,15 +79,22 @@ def seeded():
             # invariant the chart's history/projection boundary rests on.
             s.add_all(
                 StockDaily(
-                    hospital_id=str(HOSPITAL_ID), facility_id=fac.id, ndc=ndc,
+                    hospital_id=HOSPITAL_ID, facility_id=fac.id, ndc=ndc,
                     date=END - timedelta(days=i), qty_on_hand=on_hand + i * qty,
                 )
                 for i in range(min(days, 30))
             )
-        s.merge(
-            ShortageEvent(source_id=f"test-shortage-{NDC_DRY}", ndc=NDC_DRY, status="Current",
-                          raw={"source": "test"})
-        )
+        existing_shortage = s.execute(
+            select(ShortageEvent).where(ShortageEvent.source_id == f"test-shortage-{NDC_DRY}")
+        ).scalar_one_or_none()
+        if existing_shortage:
+            existing_shortage.status = "Current"
+            existing_shortage.ndc = NDC_DRY
+        else:
+            s.add(
+                ShortageEvent(source_id=f"test-shortage-{NDC_DRY}", ndc=NDC_DRY, status="Current",
+                              raw={"source": "test"})
+            )
         s.commit()
         fac_id = fac.id
 
@@ -99,7 +107,7 @@ def seeded():
             (ForecastPoint, ForecastPoint.hospital_id),
             (StockDaily, StockDaily.hospital_id),
         ]:
-            s.execute(delete(model).where(col == str(HOSPITAL_ID)))
+            s.execute(delete(model).where(col == HOSPITAL_ID))
         s.execute(delete(ShortageEvent).where(ShortageEvent.source_id.like("test-shortage-%")))
         s.execute(delete(Drug).where(Drug.ndc.in_([NDC_FLAT, NDC_SHORT, NDC_DRY])))
         s.execute(delete(Facility).where(Facility.hospital_id == HOSPITAL_ID))
@@ -163,7 +171,7 @@ def test_rerun_same_day_replaces(run):
     with Session(engine) as s:
         today_runs = s.execute(
             select(func.count(func.distinct(ForecastPoint.run_id))).where(
-                ForecastPoint.hospital_id == str(HOSPITAL_ID),
+                ForecastPoint.hospital_id == HOSPITAL_ID,
                 func.date(ForecastPoint.created_at) == func.current_date(),
             )
         ).scalar()
@@ -174,7 +182,7 @@ def test_quantiles_ordered_for_every_row(run):
     with Session(engine) as s:
         bad = s.execute(
             select(func.count()).select_from(ForecastPoint).where(
-                ForecastPoint.hospital_id == str(HOSPITAL_ID),
+                ForecastPoint.hospital_id == HOSPITAL_ID,
                 (ForecastPoint.p10 > ForecastPoint.p50) | (ForecastPoint.p50 > ForecastPoint.p90),
             )
         ).scalar()

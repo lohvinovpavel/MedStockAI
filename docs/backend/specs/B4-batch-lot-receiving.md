@@ -1,6 +1,6 @@
 # B4 — Batch / lot receiving and FEFO
 
-**Service:** `inventory` · **Flows:** 5, 15 · **Status:** ❌ · **Depends on:** B1
+**Service:** `inventory` · **Flows:** 5, 15 · **Status:** ✅ (wave 2, migration `20260818_wave2_stock`) · **Depends on:** B1
 
 ## Goal
 
@@ -79,12 +79,12 @@ indexed lookup instead of an aggregate per request.
 
 ## Acceptance criteria
 
-- [ ] Receiving 120 then 40 of the same lot yields one row of 160 and a snapshot of 160.
-- [ ] Receiving two lots of one NDC yields a snapshot equal to their sum.
-- [ ] `GET /batches` returns soonest-expiring first with no sort parameter.
-- [ ] Consuming more than a batch holds returns 422 and changes nothing.
-- [ ] Deleting a batch row updates the snapshot.
-- [ ] A past `expiry_date` on receive returns 422.
+- [x] Receiving 120 then 40 of the same lot yields one row of 160 and a snapshot of 160.
+- [x] Receiving two lots of one NDC yields a snapshot equal to their sum.
+- [x] `GET /batches` returns soonest-expiring first with no sort parameter.
+- [x] Consuming more than a batch holds returns 422 and changes nothing.
+- [x] Deleting a batch row updates the snapshot.
+- [x] A past `expiry_date` on receive returns 422.
 
 ## Out of scope
 

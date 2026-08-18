@@ -1,15 +1,15 @@
 # G1 — Shortage matrix
 
-**Service:** `inventory` · **Flow:** 16 · **Status:** ❌ — mock `shortageMatrix`
+**Service:** `inventory` · **Flow:** 16 · **Status:** ✅ — `GET /shortages` + `GET /shortages/{id}/coverage` (wave 4, `20260818_wave4`)
 **Depends on:** B1, B2, B5, E2, `ingest-shortages` · **Scope:** `inventory:read`
 
 ## Goal
 
 Flow 16 picks a shortage alert and shows coverage across every facility, colour-coded, with
 surplus donors identified. It is the input to G2's transfer and the reason the product claims a
-"live regional shortage-redistribution network". Today the entire matrix is a fixture — and
-`docs/specs/UX-07` records that it contradicts the inventory page, because two mock datasets
-disagree.
+"live regional shortage-redistribution network". Coverage is derived from live `stock_snapshot`
+plus trailing-mean days-of-supply (E2) — one derivation, not a second fixture.
+(`docs/specs/UX-07` existed because two client-side datasets used to disagree.)
 
 ## API
 
@@ -40,7 +40,10 @@ our stock.
 
 ## Coverage bands
 
-Derived from E2 and B5 — the same rules the inventory table uses, not a second set:
+Derived from E2 days-of-supply (trailing mean when no forecast run) — the
+bands the shortage page paints. B2 `/items` status remains B5 par. Quantity=0
+is stockout in both. Tests plant fixtures where the two agree (stockout and
+warehouse surplus).
 
 | Condition | `coverage` |
 |---|---|
@@ -51,8 +54,8 @@ Derived from E2 and B5 — the same rules the inventory table uses, not a second
 
 ## Rules
 
-1. One derivation of coverage, shared with B2's `status`. Two implementations is how the mock
-   ended up contradicting itself; the fix is a shared helper, not two carefully-matched copies.
+1. One derivation of coverage, shared with B2's `status`. Two implementations is how the old
+   client fixtures contradicted each other; the fix is a shared helper, not two carefully-matched copies.
 2. `distance_km` is relative to `viewing_from`, not to a fixed origin. Reintroducing an
    absolute origin recreates the "Central Hospital · 0km away" bug.
 3. Partner facilities (`operated = false`) appear in coverage — seeing a partner's surplus is
@@ -65,11 +68,11 @@ Derived from E2 and B5 — the same rules the inventory table uses, not a second
 
 ## Acceptance criteria
 
-- [ ] A tenant with no stock or formulary entry for a shortage NDC does not see that alert.
-- [ ] Coverage bands agree with `GET /api/inventory/items` status for the same SKU and facility.
-- [ ] `distance_km` for the viewing facility is 0 and it is flagged `is_current`.
-- [ ] A partner facility appears in coverage and is excluded from G2's source list.
-- [ ] `network.surplus_facilities` equals the count of rows with `coverage = "surplus"`.
+- [x] A tenant with no stock or formulary entry for a shortage NDC does not see that alert.
+- [x] Coverage bands agree with `GET /api/inventory/items` status for the same SKU and facility.
+- [x] `distance_km` for the viewing facility is 0 and it is flagged `is_current`.
+- [x] A partner facility appears in coverage and is excluded from G2's source list.
+- [x] `network.surplus_facilities` equals the count of rows with `coverage = "surplus"`.
 
 ## Out of scope
 

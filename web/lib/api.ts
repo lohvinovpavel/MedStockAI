@@ -91,18 +91,7 @@ export type CopilotMessage = { role: "user" | "model"; text: string };
  * Not built on `apiFetch`: that helper always awaits `res.json()`, which
  * would buffer the entire SSE stream before returning anything.
  */
-export async function* streamCopilotChat(
-  messages: CopilotMessage[],
-  signal?: AbortSignal,
-): AsyncGenerator<CopilotEvent> {
-  const res = await fetch(`${SERVICES.analogue}/copilot/chat`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages }),
-    signal,
-  });
-
+async function* readSse(res: Response): AsyncGenerator<CopilotEvent> {
   if (!res.ok || !res.body) {
     if (res.status === 401 && typeof window !== "undefined") {
       window.dispatchEvent(new Event("medstock:unauthorized"));
@@ -140,4 +129,32 @@ export async function* streamCopilotChat(
       } as CopilotEvent;
     }
   }
+}
+
+export async function* streamCopilotChat(
+  messages: CopilotMessage[],
+  signal?: AbortSignal,
+): AsyncGenerator<CopilotEvent> {
+  const res = await fetch(`${SERVICES.analogue}/copilot/chat`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages }),
+    signal,
+  });
+  yield* readSse(res);
+}
+
+export async function* streamCopilotMessage(
+  body: { conversation_id: string; text: string; focus?: Record<string, unknown> | null },
+  signal?: AbortSignal,
+): AsyncGenerator<CopilotEvent> {
+  const res = await fetch(`${SERVICES.copilot}/messages`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  yield* readSse(res);
 }

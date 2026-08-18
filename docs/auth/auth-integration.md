@@ -77,7 +77,7 @@ import uuid
 
 import jwt
 
-HOSPITAL_ID = str(uuid.uuid4())  # any UUID; RLS is not enforced yet (§6)
+HOSPITAL_ID = str(uuid.uuid4())  # any UUID; RLS filters on session_scope, not this literal
 
 
 def dev_token(role: str = "pharmacist") -> str:
@@ -151,12 +151,12 @@ That is rare — most routes want one.
 
 ### The permission map, as it stands today
 
-| Role | Permissions |
+| Role | Permissions (abridged — `auth.py` is source of truth) |
 |---|---|
-| `pharmacist` | `inventory:read`, `queue:read`, `recommendation:approve` |
-| `physician` | `alert:read`, `inventory:read` |
-| `director` | `audit:read`, `dashboard:read`, `inventory:read` |
-| `admin` | `audit:read`, `formulary:write`, `inventory:read`, `mapping:approve` |
+| `pharmacist` | `inventory:read`, `queue:read`, `recommendation:approve`, `facility:read`, `forecast:read`, `forecast:run`, `audit:read`, `certificate:read`, `certification:explore`, `profile:*` |
+| `physician` | `alert:read`, `inventory:read`, `drug:search`, `facility:read`, `patient:*`, `certificate:read`, `profile:assess`, `profile:explain` |
+| `director` | `audit:read`, `dashboard:read`, `inventory:read`, `facility:read`, `forecast:read`, `forecast:run`, `certificate:read`, `profile:review` |
+| `admin` | `audit:read`, `formulary:write`, `inventory:read`, `mapping:approve`, `facility:read`, `patient:*`, `certificate:read`, `certification:explore`, `profile:review` |
 
 Verified behaviour of `require("queue:read")`: `pharmacist` → `200`, and `physician`, `director`,
 `admin` → `403`. Note that `admin` is **not** a superuser — it holds four specific permissions and
@@ -175,13 +175,13 @@ with session_scope(p.hospital_id, p.user_id) as s:
     s.query(FormularyItem).all()      # no WHERE hospital_id — do not write one
 ```
 
-**Row-level security policies do not exist yet.** `session_scope()` sets `app.hospital_id` and
-`app.actor_id`, but no `CREATE POLICY` has been written (`services.md` §8 open item #2), so nothing
-reads them and cross-tenant rows are *not* filtered today.
+**Row-level security is on.** Wave 2 ENABLE/FORCE RLS on every existing tenant table.
+`session_scope()` sets `app.hospital_id`, `app.actor_id`, `app.actor_system`, and
+`SET LOCAL ROLE app_role` (docker/CI superuser would otherwise bypass FORCE RLS).
+Identity and reference tables stay exempt (`services.md` §1.1).
 
-Write your queries as though RLS were on — no manual `WHERE hospital_id` — because that is what
-makes the policies work the day they land. But do not demo tenant isolation as a working feature,
-and do not build a feature whose correctness depends on it right now.
+Write your queries with no manual `WHERE hospital_id` — RLS is the filter. A forgotten
+`session_scope` yields zero rows, not every row.
 
 Use `session_scope`, not `engine.connect()`. The raw engine is fine for `/readyz` (`SELECT 1`) and
 nothing else.
@@ -300,14 +300,14 @@ and none needs to.
 | `403 {"detail":"forbidden"}` | Token is valid; the role lacks the permission. Check the table in §5 |
 | Your routes all `404`, `/healthz` works | Defect C — you started uvicorn from the repo root and are running analogue (§2) |
 | Everything `401` right after a keypair regeneration | Old token signed by the old key. Mint a new one |
-| Rows from another hospital appear | Expected today — RLS is not implemented (§6) |
+| Rows from another hospital appear | Bug — FORCE RLS should hide them. Check `session_scope` ran and the process is `app_role` |
 
 ## 10. Do not build these
 
 They are `auth`'s job, or deliberately deferred (`auth-spec.md` §6):
 
 - Your own token verification, claim parsing, or `Principal` type.
-- An `is_this_mine?` check on rows — that is RLS's job once it exists.
+- An `is_this_mine?` check on rows — that is RLS's job.
 - Audit-log writes — a database trigger handles `review_decision`, not application code.
 - Password handling, login screens, session storage, or refresh logic of any kind.
 - A permission check written inline in your service instead of added to `PERMS`.

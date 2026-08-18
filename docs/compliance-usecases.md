@@ -148,7 +148,8 @@ Recommendation: two calls. Decide before the endpoint is written.
 | `GET` | `/certificates/{ndc}` | `certificate:read` | **built** | Full evidence — every finding behind the colour, with source URLs |
 | `GET` | `/ruleset` | `inventory:read` | **built** | Every rule and threshold that can produce a colour |
 | `POST` | `/explore` | `certification:explore` | **built** | COMP-2 on demand, max 10 NDCs — two upstream calls each |
-| `GET` | `/export/compliance.csv` | `audit:read` | planned | Director surface, already sketched in services.md §3 |
+| `GET` | `/audit` | `audit:read` | **built** (H1) | Pharmacist, director, admin. Empty until a `review_decision` is written |
+| `GET` | `/export/compliance.csv` | planned (`audit:export` or director role) | planned | Do not reuse `audit:read` alone — pharmacist holds that for the page |
 
 `certificate:read` is held by pharmacist, physician and director — every role that can see the
 shelf can see the badge on it. `certification:explore` is narrower (pharmacist only) because it

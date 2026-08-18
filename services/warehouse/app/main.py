@@ -1,15 +1,15 @@
 """Warehouse service (issue #8): facility registry (spec B1), stock by
 location, consumption history, storage-condition telemetry and excursions.
 
-Reads only — writes come from ingest (seed_demo) and, later, B4 consume
-events. Tenant filtering is session_scope/RLS per the architecture rules; no
-hand-written hospital_id predicates (policies themselves are a repo-wide open
-item, docs/services.md §8).
+Reads plus F2 quotes — stock writes come from ingest (seed_demo) and B4
+consume events. Tenant filtering is session_scope/RLS; no hand-written
+hospital_id predicates.
 """
 
 import math
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 
@@ -23,9 +23,15 @@ from medstock_shared.models import (
     LocationCondition,
     StockSnapshot,
     StorageLocation,
+    Supplier,
+    SupplierCatalog,
 )
 from medstock_shared.warehouse import excursions
-from sqlalchemy import select, text
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select, text
+
+from .pricing import adjust_quantity, quote_totals
+from .transfers import transfers
 
 app = FastAPI(title="warehouse")
 api = APIRouter()
@@ -251,5 +257,120 @@ def get_excursions(
         return {"items": excursions(session, facility_id)}
 
 
+def _require_facility(session, facility_id: int) -> Facility:
+    row = session.get(Facility, facility_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="facility not found")
+    return row
+
+
+def _supplier_dict(row: Supplier) -> dict:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "lead_time_days": int(row.lead_time_days),
+        "reliability_pct": float(row.reliability_pct),
+        "shipping_flat": float(row.shipping_flat),
+        "currency": row.currency,
+        "active": bool(row.active),
+    }
+
+
+class QuoteLineBody(BaseModel):
+    ndc: str = Field(min_length=1, max_length=32)
+    quantity: int = Field(gt=0)
+
+
+class QuoteBody(BaseModel):
+    supplier_id: int
+    facility_id: int
+    lines: list[QuoteLineBody] = Field(min_length=1)
+
+
+@api.get("/suppliers")
+def list_suppliers(
+    facility_id: int | None = Query(None),
+    principal: Principal = Depends(require("order:read")),
+) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        if facility_id is not None:
+            _require_facility(session, facility_id)
+        rows = session.scalars(select(Supplier).order_by(Supplier.name, Supplier.id)).all()
+        return {"items": [_supplier_dict(row) for row in rows]}
+
+
+@api.get("/suppliers/{supplier_id}/catalog")
+def supplier_catalog(
+    supplier_id: int,
+    ndc: str | None = Query(None),
+    principal: Principal = Depends(require("order:read")),
+) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        supplier = session.get(Supplier, supplier_id)
+        if supplier is None:
+            raise HTTPException(status_code=404, detail="supplier not found")
+        stmt = select(SupplierCatalog).where(SupplierCatalog.supplier_id == supplier_id)
+        if ndc:
+            stmt = stmt.where(SupplierCatalog.ndc == ndc)
+        stmt = stmt.order_by(SupplierCatalog.ndc)
+        items = [
+            {
+                "ndc": row.ndc,
+                "unit_cost": float(row.unit_cost),
+                "pack_size": int(row.pack_size),
+                "min_order_qty": int(row.min_order_qty),
+            }
+            for row in session.scalars(stmt)
+        ]
+        return {"supplier_id": supplier_id, "items": items}
+
+
+@api.post("/quote")
+def quote(
+    body: QuoteBody,
+    principal: Principal = Depends(require("order:read")),
+) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        _require_facility(session, body.facility_id)
+        supplier = session.get(Supplier, body.supplier_id)
+        if supplier is None:
+            raise HTTPException(status_code=404, detail="supplier not found")
+        if not supplier.active:
+            raise HTTPException(status_code=422, detail="supplier_inactive")
+        catalog = {
+            row.ndc: row
+            for row in session.scalars(
+                select(SupplierCatalog).where(SupplierCatalog.supplier_id == supplier.id)
+            )
+        }
+        quoted: list[dict] = []
+        for line in body.lines:
+            row = catalog.get(line.ndc)
+            if row is None:
+                raise HTTPException(
+                    status_code=422, detail=f"ndc_not_in_catalog: {line.ndc}"
+                )
+            rounded, reason = adjust_quantity(
+                line.quantity, int(row.pack_size), int(row.min_order_qty)
+            )
+            quoted.append(
+                {
+                    "ndc": line.ndc,
+                    "requested": line.quantity,
+                    "rounded_to": rounded,
+                    "unit_cost": Decimal(row.unit_cost),
+                    "reason": reason,
+                }
+            )
+        return quote_totals(
+            lead_time_days=int(supplier.lead_time_days),
+            shipping_flat=Decimal(supplier.shipping_flat),
+            lines=quoted,
+            today=datetime.now(tz=UTC).date(),
+        )
+
+
 app.include_router(api)
 app.include_router(api, prefix="/api/warehouse")
+app.include_router(transfers)
+app.include_router(transfers, prefix="/api/warehouse")

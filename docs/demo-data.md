@@ -15,7 +15,7 @@ That line is not a demo convenience — it is exactly the table split already in
 | Class | Tables | In the demo |
 |---|---|---|
 | **Reference** | `drug`, `shortage_event`, `drug_price`, `rxnorm_edge`, rule tables | **Real.** FDA, RxNorm and NADAC are public — there is no reason to fake them, and faking them would hide feed bugs until a hospital found them |
-| **Tenant** | `formulary_item`, `stock_snapshot`, `facility`, `storage_location`, `consumption_daily`, `location_condition`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
+| **Tenant** | `formulary_item`, `stock_snapshot`, `stock_batch`, `par_level`, `facility`, `storage_location`, `consumption_daily`, `location_condition`, `recommendation`, `review_decision`, patient vectors | **Generated.** Never sourced from a real hospital |
 
 Because synthetic patients are built on *real* RxCUIs and NDCs, every join, every interaction
 lookup and every certification check behaves in the demo exactly as it will in production. The
@@ -96,7 +96,7 @@ nobody has seen before, live, on stage. `DEMO_SEED=42`, committed, reproducible.
 
 So that nobody — including us, in six months — can mistake demo data for real:
 
-- Hospital name `DEMO GENERAL HOSPITAL`, id `demo-hospital-001`
+- Hospital name `St Mary's General` (same tenant as `ann@stmarys.org`)
 - Every synthetic `patient_ref` prefixed `SYN-`
 - Seeded through a migration or a `seed` CronJob that **refuses to run** unless
   `ENVIRONMENT=demo`
@@ -128,10 +128,27 @@ Order matters, because tenant data references real reference data:
 
 1. Run the real reference feeds first — `rxnorm`, `pricing`, `shortages`
 2. Create the demo hospital and its users, one per role
-3. Build a formulary from real NDCs actually present in `drug`
+3. Build a formulary from real NDCs actually present in `drug`, plus the
+   dashboard-page RxCUIs in `demo_shelf.py` (B6). `data/demo/formulary.csv` is
+   the same list the CSV import endpoint accepts.
 4. Load stock levels and **3 years of daily usage history** (`consumption_daily`) —
    `prediction` needs multi-winter history for annual seasonality to be learnable — plus
-   90 days of hourly storage-condition telemetry (`location_condition`)
+   90 days of hourly storage-condition telemetry (`location_condition`).
+   `seed_demo` then overlays the 11 dashboard-page NDCs from
+   `shared/medstock_shared/demo_shelf.py` — same NDC, name, quantity, lot and
+   expiry the dashboard has always shown, plus B5 par levels so `/inventory` status
+   is a real claim. Depth per site follows `FACILITY_SHELF_PROFILE`
+   (clinics omit ICU SKUs; warehouse is bulk). Consumption is cloned from a
+   same-class donor so Warehouse charts are not empty for those SKUs.
+   `scripts/seed_stock.py` upserts the same shelf (and UC-2 analogue NDCs)
+   after clearing leftover lots, so a second run cannot stack quantities.
+   Wave 3 also plants `shortage_event` rows for Norepinephrine, Ceftriaxone
+   and Heparin so B3 `uncovered` is a real claim.
+   Wave 4 plants partner-site `stock_snapshot` / trailing consumption for
+   those three SKUs (St. Luke, Mercy — matching `PARTNER_SHORTAGE_STOCK`) and
+   the four suppliers plus per-SKU unit costs so G1 and F2 are live.
+   Wave 5 plants `purchase_order` rows (`PO-2026-0141` … `PO-2026-0148`) from
+   `DEMO_ORDERS` so `/orders` matches the old demo after a regen.
 5. Generate the patient cohort, including the §4 scenarios
 6. Assert the scenarios still fire — if reference data shifted and the allergy case stopped
    blocking, the seed fails loudly
@@ -170,7 +187,7 @@ Nothing in the pipeline. The demo and a real hospital differ in exactly three pl
 |---|---|---|
 | Who de-identifies | our Synthea adapter | the hospital's own gateway |
 | Where the vector comes from | seed job | their EHR |
-| Tenant row | `demo-hospital-001` | theirs |
+| Tenant row | `St Mary's General` | theirs |
 
 Reference data, rules, scoring, audit and RLS are identical. That is the argument for building
 the demo this way rather than the fast way — **the demo is the system, with one tenant whose

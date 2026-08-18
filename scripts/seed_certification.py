@@ -36,6 +36,7 @@ from medstock_shared.certification import (
     status_for,
 )
 from medstock_shared.db import SessionLocal
+from medstock_shared.demo_shelf import DASHBOARD_SHELF
 from medstock_shared.models import (
     CertificationFinding,
     DrugCertification,
@@ -172,8 +173,10 @@ def plan(shelf: list[str], already_certified: set[str]) -> list[tuple[str, dict]
       where every badge is known never exercises the grey state COMP-2 exists
       to resolve.
     """
-    free = [n for n in shelf if n not in already_certified]
-    return list(zip(free, SCENARIOS))
+    free_set = {n for n in shelf if n not in already_certified}
+    prefer = [d["ndc"] for d in DASHBOARD_SHELF if d["ndc"] in free_set]
+    rest = sorted(free_set - set(prefer))
+    return list(zip(prefer + rest, SCENARIOS))
 
 
 def rows_for(ndc: str, scenario: dict) -> tuple[dict, list[dict], Status]:
@@ -223,6 +226,17 @@ def main() -> int:
             print("no stock_snapshot rows — run scripts/seed_stock.py first", file=sys.stderr)
             return 1
         real = certified_ndcs(session)
+        demo_ndcs = [
+            str(n)
+            for n in session.scalars(
+                select(DrugCertification.ndc).where(DrugCertification.provenance == PROVENANCE)
+            ).all()
+        ]
+        if demo_ndcs:
+            session.execute(delete(CertificationFinding).where(CertificationFinding.ndc.in_(demo_ndcs)))
+            session.execute(
+                delete(DrugCertification).where(DrugCertification.provenance == PROVENANCE)
+            )
         assignments = plan(ndcs, real)
         if len(assignments) < len(SCENARIOS):
             print(

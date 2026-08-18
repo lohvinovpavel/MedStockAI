@@ -42,7 +42,6 @@ import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import { useSession } from "@/lib/session";
 import { canAccessPage, ROLE_LABEL } from "@/lib/rbac";
-import { operatedFacilities } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -102,7 +101,7 @@ function initials(name: string) {
 function NavBody({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { facilityId, setFacilityId, facility } = useFacility();
+  const { facilityId, setFacilityId, facility, operatedFacilities } = useFacility();
   const { draftCount } = useOrders();
   const { user } = useSession();
   // Tabs the signed-in role can't reach (lib/rbac.ts) don't render at all —
@@ -169,15 +168,19 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
           <DropdownMenuGroup>
             {operatedFacilities.map((f) => (
               <DropdownMenuItem
-                key={f.id}
-                onSelect={() => setFacilityId(f.id)}
-                className={cn(f.id === facilityId && "bg-accent")}
+                key={f.code}
+                onSelect={() => setFacilityId(f.code)}
+                className={cn(f.code === facilityId && "bg-accent")}
               >
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate">{f.name}</span>
                   <span className="truncate text-[11px] text-muted-foreground">
                     {f.type}
-                    {f.distanceKm > 0 ? ` · ${f.distanceKm}km` : " · primary site"}
+                    {f.distanceKm != null && f.distanceKm > 0
+                      ? ` · ${f.distanceKm}km`
+                      : f.distanceKm === 0
+                        ? " · this site"
+                        : ""}
                   </span>
                 </span>
               </DropdownMenuItem>
