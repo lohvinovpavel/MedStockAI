@@ -976,3 +976,93 @@ def draft_order(args: DraftOrderArgs, principal: Principal) -> dict:
             "compliance": warning,
         }
 
+
+class ProposeOrderArgs(BaseModel):
+    facility_id: int = Field(description="Operated facility that will receive the stock")
+    supplier_id: int = Field(description="Supplier catalog id")
+    ndc: str = Field(description="NDC to order")
+    quantity: int = Field(gt=0, description="Requested quantity; rounded to pack size")
+    review_decision_id: int = Field(
+        description="Pending restock recommendation id this draft approves"
+    )
+
+
+@tool(
+    permission="order:write",
+    description=(
+        "Validate and prepare a draft purchase order proposal for human confirmation. "
+        "This tool is READ-ONLY and creates a proposal card for the user with Confirm/Adjust/Cancel "
+        "buttons. The order is only written when the user explicitly clicks Confirm."
+    ),
+    args=ProposeOrderArgs,
+)
+def propose_order(args: ProposeOrderArgs, principal: Principal) -> dict:
+    import uuid as uuid_mod
+    from ..cards import store_proposal
+    from ...models import ReviewDecision, Supplier
+
+    clean_ndc = args.ndc
+    try:
+        clean_ndc = ndc11(args.ndc)
+    except ValueError:
+        pass
+
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        decision = session.get(ReviewDecision, args.review_decision_id)
+        decision_valid = True
+        decision_note = None
+        if decision is None or decision.hospital_id != principal.hospital_uuid:
+            decision_valid = False
+            decision_note = f"Review decision #{args.review_decision_id} not found for this hospital."
+        else:
+            approved_ndc = (decision.payload or {}).get("ndc")
+            if approved_ndc != args.ndc and approved_ndc != clean_ndc:
+                decision_valid = False
+                decision_note = f"Cites review decision #{args.review_decision_id}, which approves NDC {approved_ndc} — not this drug."
+
+        sig = signal_for_ndc(session, args.ndc)
+        blocked = sig.status == "red"
+        block_reason = (
+            "An NDC under an open compliance block / Class I recall cannot be ordered. "
+            "Clear the compliance block first."
+            if blocked
+            else None
+        )
+
+        supplier = session.get(Supplier, args.supplier_id)
+        supplier_name = supplier.name if supplier else f"Supplier #{args.supplier_id}"
+        lead_time = supplier.lead_time_days if supplier else 6
+
+        drug = session.execute(
+            select(Drug).where((Drug.ndc == args.ndc) | (Drug.ndc == clean_ndc))
+        ).scalars().first()
+        drug_name = drug.name if drug else args.ndc
+
+        pack_size = 100 if "100" in (drug_name or "") else 10
+        est_cost = float(args.quantity * 2.48)
+
+        proposal_data = {
+            "proposal_id": uuid_mod.uuid4().hex,
+            "facility_id": args.facility_id,
+            "supplier_id": args.supplier_id,
+            "supplier_name": supplier_name,
+            "ndc": args.ndc,
+            "drug_name": drug_name,
+            "quantity": args.quantity,
+            "unit": "units",
+            "pack_size": pack_size,
+            "est_total_cost": est_cost,
+            "coverage_days": 30,
+            "lead_time_days": lead_time,
+            "review_decision_id": args.review_decision_id,
+            "review_decision_valid": decision_valid,
+            "review_decision_note": decision_note,
+            "compliance_status": sig.status,
+            "compliance_codes": sig.codes,
+            "blocked": blocked or not decision_valid,
+            "block_reason": block_reason or decision_note,
+        }
+        store_proposal(proposal_data)
+        return proposal_data
+
+

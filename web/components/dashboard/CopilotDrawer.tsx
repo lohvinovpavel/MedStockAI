@@ -3,7 +3,25 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Loader2, Plane, Plus, Repeat2, ShieldCheck, Send, Siren, Truck, X, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  CheckCircle2,
+  Copy,
+  Eraser,
+  FileText,
+  History,
+  Loader2,
+  Plane,
+  Plus,
+  Repeat2,
+  ShieldCheck,
+  Send,
+  Siren,
+  Truck,
+  X,
+  Sparkles,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +45,7 @@ import {
 } from "@/components/CertificationBadge";
 import { cn } from "@/lib/utils";
 
-type ResponseCard =
+export type ResponseCard =
   | {
       kind: "po";
       itemId: string;
@@ -43,40 +61,280 @@ type ResponseCard =
       confidence: number;
       payload: Record<string, unknown>;
     }
-  | { kind: "analogues"; items: { name: string; matchScore: number; stockHere: number }[] }
+  | {
+      kind: "emergency";
+      drugName: string;
+      surgePct: number;
+      depletionDays: number | null;
+      airFreightDays: number;
+      costPremiumPct: number;
+    }
+  | {
+      kind: "analogues";
+      tool?: string;
+      request_id?: string;
+      query_rxcui?: string;
+      query_name?: string;
+      items: {
+        rxcui?: string;
+        name: string;
+        matchScore?: number;
+        stockHere?: number;
+        quantity?: number;
+        in_stock?: boolean;
+        ndcs?: string[];
+        primary_ndc?: string;
+      }[];
+      truncated?: boolean;
+    }
   | {
       kind: "certificate";
+      tool?: string;
+      request_id?: string;
       ndc: string;
-      status: CertStatus;
-      reasons: number;
-      transient: number;
-      persistent: number;
+      name?: string;
+      status: CertStatus | string;
+      codes?: string[];
+      reasons?: string[] | number;
+      transient?: number;
+      persistent?: number;
+      sources_consulted?: Record<string, boolean>;
+      ruleset_version?: string;
+      findings?: Array<{ code: string; severity: string; message: string }>;
     }
-  | { kind: "emergency"; drugName: string; surgePct: number; depletionDays: number | null; airFreightDays: number; costPremiumPct: number };
+  | {
+      kind: "sweep";
+      tool?: string;
+      request_id?: string;
+      coverage?: { checked: number; total?: number; window?: string; source_note?: string };
+      status_filter?: string;
+      checked: number;
+      flagged: Array<{
+        ndc: string;
+        name?: string;
+        status: string;
+        quantity: number;
+        reasons?: string[];
+        codes?: string[];
+      }>;
+      unknown: string[];
+      by_facility?: Record<string, Array<{ ndc: string; name?: string; status: string; quantity: number; reasons?: string[]; codes?: string[] }>>;
+      hospital_total?: { flagged_count: number; unknown_count: number; total_quantity: number };
+      truncated?: boolean;
+    }
+  | {
+      kind: "stock";
+      tool?: string;
+      request_id?: string;
+      ndc?: string;
+      rxcui?: string;
+      name?: string;
+      total_quantity: number;
+      locations: Array<{ location_id: string; quantity: number; updated_at: string }>;
+    }
+  | {
+      kind: "excursions";
+      tool?: string;
+      request_id?: string;
+      coverage?: { checked: number; total?: number; window?: string; source_note?: string };
+      facility_id?: string | number;
+      window_hours?: number;
+      checked: number;
+      excursions: Array<{
+        facility_id?: number | string;
+        location_id: string;
+        location_name?: string;
+        temperature?: number;
+        humidity?: number;
+        min_temp?: number;
+        max_temp?: number;
+        breach_duration_hours?: number;
+        stock_affected?: Array<{ ndc: string; drug_name?: string; quantity: number }>;
+      }>;
+      locations_monitored: number;
+      locations_reporting: number;
+      readings_checked: number;
+      truncated?: boolean;
+    }
+  | {
+      kind: "at_risk";
+      tool?: string;
+      request_id?: string;
+      coverage?: { checked: number; total?: number; window?: string; source_note?: string };
+      facility_id?: string | number;
+      within_days: number;
+      surge_pct: number;
+      run_id?: string | null;
+      data_through?: string | null;
+      skus_evaluated: number;
+      checked: number;
+      items: Array<{
+        ndc: string;
+        name: string;
+        rxcui?: string;
+        stock: number;
+        depletion_days?: number | null;
+        burn_rate?: number;
+        status?: string;
+      }>;
+      truncated?: boolean;
+      note?: string | null;
+    }
+  | {
+      kind: "patient_regimen";
+      tool?: string;
+      request_id?: string;
+      age_band?: string;
+      blood_group?: string;
+      allergy_codes: string[];
+      condition_codes: string[];
+      pgx_phenotypes: string[];
+    }
+  | {
+      kind: "safety_assessment";
+      tool?: string;
+      request_id?: string;
+      patient_ref?: string;
+      rxcui: string;
+      drug_name?: string;
+      verdict: string;
+      hard_stop: boolean;
+      score: number;
+      findings: Array<{
+        code: string;
+        severity: string;
+        message: string;
+        category?: string;
+        weight?: number;
+      }>;
+      stock_available?: number | null;
+      cert_status?: string | null;
+    }
+  | {
+      kind: "assessment_explain";
+      tool?: string;
+      request_id?: string;
+      assessment_request_id: string;
+      overall_score: number;
+      verdict: string;
+      contributions: Array<{
+        code: string;
+        severity: string;
+        weight: number;
+        share_pct?: number;
+        message?: string;
+      }>;
+      ruleset_version?: string;
+    }
+  | {
+      kind: "forecast";
+      tool?: string;
+      request_id?: string;
+      ndc: string;
+      run_id?: string | null;
+      model_version?: string | null;
+      points: Array<{ date: string; p50: number }>;
+    }
+  | {
+      kind: "forecast_staleness";
+      tool?: string;
+      request_id?: string;
+      has_run: boolean;
+      run_id?: string | null;
+      data_through?: string | null;
+      generated_at?: string | null;
+      note?: string | null;
+    }
+  | {
+      kind: "review_queue";
+      tool?: string;
+      request_id?: string;
+      coverage?: { checked: number; total?: number; window?: string; source_note?: string };
+      status: string;
+      queue_total: number;
+      counts: Record<string, number>;
+      accept_rate?: number | null;
+      most_urgent: Array<{
+        rxcui: string;
+        reaction: string;
+        seriousness: string;
+        citation: string;
+      }>;
+    }
+  | {
+      kind: "audit_summary";
+      tool?: string;
+      request_id?: string;
+      window_days?: number;
+      total?: number;
+      by_outcome?: Record<string, number>;
+      top_tools?: Array<[string, number]>;
+      latency_ms?: { p50: number; p95: number };
+      error_rate?: number | null;
+      recent?: Array<Record<string, unknown>>;
+      single_record?: Record<string, unknown>;
+    }
+  | {
+      kind: "drug_search";
+      tool?: string;
+      request_id?: string;
+      query_name: string;
+      matches: Array<{
+        rxcui: string;
+        ndc: string;
+        name: string;
+        on_hand: number;
+      }>;
+      ambiguous: boolean;
+    }
+  | {
+      kind: "proposal";
+      tool?: string;
+      request_id?: string;
+      proposal_id: string;
+      action: string;
+      facility_id: number;
+      supplier_id: number;
+      supplier_name?: string;
+      ndc: string;
+      drug_name?: string;
+      quantity: number;
+      unit?: string;
+      pack_size?: number;
+      est_total_cost?: number;
+      coverage_days?: number;
+      lead_time_days?: number;
+      review_decision_id: number;
+      review_decision_valid?: boolean;
+      review_decision_note?: string;
+      compliance_status: string;
+      compliance_codes?: string[];
+      blocked?: boolean;
+      block_reason?: string;
+      expires_at?: string;
+    }
+  | {
+      kind: "run_proposal";
+      tool?: string;
+      request_id?: string;
+      proposal_id: string;
+      action: string;
+      facility_id?: string | number;
+      last_run_at?: string;
+      expires_at?: string;
+    };
 
-// One tool the real copilot called mid-turn (services/analogue/app/copilot.py's
-// tool_start/tool_end events) — rendered as a small pill so a pharmacist can
-// see what the assistant actually looked up, not just the answer it gives.
-type ToolActivity = { name: string; status: "running" | "done" | "error"; error?: string };
+export type ToolActivity = { name: string; status: "running" | "done" | "error"; error?: string };
 
-type Message = {
+export type Message = {
   id: string;
   role: "user" | "assistant";
   text: string;
   card?: ResponseCard;
-  // True only for a message built from the real `/copilot/chat` stream — its
-  // text arrives incrementally already, so it skips StreamingText's fake
-  // character-reveal (built for a string that's complete the moment it
-  // renders) and is drawn as-is instead.
+  cards?: ResponseCard[];
   live?: boolean;
-  // A `degraded` event replaced this message's text with the fallback
-  // explanation rather than a real answer — styled differently so it doesn't
-  // read as if the assistant found nothing to say.
   degraded?: boolean;
   tools?: ToolActivity[];
-  // A name the user typed matched more than one patient — rendered as a
-  // picker (name, DOB, ID) instead of/alongside the message text. Cleared
-  // once a candidate is picked so the card doesn't linger as a dead control.
   patientPicker?: { query: string; candidates: PatientCandidate[] };
 };
 
@@ -85,8 +343,8 @@ function id() {
   return `m-${nextId++}`;
 }
 
-// Past conversations, persisted by I2 (`GET /api/copilot/conversations`).
-type SavedConversation = { id: string; savedAt: number; title?: string | null; messages: Message[] };
+export type SavedConversation = { id: string; savedAt: number; title?: string | null; messages: Message[] };
+
 const GREETING: Message = {
   id: "m-greeting",
   role: "assistant",
@@ -100,9 +358,6 @@ export type QuickAction = {
   prompt?: string;
 };
 
-// PH-1 (docs/ai_workflows.md): one question chains the three real copilot
-// tools (check_stock_by_ndc, search_analogues_rxnorm, verify_batch_cert) in
-// one turn instead of four screens.
 const SHORTAGE_BRIEF_PROMPT =
   "For the drug currently in context: report on-hand stock by location, then find " +
   "substitutes ranked by what we hold, then check the compliance status of the top " +
@@ -207,188 +462,640 @@ export const ROLE_ACTIONS: Record<string, QuickAction[]> = {
   ],
 };
 
-/**
- * One NDC's traffic light, from the same `GET /status` the shelf uses.
- *
- * An unreachable service resolves to `unavailable`, never to `green`. Telling a
- * pharmacist a drug is certified because the check failed is the one answer
- * this feature exists to prevent, and a chat card asserts it more plainly than
- * a badge does.
- */
-async function certificateStatus(ndc: string): Promise<CertResult> {
-  const unavailable: CertResult = { status: "unavailable", reasons: 0, transient: 0, persistent: 0 };
-  if (!ndc) return unavailable;
-  try {
-    const body = await apiFetch("compliance", `/status?ndc=${encodeURIComponent(ndc)}`);
-    const row = (body?.results ?? [])[0] as CertResult | undefined;
-    return row ?? unavailable;
-  } catch {
-    return unavailable;
+function ComplianceChip({ status, codes }: { status?: string; codes?: string[] }) {
+  const s = (status ?? "unknown").toLowerCase();
+  if (s === "green") {
+    return <Badge className="bg-emerald-600/15 text-emerald-700 hover:bg-emerald-600/20 dark:text-emerald-400">● Certified</Badge>;
   }
+  if (s === "yellow") {
+    return <Badge className="bg-amber-600/15 text-amber-700 hover:bg-amber-600/20 dark:text-amber-400">● Warning {codes?.length ? `(${codes.join(", ")})` : ""}</Badge>;
+  }
+  if (s === "red") {
+    return <Badge variant="destructive">● Blocked {codes?.length ? `(${codes.join(", ")})` : ""}</Badge>;
+  }
+  return <Badge variant="outline" className="border-dashed text-muted-foreground">○ Unknown</Badge>;
 }
 
-function certificateText(drugName: string, status: CertStatus): string {
-  if (status === "unavailable") {
-    return `I could not reach the compliance service, so ${drugName} has not been checked. This is not a clean result — treat it as unknown.`;
+function CoverageLine({ coverage }: { coverage?: { checked: number; total?: number; window?: string; source_note?: string } }) {
+  if (!coverage) return null;
+  const isClean = coverage.checked > 0 && !coverage.source_note;
+  if (isClean) {
+    return (
+      <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+        <CheckCircle2 className="size-3 shrink-0" />
+        <span>{coverage.checked} {coverage.window ? `in ${coverage.window}` : ""} checked · all within range</span>
+      </div>
+    );
   }
-  if (status === "unknown") {
-    return `No FDA certification record is held for ${drugName}. That is not the same as clean: nothing has been checked against it.`;
-  }
-  if (status === "green") {
-    return `${drugName} is actively marketed with no open recall.`;
-  }
-  return `${drugName} has open findings against it — details below.`;
+  return (
+    <div className="flex items-start gap-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
+      <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+      <span>{coverage.source_note ?? "No readings or records measured — this is not a clean result."}</span>
+    </div>
+  );
 }
 
-// Live F1 / analogue / compliance reads — no model required (I1 rule 5).
-async function replyFor(
-  action: string,
-  focus: CopilotFocus,
-  facilityPk: number,
-): Promise<Message> {
-  if (focus?.kind !== "sku") {
-    return {
-      id: id(),
-      role: "assistant",
-      text: "Select a SKU on Inventory, Forecasts, or Audit first — I need to know which drug you mean before I can answer.",
-    };
-  }
-
-  const ndc = focus.ndc || focus.itemId;
-  let rxcui = focus.rxcui ?? null;
-  let onHand: number | null = null;
-  try {
-    const body = (await apiFetch(
-      "inventory",
-      `/items?facility_id=${facilityPk}&limit=200`,
-    )) as { items: { ndc: string; name: string | null; quantity: number; rxcui?: string | null }[] };
-    const row = (body.items ?? []).find((i) => i.ndc === ndc);
-    if (!row) {
-      return { id: id(), role: "assistant", text: `${focus.label} isn't stocked at the active facility.` };
-    }
-    onHand = row.quantity;
-    rxcui = rxcui || row.rxcui || null;
-  } catch {
-    return { id: id(), role: "assistant", text: `I could not reach inventory for ${focus.label}.` };
-  }
-
-  if (action === "po") {
-    try {
-      const body = (await apiFetch(
-        "prediction",
-        `/recommendations?facility_id=${facilityPk}&ndc=${encodeURIComponent(ndc)}`,
-      )) as { items: Record<string, unknown>[] };
-      const rec = body.items?.[0];
-      if (!rec) {
-        return {
-          id: id(),
-          role: "assistant",
-          text: `${focus.label} has no restock recommendation — either it is already at par or no supplier lists this NDC.`,
-        };
-      }
-      const quantity = Number(rec.quantity) || 0;
-      const unitCost = Number(rec.unit_cost) || 0;
-      return {
-        id: id(),
-        role: "assistant",
-        text: `Drafted a purchase order for ${rec.name ?? focus.label} from live par, on-hand (${onHand ?? "—"}), and the supplier catalog.`,
-        card: {
-          kind: "po",
-          itemId: ndc,
-          ndc,
-          drugName: String(rec.name ?? focus.label),
-          supplier: String(rec.supplier_name ?? ""),
-          quantity,
-          unit: String(rec.unit ?? "units"),
-          unitCost,
-          totalCost: Number(rec.estimated_total) || quantity * unitCost,
-          coverageDays: Number(rec.coverage_days) || 30,
-          leadTimeDays: Number(rec.lead_time_days) || 0,
-          confidence: 0,
-          payload: rec,
-        },
-      };
-    } catch {
-      return { id: id(), role: "assistant", text: `I could not load a restock recommendation for ${focus.label}.` };
-    }
-  }
-  if (action === "analogue") {
-    if (!rxcui) {
-      return { id: id(), role: "assistant", text: `${focus.label} has no RxCUI on file, so I cannot look up bio-equivalents.` };
-    }
-    try {
-      const body = (await apiFetch(
-        "analogue",
-        `/analogues/${encodeURIComponent(rxcui)}?facility_id=${facilityPk}&use_ai=false`,
-      )) as {
-        items: {
-          name: string;
-          quantity?: number;
-          availability?: { quantity?: number };
-        }[];
-      };
-      const ranked = body.items ?? [];
-      if (ranked.length === 0) {
-        return { id: id(), role: "assistant", text: `No RxNorm equivalents are registered for ${focus.label}.` };
-      }
-      return {
-        id: id(),
-        role: "assistant",
-        text: `Found ${ranked.length} bio-equivalent analogue${ranked.length === 1 ? "" : "s"} for ${focus.label}, best stocked first.`,
-        card: {
-          kind: "analogues",
-          items: ranked.slice(0, 3).map((a, i) => ({
-            name: a.name,
-            matchScore: Math.max(10, 100 - i * 12),
-            stockHere: a.availability?.quantity ?? a.quantity ?? 0,
-          })),
-        },
-      };
-    } catch {
-      return { id: id(), role: "assistant", text: `I could not reach analogue search for ${focus.label}.` };
-    }
-  }
-  if (action === "certificate") {
-    const result = await certificateStatus(ndc);
-    return {
-      id: id(),
-      role: "assistant",
-      text: certificateText(focus.label, result.status),
-      card: {
-        kind: "certificate",
-        ndc,
-        status: result.status,
-        reasons: result.reasons ?? 0,
-        transient: result.transient ?? 0,
-        persistent: result.persistent ?? 0,
-      },
-    };
-  }
-  return {
-    id: id(),
-    role: "assistant",
-    text: `I can help with ${focus.label}. Ask about stock coverage, bio-equivalents, restock timing, or certificate status.`,
-  };
+function TruncationBanner({ truncated }: { truncated?: boolean }) {
+  if (!truncated) return null;
+  return (
+    <div className="rounded bg-muted/60 px-2 py-1 text-[10px] text-muted-foreground">
+      Results truncated to top entries.
+    </div>
+  );
 }
 
-function emergencyPlanReply(req: EmergencyPlanRequest): Message {
-  const costPremiumPct = req.surgePct >= 200 ? 45 : req.surgePct >= 150 ? 25 : 10;
-  return {
-    id: id(),
-    role: "assistant",
-    text:
-      req.depletionDays != null
-        ? `Emergency supply plan for ${req.drugName} at ${req.surgePct}% projected load — current stock depletes in ~${req.depletionDays} day${req.depletionDays === 1 ? "" : "s"}. Recommending expedited air freight to close the gap.`
-        : `Emergency supply plan for ${req.drugName} at ${req.surgePct}% projected load — stock holds beyond the 30-day forecast window at this rate.`,
-    card: { kind: "emergency", drugName: req.drugName, surgePct: req.surgePct, depletionDays: req.depletionDays, airFreightDays: 2, costPremiumPct },
-  };
+function ProvenanceFooter({ tool, requestId }: { tool?: string; requestId?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!tool && !requestId) return null;
+  return (
+    <div className="mt-1 border-t pt-1 text-[10px] text-muted-foreground">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between hover:text-foreground"
+      >
+        <span>Source: {tool ?? "deterministic engine"}</span>
+        <span>{expanded ? "▾ hide" : "▸ provenance"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 space-y-0.5 font-mono text-[9px]">
+          {requestId && <div>request_id: {requestId}</div>}
+          {tool && <div>tool_name: {tool}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
-// Real deltas from `/copilot/chat` already arrive incrementally — replaying
-// them through StreamingText's fake reveal would restart that animation on
-// every chunk. Rendered plain, growing as the stream does; the sr-only/
-// aria-hidden split isn't needed here for the same reason it exists on
-// StreamingText: a live region wouldn't announce a fake reveal it never sees.
+function formatCardForCopy(card: ResponseCard): string {
+  if (card.kind === "po") {
+    return `Draft Purchase Order — ${card.drugName}\nSupplier: ${card.supplier}\nQuantity: ${card.quantity} ${card.unit}\nCoverage: ${card.coverageDays} days\nEst. total: $${card.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  }
+  if (card.kind === "proposal") {
+    return `Draft PO Proposal — ${card.drug_name || card.ndc}\nSupplier: ${card.supplier_name}\nQuantity: ${card.quantity} ${card.unit}\nEst. Total: $${card.est_total_cost?.toFixed(2)}\nStatus: ${card.blocked ? `Blocked (${card.block_reason})` : "Pending Confirmation"}`;
+  }
+  if (card.kind === "analogues") {
+    return ["Bio-Equivalent Analogues", ...card.items.map((it) => `${it.name} — ${it.matchScore ?? 100}% match — ${(it.quantity ?? it.stockHere ?? 0) > 0 ? `${it.quantity ?? it.stockHere} in stock` : "not stocked here"}`)].join("\n");
+  }
+  if (card.kind === "certificate") {
+    return `Certificate Status\nNDC: ${card.ndc}\nStatus: ${card.status}\nFindings: ${card.reasons || (card.codes ? card.codes.join(", ") : "None")}`;
+  }
+  if (card.kind === "safety_assessment") {
+    return `Safety Assessment — ${card.drug_name || card.rxcui}\nVerdict: ${card.verdict.toUpperCase()}\nFindings:\n` + (card.findings || []).map((f) => ` - [${f.severity}] ${f.message}`).join("\n");
+  }
+  return JSON.stringify(card, null, 2);
+}
+
+function ResponseCardView({
+  card,
+  onCreateDraft,
+  onConfirmProposal,
+  onAskFollowup,
+  drafted,
+}: {
+  card: ResponseCard;
+  onCreateDraft?: () => void;
+  onConfirmProposal?: (proposal: Extract<ResponseCard, { kind: "proposal" }>) => void;
+  onAskFollowup?: (prompt: string) => void;
+  drafted?: boolean;
+}) {
+  if (card.kind === "po") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Draft Purchase Order</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-sm">
+          <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span>{card.supplier}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span>{card.quantity} {card.unit}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Coverage</span><span>{card.coverageDays} days</span></div>
+          <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Est. total</span><span>${card.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
+        </CardContent>
+        {onCreateDraft && (
+          <CardContent className="px-3 pt-1">
+            <Button size="sm" className="h-7 w-full text-xs" disabled={drafted} onClick={onCreateDraft}>
+              {drafted ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
+              {drafted ? "Draft created" : "Create Draft Order"}
+            </Button>
+          </CardContent>
+        )}
+      </Card>
+    );
+  }
+
+  if (card.kind === "proposal") {
+    return (
+      <Card className={cn("gap-2 py-3", card.blocked ? "border-red-500/40" : "border-primary/40")}>
+        <CardHeader className="px-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-semibold">
+              {card.blocked ? "⛔ Order Proposal (Blocked)" : "Draft Purchase Order — Needs Confirmation"}
+            </CardTitle>
+            <ComplianceChip status={card.compliance_status} codes={card.compliance_codes} />
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-sm">
+          <div className="flex justify-between"><span className="text-muted-foreground">Drug</span><span className="font-medium">{card.drug_name || card.ndc}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">NDC</span><span className="font-mono text-xs">{card.ndc}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span className="tabular-nums">{card.quantity} {card.unit} ({Math.ceil(card.quantity / (card.pack_size || 1))} packs)</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span>{card.supplier_name} {card.lead_time_days ? `· ${card.lead_time_days}d lead` : ""}</span></div>
+          {card.est_total_cost && (
+            <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Est. total</span><span>${card.est_total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></div>
+          )}
+
+          {card.review_decision_note && (
+            <div className="mt-1 rounded bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+              <span className="font-medium">⚠ Review Decision: </span>{card.review_decision_note}
+            </div>
+          )}
+
+          {card.blocked && card.block_reason && (
+            <div className="mt-1 rounded bg-destructive/10 p-2 text-xs text-destructive">
+              <span className="font-medium">⛔ Blocked: </span>{card.block_reason}
+            </div>
+          )}
+        </CardContent>
+        <CardContent className="flex items-center gap-2 px-3 pt-1">
+          <Button
+            size="sm"
+            className="h-7 flex-1 text-xs"
+            disabled={card.blocked || drafted}
+            onClick={() => onConfirmProposal?.(card)}
+          >
+            {drafted ? <CheckCircle2 className="size-3" /> : <Truck className="size-3" />}
+            {drafted ? "Draft Confirmed" : "Confirm draft"}
+          </Button>
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "safety_assessment") {
+    const isHardStop = card.hard_stop || card.verdict.toLowerCase().includes("block") || card.verdict.toLowerCase().includes("fail");
+    const isCaution = card.verdict.toLowerCase().includes("caution") || card.verdict.toLowerCase().includes("warn");
+    return (
+      <Card className={cn("gap-2 py-3", isHardStop ? "border-red-500/50 bg-red-500/5" : isCaution ? "border-amber-500/50 bg-amber-500/5" : "border-emerald-500/50 bg-emerald-500/5")}>
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-semibold">
+              {isHardStop ? "⛔ DO NOT PRESCRIBE" : isCaution ? "⚠ PRESCRIBE WITH CAUTION" : "✓ PRESCRIBE (CLEAR)"}
+            </CardTitle>
+            <Badge variant={isHardStop ? "destructive" : isCaution ? "secondary" : "outline"}>
+              {card.verdict.toUpperCase()}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">{card.drug_name || `RxCUI ${card.rxcui}`} · Score: {card.score}</p>
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.findings?.map((f, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <span className={cn("font-semibold uppercase", f.severity === "fatal" || f.severity === "high" ? "text-destructive" : "text-amber-600 dark:text-amber-400")}>
+                [{f.severity}]
+              </span>
+              <span>{f.message}</span>
+            </div>
+          ))}
+          {card.stock_available !== undefined && (
+            <div className="mt-1 flex justify-between border-t pt-1">
+              <span className="text-muted-foreground">On-hand availability:</span>
+              <span className="font-medium">{card.stock_available ?? 0} units</span>
+            </div>
+          )}
+        </CardContent>
+        {onAskFollowup && (
+          <CardContent className="flex flex-wrap gap-1 px-3 pt-1">
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={() => onAskFollowup("Why was this flagged?")}>
+              Why was this flagged?
+            </Button>
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={() => onAskFollowup("What can I give instead?")}>
+              What can I give instead?
+            </Button>
+          </CardContent>
+        )}
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "assessment_explain") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Assessment Explanation</CardTitle>
+          <p className="text-xs">Overall Score: <span className="font-mono font-bold">{card.overall_score}</span> ({card.verdict})</p>
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.contributions?.map((c, i) => (
+            <div key={i} className="space-y-0.5 border-b pb-1 last:border-0">
+              <div className="flex justify-between font-medium">
+                <span>{c.code}</span>
+                <span className="font-mono">Weight: {c.weight}</span>
+              </div>
+              {c.message && <p className="text-muted-foreground">{c.message}</p>}
+            </div>
+          ))}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "analogues") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Bio-Equivalent Analogues</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-2 px-3 text-sm">
+          {card.items.map((it, idx) => (
+            <div key={it.name || idx} className="flex items-center justify-between gap-2 border-b pb-1.5 last:border-0 last:pb-0">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium">{it.name}</p>
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span>{it.matchScore ?? 100}% match</span>
+                  {it.primary_ndc && <span>· NDC {it.primary_ndc}</span>}
+                </div>
+              </div>
+              <Badge variant={(it.quantity ?? it.stockHere ?? 0) > 0 ? "secondary" : "outline"} className="shrink-0 text-xs">
+                {(it.quantity ?? it.stockHere ?? 0) > 0 ? `${it.quantity ?? it.stockHere} in stock` : "Not stocked"}
+              </Badge>
+            </div>
+          ))}
+          <TruncationBanner truncated={card.truncated} />
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "sweep") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Shelf Certificate Sweep</CardTitle>
+            <Badge variant="outline" className="text-[10px]">{card.checked} checked</Badge>
+          </div>
+          <CoverageLine coverage={card.coverage} />
+        </CardHeader>
+        <CardContent className="grid gap-2 px-3 text-xs">
+          {card.flagged?.slice(0, 5).map((f) => (
+            <div key={f.ndc} className="flex items-start justify-between gap-2 border-b pb-1.5 last:border-0">
+              <div>
+                <p className="font-medium">{f.name || f.ndc}</p>
+                <p className="font-mono text-[10px] text-muted-foreground">{f.ndc}</p>
+                {f.reasons?.length ? <p className="text-[10px] text-amber-600 dark:text-amber-400">{f.reasons.join(", ")}</p> : null}
+              </div>
+              <div className="text-right">
+                <ComplianceChip status={f.status} codes={f.codes} />
+                <p className="text-[10px] text-muted-foreground">{f.quantity} on hand</p>
+              </div>
+            </div>
+          ))}
+          {card.unknown?.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">+{card.unknown.length} NDCs with unknown certification status</p>
+          )}
+          <TruncationBanner truncated={card.truncated} />
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "stock") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Stock On-Hand</CardTitle>
+          <div className="flex justify-between text-sm font-semibold">
+            <span>{card.name || card.ndc || card.rxcui}</span>
+            <span className="font-mono">{card.total_quantity} units</span>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs">
+          {card.locations?.map((loc, i) => (
+            <div key={i} className="flex justify-between text-muted-foreground">
+              <span>Location: {loc.location_id}</span>
+              <span className="font-mono text-foreground">{loc.quantity} units</span>
+            </div>
+          ))}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "excursions") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Storage Excursions</CardTitle>
+            <span className="text-[10px] text-muted-foreground">{card.window_hours}h window</span>
+          </div>
+          <CoverageLine coverage={card.coverage} />
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.excursions?.map((exc, i) => (
+            <div key={i} className="rounded border border-red-500/30 bg-red-500/5 p-2">
+              <div className="flex justify-between font-medium">
+                <span>Location: {exc.location_name || exc.location_id}</span>
+                <span className="text-destructive font-mono">{exc.temperature ? `${exc.temperature}°C` : ""}{exc.humidity ? ` ${exc.humidity}% RH` : ""}</span>
+              </div>
+              {exc.breach_duration_hours && (
+                <p className="text-[10px] text-muted-foreground">Breach duration: {exc.breach_duration_hours} hours</p>
+              )}
+            </div>
+          ))}
+          <TruncationBanner truncated={card.truncated} />
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "at_risk") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">At-Risk Depleting SKUs</CardTitle>
+            <span className="text-[10px] text-muted-foreground">Within {card.within_days}d</span>
+          </div>
+          <CoverageLine coverage={card.coverage} />
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.items?.slice(0, 5).map((sku) => (
+            <div key={sku.ndc} className="flex justify-between border-b pb-1 last:border-0">
+              <div>
+                <p className="font-medium">{sku.name}</p>
+                <p className="font-mono text-[10px] text-muted-foreground">{sku.ndc}</p>
+              </div>
+              <div className="text-right">
+                <Badge variant={sku.depletion_days && sku.depletion_days <= 7 ? "destructive" : "secondary"}>
+                  {sku.depletion_days != null ? `~${sku.depletion_days}d` : "Depleting"}
+                </Badge>
+                <p className="text-[10px] text-muted-foreground">{sku.stock} in stock</p>
+              </div>
+            </div>
+          ))}
+          <TruncationBanner truncated={card.truncated} />
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "patient_regimen") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Patient Profile Snapshot</CardTitle>
+          <div className="flex gap-2 text-xs">
+            {card.age_band && <span>Age band: <strong className="font-semibold">{card.age_band}</strong></span>}
+            {card.blood_group && <span>Blood group: <strong className="font-semibold">{card.blood_group}</strong></span>}
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-2 px-3 text-xs">
+          <div>
+            <p className="text-[10px] text-muted-foreground uppercase font-semibold">Documented Allergies</p>
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              {card.allergy_codes?.length ? card.allergy_codes.map((a) => <Badge key={a} variant="destructive" className="text-[10px]">{a}</Badge>) : <span className="text-muted-foreground">None documented</span>}
+            </div>
+          </div>
+          <div>
+            <p className="text-[10px] text-muted-foreground uppercase font-semibold">Conditions & PGx</p>
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              {card.condition_codes?.map((c) => <Badge key={c} variant="secondary" className="text-[10px]">{c}</Badge>)}
+              {card.pgx_phenotypes?.map((p) => <Badge key={p} variant="outline" className="text-[10px]">{p}</Badge>)}
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground italic">Note: Active medication list is not stored here — verify on chart.</p>
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "certificate") {
+    const findingsList = card.findings || [];
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Compliance Certification</CardTitle>
+            <ComplianceChip status={String(card.status)} codes={card.codes} />
+          </div>
+          <p className="font-mono text-xs font-semibold">{card.ndc}</p>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs">
+          {findingsList.map((f, i) => (
+            <div key={i} className="flex justify-between border-b pb-1 last:border-0">
+              <span className="font-semibold text-destructive">[{f.code}]</span>
+              <span>{f.message}</span>
+            </div>
+          ))}
+          {card.sources_consulted && (
+            <div className="mt-1 space-y-0.5 border-t pt-1 text-[10px] text-muted-foreground">
+              {Object.entries(card.sources_consulted).map(([k, v]) => (
+                <div key={k} className="flex justify-between">
+                  <span>{k.replace(/_/g, " ")}</span>
+                  <span>{v ? "✓ consulted" : "— not consulted"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "forecast") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Demand Forecast Projection</CardTitle>
+            {card.model_version && <Badge variant="outline" className="text-[10px]">{card.model_version}</Badge>}
+          </div>
+          <p className="font-mono text-xs">{card.ndc}</p>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs">
+          {card.points?.slice(0, 7).map((pt) => (
+            <div key={pt.date} className="flex justify-between border-b pb-0.5 last:border-0">
+              <span className="text-muted-foreground">{pt.date}</span>
+              <span className="font-mono font-medium">{pt.p50} units</span>
+            </div>
+          ))}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "forecast_staleness") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Forecast Staleness</CardTitle>
+            <Badge variant={card.has_run ? "secondary" : "destructive"}>
+              {card.has_run ? "Active Model" : "No Forecast Run"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs">
+          {card.data_through && (
+            <div className="flex justify-between"><span className="text-muted-foreground">Data through:</span><span>{card.data_through}</span></div>
+          )}
+          {card.generated_at && (
+            <div className="flex justify-between"><span className="text-muted-foreground">Generated at:</span><span>{card.generated_at}</span></div>
+          )}
+          {card.note && <p className="mt-1 text-muted-foreground italic">{card.note}</p>}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "review_queue") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Label Review Queue</CardTitle>
+            <Badge variant="secondary">{card.queue_total} total</Badge>
+          </div>
+          <CoverageLine coverage={card.coverage} />
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.accept_rate != null && (
+            <div className="flex justify-between font-medium">
+              <span className="text-muted-foreground">Accept rate:</span>
+              <span>{(card.accept_rate * 100).toFixed(0)}%</span>
+            </div>
+          )}
+          {card.most_urgent?.slice(0, 3).map((item, i) => (
+            <div key={i} className="rounded border p-1.5 space-y-0.5">
+              <div className="flex justify-between font-medium">
+                <span>{item.reaction}</span>
+                <Badge variant={item.seriousness === "fatal" || item.seriousness === "high" ? "destructive" : "outline"} className="text-[10px]">
+                  {item.seriousness}
+                </Badge>
+              </div>
+              <p className="text-[10px] text-muted-foreground truncate">{item.citation}</p>
+            </div>
+          ))}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "audit_summary") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">AI Decision Audit</CardTitle>
+            <Badge variant="outline">{card.total ?? 0} turns</Badge>
+          </div>
+          {card.window_days && <p className="text-[11px] text-muted-foreground">Last {card.window_days} days</p>}
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-xs">
+          {card.latency_ms && (
+            <div className="flex justify-between text-muted-foreground">
+              <span>Latency (p50 / p95):</span>
+              <span className="font-mono text-foreground">{card.latency_ms.p50}ms / {card.latency_ms.p95}ms</span>
+            </div>
+          )}
+          {card.top_tools && (
+            <div className="space-y-0.5 border-t pt-1">
+              <p className="font-semibold text-[10px] text-muted-foreground uppercase">Top Tools Used</p>
+              {card.top_tools.slice(0, 4).map(([tname, count]) => (
+                <div key={tname} className="flex justify-between text-[11px]">
+                  <span className="truncate">{tname}</span>
+                  <span className="font-mono">{count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "drug_search") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Drug Catalog Matches</CardTitle>
+          <p className="text-xs">Query: &quot;{card.query_name}&quot;</p>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs">
+          {card.matches?.map((m) => (
+            <div key={m.ndc || m.rxcui} className="flex items-center justify-between border-b pb-1 last:border-0">
+              <div className="min-w-0">
+                <p className="font-medium truncate">{m.name}</p>
+                <p className="font-mono text-[10px] text-muted-foreground">NDC: {m.ndc} · RxCUI: {m.rxcui}</p>
+              </div>
+              <Badge variant={m.on_hand > 0 ? "secondary" : "outline"} className="shrink-0 text-[10px]">
+                {m.on_hand > 0 ? `${m.on_hand} in stock` : "0 in stock"}
+              </Badge>
+            </div>
+          ))}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "run_proposal") {
+    return (
+      <Card className="gap-2 py-3">
+        <CardHeader className="px-3 pb-1">
+          <CardTitle className="text-xs font-medium text-muted-foreground">Proposed Action</CardTitle>
+          <p className="text-xs font-medium">{card.action}</p>
+        </CardHeader>
+        <CardContent className="grid gap-1 px-3 text-xs text-muted-foreground">
+          {card.facility_id && <div>Facility: #{card.facility_id}</div>}
+          {card.last_run_at && <div>Last run: {card.last_run_at}</div>}
+        </CardContent>
+        <ProvenanceFooter tool={card.tool} requestId={card.request_id} />
+      </Card>
+    );
+  }
+
+  if (card.kind === "emergency") {
+    return (
+      <Card className="gap-2 border-red-500/30 py-3">
+        <CardHeader className="px-3">
+          <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <AlertTriangle className="size-3.5 text-red-500" />
+            Emergency Supply Plan
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-1.5 px-3 text-sm">
+          <div className="flex justify-between"><span className="text-muted-foreground">Scenario</span><span className="font-mono tabular-nums">{card.surgePct}% of baseline demand</span></div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Stock depletes in</span>
+            <StatusBadge tone={card.depletionDays != null && card.depletionDays <= 5 ? "critical" : "warning"}>
+              {card.depletionDays != null ? `${card.depletionDays}d` : "30d+"}
+            </StatusBadge>
+          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Freight mode</span><span className="flex items-center gap-1"><Plane className="size-3.5" /> Air (expedited)</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Lead time</span><span className="font-mono tabular-nums">{card.airFreightDays} days</span></div>
+          <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Cost premium</span><span className="font-mono tabular-nums">+{card.costPremiumPct}%</span></div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return null;
+}
+
 function LiveText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap text-sm leading-relaxed">{text}</p>;
 }
@@ -428,141 +1135,9 @@ function StreamingText({ text }: { text: string }) {
   }, [text]);
   return (
     <>
-      {/* The animated reveal is presentational only — a live region
-          watching it would announce every partial word as it grows. The
-          full text is present from the same render as a hidden sibling, so
-          the one DOM insertion assistive tech sees is the complete message. */}
       <p className="text-sm leading-relaxed" aria-hidden="true">{shown}</p>
       <p className="sr-only">{text}</p>
     </>
-  );
-}
-
-// Plain-text summary for the clipboard — a purchase order or emergency
-// plan is something a user plausibly wants to paste into an email or a
-// ticket, not just look at.
-function formatCardForCopy(card: ResponseCard): string {
-  if (card.kind === "po") {
-    return `Draft Purchase Order — ${card.drugName}\nSupplier: ${card.supplier}\nQuantity: ${card.quantity} ${card.unit}\nCoverage: ${card.coverageDays} days\nEst. total: $${card.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-  }
-  if (card.kind === "analogues") {
-    return ["Bio-Equivalent Analogues", ...card.items.map((it) => `${it.name} — ${it.matchScore}% match — ${it.stockHere > 0 ? `${it.stockHere} in stock` : "not stocked here"}`)].join("\n");
-  }
-  if (card.kind === "certificate") {
-    const lines = [
-      "Certificate Status",
-      `NDC: ${card.ndc}`,
-      `Status: ${CERT_LABELS[card.status]}`,
-    ];
-    if (card.reasons > 0) {
-      // Standing vs transient is the part worth pasting into a ticket: a recall
-      // clears, a dead listing does not.
-      lines.push(`Findings: ${card.reasons} (${card.persistent} standing, ${card.transient} transient)`);
-    }
-    return lines.join("\n");
-  }
-  return `Emergency Supply Plan\nScenario: ${card.surgePct}% of baseline demand\nStock depletes in: ${card.depletionDays != null ? `${card.depletionDays}d` : "30d+"}\nFreight: Air (expedited), ${card.airFreightDays} days\nCost premium: +${card.costPremiumPct}%`;
-}
-
-function ResponseCardView({
-  card,
-  onCreateDraft,
-  drafted,
-}: {
-  card: ResponseCard;
-  onCreateDraft?: () => void;
-  drafted?: boolean;
-}) {
-  if (card.kind === "po") {
-    return (
-      <Card className="gap-2 py-3">
-        <CardHeader className="px-3">
-          <CardTitle className="text-xs font-medium text-muted-foreground">Draft Purchase Order</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-1 px-3 text-sm">
-          <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span>{card.supplier}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span>{card.quantity} {card.unit}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Coverage</span><span>{card.coverageDays} days</span></div>
-          <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Est. total</span><span>${card.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
-        </CardContent>
-        {onCreateDraft && (
-          <CardContent className="px-3 pt-1">
-            <Button size="sm" className="h-7 w-full text-xs" disabled={drafted} onClick={onCreateDraft}>
-              {drafted ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
-              {drafted ? "Draft created" : "Create Draft Order"}
-            </Button>
-          </CardContent>
-        )}
-      </Card>
-    );
-  }
-  if (card.kind === "analogues") {
-    return (
-      <Card className="gap-2 py-3">
-        <CardHeader className="px-3">
-          <CardTitle className="text-xs font-medium text-muted-foreground">Bio-Equivalent Analogues</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 px-3 text-sm">
-          {card.items.map((it) => (
-            <div key={it.name} className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate">{it.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{it.matchScore}% match</p>
-              </div>
-              <Badge variant={it.stockHere > 0 ? "secondary" : "outline"}>
-                {it.stockHere > 0 ? `${it.stockHere} in stock` : "Not stocked here"}
-              </Badge>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-    );
-  }
-  if (card.kind === "certificate") {
-    return (
-      <Card className="gap-2 py-3">
-        <CardHeader className="px-3">
-          <CardTitle className="text-xs font-medium text-muted-foreground">Certificate Status</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-1 px-3 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Status</span>
-            <StatusBadge tone={CERT_TONE[card.status]} className="normal-case">
-              {CERT_LABELS[card.status]}
-            </StatusBadge>
-          </div>
-          <div className="flex justify-between"><span className="text-muted-foreground">NDC</span><span className="font-mono text-xs">{card.ndc}</span></div>
-          {card.reasons > 0 && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Findings</span>
-              <span>{card.persistent} standing · {card.transient} transient</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    );
-  }
-  return (
-    <Card className="gap-2 border-red-500/30 py-3">
-      <CardHeader className="px-3">
-        <CardTitle className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <AlertTriangle className="size-3.5 text-red-500" />
-          Emergency Supply Plan
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-1.5 px-3 text-sm">
-        <div className="flex justify-between"><span className="text-muted-foreground">Scenario</span><span className="font-mono tabular-nums">{card.surgePct}% of baseline demand</span></div>
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">Stock depletes in</span>
-          <StatusBadge tone={card.depletionDays != null && card.depletionDays <= 5 ? "critical" : "warning"}>
-            {card.depletionDays != null ? `${card.depletionDays}d` : "30d+"}
-          </StatusBadge>
-        </div>
-        <div className="flex justify-between"><span className="text-muted-foreground">Freight mode</span><span className="flex items-center gap-1"><Plane className="size-3.5" /> Air (expedited)</span></div>
-        <div className="flex justify-between"><span className="text-muted-foreground">Lead time</span><span className="font-mono tabular-nums">{card.airFreightDays} days</span></div>
-        <div className="flex justify-between font-medium"><span className="text-muted-foreground font-normal">Cost premium</span><span className="font-mono tabular-nums">+{card.costPremiumPct}%</span></div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -588,17 +1163,32 @@ export function CopilotDrawer() {
   const streamAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => streamAbortRef.current?.abort(), []);
 
-  function mapApiMessages(items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[]): Message[] {
-    const mapped = items
-      .filter((row) => row.role === "user" || row.role === "assistant")
-      .map((row) => ({
-        id: `api-${row.id}`,
-        role: row.role as "user" | "assistant",
-        text: row.text ?? "",
-        card: row.card ?? undefined,
-        live: true,
-      }));
-    return mapped.length === 0 ? [GREETING] : mapped;
+  function mapApiMessages(
+    items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[],
+  ): Message[] {
+    const result: Message[] = [];
+    for (const row of items) {
+      if (row.role === "user") {
+        result.push({ id: `api-${row.id}`, role: "user", text: row.text ?? "" });
+      } else if (row.role === "tool" && row.card) {
+        result.push({
+          id: `api-${row.id}`,
+          role: "assistant",
+          text: "",
+          card: row.card as ResponseCard,
+          live: true,
+        });
+      } else if (row.role === "assistant") {
+        result.push({
+          id: `api-${row.id}`,
+          role: "assistant",
+          text: row.text ?? "",
+          card: row.card ?? undefined,
+          live: true,
+        });
+      }
+    }
+    return result.length === 0 ? [GREETING] : result;
   }
 
   async function refreshHistory() {
@@ -635,7 +1225,7 @@ export function CopilotDrawer() {
         if (!items[0]) return;
         const conv = (await apiFetch("copilot", `/conversations/${items[0].id}`)) as {
           id: string;
-          items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[];
+          items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[];
         };
         if (cancelled) return;
         setConversationId(conv.id);
@@ -652,10 +1242,32 @@ export function CopilotDrawer() {
   useEffect(() => {
     if (!emergencyRequest || emergencyRequest.nonce === lastHandledNonce.current) return;
     lastHandledNonce.current = emergencyRequest.nonce;
-    setMessages((m) => [...m, { id: id(), role: "user", text: `Generate emergency supply plan for current load — ${emergencyRequest.drugName}` }]);
+    setMessages((m) => [
+      ...m,
+      { id: id(), role: "user", text: `Generate emergency supply plan for current load — ${emergencyRequest.drugName}` },
+    ]);
     setPending(true);
     window.setTimeout(() => {
-      setMessages((m) => [...m, emergencyPlanReply(emergencyRequest)]);
+      const costPremiumPct = emergencyRequest.surgePct >= 200 ? 45 : emergencyRequest.surgePct >= 150 ? 25 : 10;
+      setMessages((m) => [
+        ...m,
+        {
+          id: id(),
+          role: "assistant",
+          text:
+            emergencyRequest.depletionDays != null
+              ? `Emergency supply plan for ${emergencyRequest.drugName} at ${emergencyRequest.surgePct}% projected load — current stock depletes in ~${emergencyRequest.depletionDays} day${emergencyRequest.depletionDays === 1 ? "" : "s"}. Recommending expedited air freight.`
+              : `Emergency supply plan for ${emergencyRequest.drugName} at ${emergencyRequest.surgePct}% projected load — stock holds beyond the 30-day forecast window.`,
+          card: {
+            kind: "emergency",
+            drugName: emergencyRequest.drugName,
+            surgePct: emergencyRequest.surgePct,
+            depletionDays: emergencyRequest.depletionDays,
+            airFreightDays: 2,
+            costPremiumPct,
+          },
+        },
+      ]);
       setPending(false);
     }, 300);
   }, [emergencyRequest]);
@@ -665,7 +1277,7 @@ export function CopilotDrawer() {
   }, [messages]);
 
   function runAction(actionKey: string) {
-    if (pending) return; // one stream at a time, same rule send() follows
+    if (pending) return;
     const action = quickActions.find((a) => a.key === actionKey);
     const label = action?.label ?? actionKey;
     setMessages((m) => [...m, { id: id(), role: "user", text: focus ? `${label} — ${focus.label}` : label }]);
@@ -674,11 +1286,6 @@ export function CopilotDrawer() {
       void streamReply(action.prompt);
       return;
     }
-    window.setTimeout(async () => {
-      const reply = await replyFor(actionKey, focus, facility.id);
-      setMessages((m) => [...m, reply]);
-      setPending(false);
-    }, 300);
   }
 
   function clearConversation() {
@@ -704,7 +1311,7 @@ export function CopilotDrawer() {
     try {
       const conv = (await apiFetch("copilot", `/conversations/${saved.id}`)) as {
         id: string;
-        items: { id: number; role: string; text: string | null; card?: ResponseCard | null }[];
+        items: { id: number; role: string; text: string | null; card?: any | null; tool_name?: string | null }[];
       };
       setConversationId(conv.id);
       setMessages(mapApiMessages(conv.items ?? []));
@@ -731,6 +1338,30 @@ export function CopilotDrawer() {
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create draft order.");
+    }
+  }
+
+  async function confirmProposal(proposal: Extract<ResponseCard, { kind: "proposal" }>) {
+    try {
+      const confirmed = (await apiFetch("copilot", "/orders/confirm", {
+        method: "POST",
+        body: JSON.stringify({
+          proposal_id: proposal.proposal_id,
+          facility_id: proposal.facility_id,
+          supplier_id: proposal.supplier_id,
+          ndc: proposal.ndc,
+          quantity: proposal.quantity,
+          review_decision_id: proposal.review_decision_id,
+        }),
+      })) as { ref: string; id: number };
+      reloadOrders();
+      setDraftedMessageIds((prev) => new Set(prev).add(proposal.proposal_id));
+      toast.success(`Draft purchase order ${confirmed.ref} confirmed.`, {
+        description: `${proposal.quantity} ${proposal.unit || "units"} for facility #${proposal.facility_id}.`,
+        action: { label: "Review Orders", onClick: () => router.push("/orders") },
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not confirm draft order proposal.");
     }
   }
 
@@ -788,6 +1419,13 @@ export function CopilotDrawer() {
                 : t,
             ),
           }));
+        } else if (evt.event === "tool_card") {
+          const { card } = evt.data;
+          applyToReply((msg) => ({
+            ...msg,
+            cards: [...(msg.cards ?? (msg.card ? [msg.card] : [])), card as ResponseCard],
+            card: card as ResponseCard,
+          }));
         } else if (evt.event === "degraded") {
           applyToReply((msg) => ({ ...msg, text: evt.data.reason, degraded: true }));
         } else if (evt.event === "patient_disambiguation") {
@@ -817,11 +1455,6 @@ export function CopilotDrawer() {
     }
   }
 
-  // The candidate list came straight from the backend's disambiguation event,
-  // never through Gemini -- picking one must keep it that way. The resend
-  // carries only the UUID, exactly what a physician would have pasted
-  // directly before this feature existed, so the model can retry the same
-  // tool call already in its history with a resolved id instead of a name.
   function pickPatient(messageId: string, candidate: PatientCandidate) {
     if (pending) return;
     const priorMessages = messages.map((msg) =>
@@ -904,72 +1537,83 @@ export function CopilotDrawer() {
 
       <ScrollArea className="min-h-0 flex-1 px-3 py-3">
         <div className="flex flex-col gap-3" role="log" aria-live="polite" aria-relevant="additions" aria-busy={pending}>
-          {messages.map((m) => (
-            <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>
-              {m.tools && <ToolActivityRow tools={m.tools} />}
-              <div
-                className={cn(
-                  "max-w-[92%] rounded-lg px-3 py-2 text-sm",
-                  m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
-                  m.degraded && "border border-amber-500/40",
+          {messages.map((m) => {
+            const allCards = m.cards?.length ? m.cards : m.card ? [m.card] : [];
+            return (
+              <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>
+                {m.tools && <ToolActivityRow tools={m.tools} />}
+                {allCards.map((c, i) => (
+                  <div key={i} className="flex w-[92%] flex-col gap-1">
+                    <ResponseCardView
+                      card={c}
+                      onCreateDraft={c.kind === "po" ? () => createDraftFromCard(m.id, c as Extract<ResponseCard, { kind: "po" }>) : undefined}
+                      onConfirmProposal={c.kind === "proposal" ? () => confirmProposal(c as Extract<ResponseCard, { kind: "proposal" }>) : undefined}
+                      onAskFollowup={(prompt) => {
+                        setMessages((prev) => [...prev, { id: id(), role: "user", text: prompt }]);
+                        setPending(true);
+                        void streamReply(prompt);
+                      }}
+                      drafted={draftedMessageIds.has(m.id) || (c.kind === "proposal" && draftedMessageIds.has(c.proposal_id))}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-fit gap-1.5 self-end text-[11px] text-muted-foreground"
+                      onClick={() => {
+                        navigator.clipboard.writeText(formatCardForCopy(c));
+                        toast.success("Copied to clipboard.");
+                      }}
+                    >
+                      <Copy className="size-3" />
+                      Copy
+                    </Button>
+                  </div>
+                ))}
+                {m.text && (
+                  <div
+                    className={cn(
+                      "max-w-[92%] rounded-lg px-3 py-2 text-sm",
+                      m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
+                      m.degraded && "border border-amber-500/40",
+                    )}
+                  >
+                    {m.role === "assistant" ? (
+                      m.degraded ? (
+                        <p className="flex items-start gap-1.5 text-sm leading-relaxed text-muted-foreground">
+                          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                          {m.text}
+                        </p>
+                      ) : m.live ? (
+                        <LiveText text={m.text} />
+                      ) : (
+                        <StreamingText text={m.text} />
+                      )
+                    ) : (
+                      m.text
+                    )}
+                  </div>
                 )}
-              >
-                {m.role === "assistant" ? (
-                  m.degraded ? (
-                    <p className="flex items-start gap-1.5 text-sm leading-relaxed text-muted-foreground">
-                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
-                      {m.text}
-                    </p>
-                  ) : m.live ? (
-                    <LiveText text={m.text} />
-                  ) : (
-                    <StreamingText text={m.text} />
-                  )
-                ) : (
-                  m.text
+                {m.patientPicker && (
+                  <div className="flex w-[92%] flex-col gap-1">
+                    {m.patientPicker.candidates.map((c) => (
+                      <Button
+                        key={c.id}
+                        variant="outline"
+                        size="sm"
+                        className="h-auto justify-between gap-2 px-2.5 py-1.5 text-left text-xs"
+                        onClick={() => pickPatient(m.id, c)}
+                      >
+                        <span className="font-medium">{c.full_name}</span>
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                          DOB {c.date_of_birth} · {c.id.slice(0, 8)}
+                        </span>
+                      </Button>
+                    ))}
+                  </div>
                 )}
               </div>
-              {m.card && (
-                <div className="flex w-[92%] flex-col gap-1">
-                  <ResponseCardView
-                    card={m.card}
-                    onCreateDraft={m.card.kind === "po" ? () => createDraftFromCard(m.id, m.card as Extract<ResponseCard, { kind: "po" }>) : undefined}
-                    drafted={draftedMessageIds.has(m.id)}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 w-fit gap-1.5 self-end text-[11px] text-muted-foreground"
-                    onClick={() => {
-                      navigator.clipboard.writeText(formatCardForCopy(m.card!));
-                      toast.success("Copied to clipboard.");
-                    }}
-                  >
-                    <Copy className="size-3" />
-                    Copy
-                  </Button>
-                </div>
-              )}
-              {m.patientPicker && (
-                <div className="flex w-[92%] flex-col gap-1">
-                  {m.patientPicker.candidates.map((c) => (
-                    <Button
-                      key={c.id}
-                      variant="outline"
-                      size="sm"
-                      className="h-auto justify-between gap-2 px-2.5 py-1.5 text-left text-xs"
-                      onClick={() => pickPatient(m.id, c)}
-                    >
-                      <span className="font-medium">{c.full_name}</span>
-                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                        DOB {c.date_of_birth} · {c.id.slice(0, 8)}
-                      </span>
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       </ScrollArea>
@@ -982,10 +1626,6 @@ export function CopilotDrawer() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onInput={(e) => {
-              // Auto-grow up to ~6 lines, then let the textarea's own
-              // scrollbar take over — previously fixed at one line, so
-              // anything longer than ~40 characters scrolled inside a
-              // sliver the user couldn't read before sending.
               const el = e.currentTarget;
               el.style.height = "auto";
               el.style.height = `${Math.min(el.scrollHeight, 144)}px`;

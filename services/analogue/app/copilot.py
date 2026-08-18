@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from google.genai import types
 from medstock_shared.ai import client, shared_breaker, write_audit
+from medstock_shared.ai.cards import card_for
 from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
@@ -267,6 +268,9 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
                 tools_called.append({"name": name, "ok": True})
                 successful_tools.add(name)
                 yield _sse("tool_end", {"name": name, "ok": True})
+                card_data = card_for(name, result, principal, request_id, args=args)
+                if card_data is not None:
+                    yield _sse("tool_card", {"name": name, "card": card_data})
             except ToolDenied as exc:
                 # A forged or stale tool call from the model -- turned into a
                 # function_response error, never a crash or a silent grant.
