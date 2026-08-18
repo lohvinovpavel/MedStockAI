@@ -285,7 +285,7 @@ def test_use_ai_false_never_calls_ask_ai(monkeypatch):
     _full_candidates(monkeypatch)
     called = []
 
-    def capture(payload):
+    def capture(payload, principal):
         called.append(payload)
         return {"items": []}
 
@@ -323,7 +323,7 @@ def test_citation_mismatch_strips_quote_instead_of_rejecting_keep_set():
 def test_ask_ai_error_falls_back_unfiltered_with_banner_flag(monkeypatch):
     _full_candidates(monkeypatch)
 
-    def boom(_payload):
+    def boom(_payload, _principal):
         raise RuntimeError("relation ai_cache does not exist")
 
     monkeypatch.setattr("app.main._ask_analogue_ai", boom)
@@ -336,7 +336,7 @@ def test_ask_ai_error_falls_back_unfiltered_with_banner_flag(monkeypatch):
 
 def test_empty_llm_keep_set_falls_back_to_unfiltered(monkeypatch):
     _full_candidates(monkeypatch)
-    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload: {"items": []})
+    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload, principal: {"items": []})
     body = _client().get("/analogues/212033", params={"mode": "full", "use_ai": True}).json()
     assert body["use_ai"] is True
     assert body["rationale_unavailable"] is True
@@ -353,7 +353,7 @@ def test_default_query_without_use_ai_param_is_200(monkeypatch):
     _full_candidates(monkeypatch)
     monkeypatch.setattr(
         "app.main._ask_analogue_ai",
-        lambda payload: {
+        lambda payload, principal: {
             "items": [
                 {
                     "rxcui": "105798",
@@ -376,7 +376,7 @@ def test_ingredient_use_ai_true_never_calls_ask_ai(monkeypatch):
     monkeypatch.setattr("app.main.related_scd_sbd", lambda rxcui: [])
     called = []
 
-    def capture(payload):
+    def capture(payload, principal):
         called.append(payload)
         return {"items": []}
 
@@ -391,7 +391,7 @@ def test_closed_world_unknown_rxcui_is_empty_keep_set_fallback(monkeypatch):
     _full_candidates(monkeypatch)
     monkeypatch.setattr(
         "app.main._ask_analogue_ai",
-        lambda payload: {
+        lambda payload, principal: {
             "items": [{"rxcui": "not-a-candidate", "rationale": "nope", "citation": "x"}]
         },
     )
@@ -428,7 +428,7 @@ def test_use_ai_true_caps_keep_set_at_five_highest_quantity(monkeypatch):
     ids = _ten_full_candidates(monkeypatch)
     monkeypatch.setattr(
         "app.main._ask_analogue_ai",
-        lambda payload: {
+        lambda payload, principal: {
             "items": [
                 {
                     "rxcui": rid,
@@ -451,7 +451,7 @@ def test_use_ai_false_full_list_can_exceed_five(monkeypatch):
     ids = _ten_full_candidates(monkeypatch)
     called = []
 
-    def capture(payload):
+    def capture(payload, principal):
         called.append(payload)
         return {"items": []}
 
@@ -465,7 +465,7 @@ def test_use_ai_false_full_list_can_exceed_five(monkeypatch):
 
 def test_empty_keep_set_fallback_is_uncapped_unfiltered_list(monkeypatch):
     ids = _ten_full_candidates(monkeypatch)
-    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload: {"items": []})
+    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload, principal: {"items": []})
     body = _client().get("/analogues/212033", params={"mode": "full", "use_ai": True}).json()
     assert body["use_ai"] is True
     assert body["rationale_unavailable"] is True
@@ -478,7 +478,7 @@ def test_no_key_use_ai_true_is_409_not_unfiltered_list(monkeypatch):
     _full_candidates(monkeypatch)
     called = []
 
-    def capture(payload):
+    def capture(payload, principal):
         called.append(payload)
         return {"items": [{"rxcui": "105798"}]}
 
@@ -494,7 +494,7 @@ def test_no_key_use_ai_false_is_200_unfiltered(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "")
     _full_candidates(monkeypatch)
     called = []
-    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload: called.append(payload))
+    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload, principal: called.append(payload))
     res = _client().get("/analogues/212033", params={"mode": "full", "use_ai": False})
     assert res.status_code == 200
     body = res.json()
@@ -515,7 +515,7 @@ def test_no_key_omitted_use_ai_defaults_false(monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "")
     _full_candidates(monkeypatch)
     called = []
-    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload: called.append(payload))
+    monkeypatch.setattr("app.main._ask_analogue_ai", lambda payload, principal: called.append(payload))
     res = _client().get("/analogues/212033", params={"mode": "full"})
     assert res.status_code == 200
     body = res.json()

@@ -62,6 +62,13 @@ def current_principal(request: Request) -> Principal:
 # that budget lets one curious user starve the nightly CronJobs. Reading an
 # already-computed certificate costs a SQL query, so it is shared widely;
 # spending the budget is not.
+#
+# `copilot:chat` gates opening the chat surface itself, granted to all four
+# roles here — it is not what restricts which *tools* a role's copilot can
+# call. That restriction is this same table: `medstock_shared.ai.tools`
+# binds every tool to one of the permissions above, so a role's tool list is
+# just this dict filtered by role, with no second ACL to keep in sync
+# (docs/ai-module-plan.md §3/Phase 4).
 PERMS: dict[str, set[str]] = {
     "pharmacist": {
         "queue:read",
@@ -75,6 +82,7 @@ PERMS: dict[str, set[str]] = {
         "profile:explain",
         "certificate:read",
         "certification:explore",
+        "copilot:chat",
         "forecast:read",
         # Triggering a run is a write with a distinct name on purpose — but it
         # is held by the same people who read forecasts: the pharmacist at the
@@ -94,6 +102,7 @@ PERMS: dict[str, set[str]] = {
         "profile:assess",
         "profile:explain",
         "certificate:read",
+        "copilot:chat",
     },
     "director": {
         "dashboard:read",
@@ -105,6 +114,7 @@ PERMS: dict[str, set[str]] = {
         # readable by the person who has to decide whether to trust extraction.
         "profile:review",
         "certificate:read",
+        "copilot:chat",
         "forecast:read",
         "forecast:run",
     },
@@ -120,6 +130,7 @@ PERMS: dict[str, set[str]] = {
         "profile:review",
         "certificate:read",
         "certification:explore",
+        "copilot:chat",
     },
 }
 
