@@ -192,11 +192,39 @@ jobs:
       - uses: imranismail/setup-kustomize@v2
 
       # Schema first, always — see cd.yml for why.
+      # `kubectl wait --for=condition=complete` only ever watches for success, so
+      # a job that FAILED reports the same "timed out waiting for the condition"
+      # as one still running. That message is what a reader gets, and it says
+      # nothing about which happened — the logs are in the cluster and the
+      # runner has already gone home. So wait on either outcome and print the
+      # evidence before failing.
       - name: Migrate
         run: |
           kubectl -n medstock delete job migrate --ignore-not-found
           sed "s|ghcr.io/medstockai/inventory:latest|${{ env.REGISTRY }}/inventory:${{ env.DEPLOY_SHA }}|" deploy/k8s/migrate-job.yaml | kubectl -n medstock apply -f -
-          kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
+
+          # Race the two terminal conditions. Whichever resolves first wins; if
+          # neither does inside the window, the job is genuinely stuck — most
+          # often blocked on a lock, because this runs before the rollout and
+          # the old pods still hold their connections.
+          kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s & ok=$!
+          kubectl -n medstock wait --for=condition=failed   job/migrate --timeout=300s & bad=$!
+          wait -n "$ok" "$bad" || true
+
+          if kubectl -n medstock get job migrate -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' | grep -q True; then
+            kill "$bad" 2>/dev/null || true
+            echo "::notice::migration complete"
+            kubectl -n medstock logs job/migrate --tail=20 || true
+            exit 0
+          fi
+
+          kill "$ok" 2>/dev/null || true
+          echo "::error::migration did not complete — evidence follows"
+          echo "--- job ---";  kubectl -n medstock describe job/migrate  || true
+          echo "--- pods ---"; kubectl -n medstock get pods -l job-name=migrate -o wide || true
+          # The actual alembic traceback, which is the whole point of this step.
+          echo "--- logs ---"; kubectl -n medstock logs job/migrate --tail=200 --all-containers || true
+          exit 1
 
       # The static IP survives a normal apply but not a full destroy/recreate
       # of the sandbox, so the hostname can't stay committed in git — read
