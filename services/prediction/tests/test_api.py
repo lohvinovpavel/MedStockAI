@@ -22,6 +22,7 @@ from medstock_shared.models import (
     ForecastPoint,
     Hospital,
     ShortageEvent,
+    StockDaily,
     StockSnapshot,
 )
 from sqlalchemy import delete, func, select
@@ -73,6 +74,15 @@ def seeded():
                     location_id="tf-room", quantity=on_hand,
                 )
             )
+            # Recorded stock history ending exactly at the snapshot, the
+            # invariant the chart's history/projection boundary rests on.
+            s.add_all(
+                StockDaily(
+                    hospital_id=str(HOSPITAL_ID), facility_id=fac.id, ndc=ndc,
+                    date=END - timedelta(days=i), qty_on_hand=on_hand + i * qty,
+                )
+                for i in range(min(days, 30))
+            )
         s.merge(
             ShortageEvent(source_id=f"test-shortage-{NDC_DRY}", ndc=NDC_DRY, status="Current",
                           raw={"source": "test"})
@@ -87,6 +97,7 @@ def seeded():
             (ConsumptionDaily, ConsumptionDaily.hospital_id),
             (StockSnapshot, StockSnapshot.hospital_id),
             (ForecastPoint, ForecastPoint.hospital_id),
+            (StockDaily, StockDaily.hospital_id),
         ]:
             s.execute(delete(model).where(col == str(HOSPITAL_ID)))
         s.execute(delete(ShortageEvent).where(ShortageEvent.source_id.like("test-shortage-%")))
@@ -179,6 +190,11 @@ def test_forecast_flat_drug(run):
     ).json()
     assert len(body["forecast"]) == 30
     assert body["history"], "history series must be returned"
+    # Recorded stock history: present, and its last point equals the on-hand
+    # the projection starts from — the chart's boundary continuity invariant.
+    assert body["stock_history"]
+    assert body["stock_history"][-1]["date"] == END.isoformat()
+    assert body["stock_history"][-1]["quantity"] == body["depletion"]["quantity"]
     assert all(p["p10"] <= p["p50"] <= p["p90"] for p in body["forecast"])
     # 100 on hand at 10/day: the depletion line lands 10 days out.
     assert body["depletion"]["days"] == 10

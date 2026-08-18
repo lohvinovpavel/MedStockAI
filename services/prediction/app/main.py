@@ -25,6 +25,7 @@ from medstock_shared.models import (
     Drug,
     ForecastPoint,
     ShortageEvent,
+    StockDaily,
     StockSnapshot,
 )
 from pydantic import BaseModel
@@ -177,6 +178,7 @@ def forecast(
             "generated_at": None,
             "data_through": None,
             "history": [],
+            "stock_history": [],
             "forecast": [],
             "depletion": None,
             "reason": None,
@@ -209,6 +211,25 @@ def forecast(
             hist_stmt = hist_stmt.where(ConsumptionDaily.facility_id == facility_id)
         out["history"] = [
             {"date": d.isoformat(), "quantity": int(q)} for d, q in session.execute(hist_stmt)
+        ]
+
+        # Recorded end-of-day stock, same window as the usage history. Empty
+        # until something writes stock_daily (the demo seeder today, B4
+        # receiving events eventually) — the chart just shows no line then.
+        stock_stmt = (
+            select(StockDaily.date, func.sum(StockDaily.qty_on_hand))
+            .where(
+                StockDaily.ndc.in_(ndcs),
+                StockDaily.date > data_through - timedelta(days=HISTORY_DAYS_RETURNED),
+                StockDaily.date <= data_through,
+            )
+            .group_by(StockDaily.date)
+            .order_by(StockDaily.date)
+        )
+        if facility_id is not None:
+            stock_stmt = stock_stmt.where(StockDaily.facility_id == facility_id)
+        out["stock_history"] = [
+            {"date": d.isoformat(), "quantity": int(q)} for d, q in session.execute(stock_stmt)
         ]
 
         points: list[tuple[date, float, float, float]] = []

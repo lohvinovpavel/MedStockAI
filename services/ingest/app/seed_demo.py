@@ -30,6 +30,7 @@ from medstock_shared.models import (
     Hospital,
     LocationCondition,
     ShortageEvent,
+    StockDaily,
     StockSnapshot,
     StorageLocation,
 )
@@ -170,6 +171,25 @@ def _seed_consumption(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> 
         s.execute(insert(ConsumptionDaily), payload[i : i + BATCH])
 
 
+def _seed_stock_history(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
+    """Bulk series: delete the demo tenant's slice, reload in batches — same
+    treatment as consumption. Ends exactly at stock_snapshot's quantities so
+    the forecasts page's history meets its projection without a jump."""
+    s.execute(delete(StockDaily).where(StockDaily.hospital_id == HOSPITAL_ID))
+    payload = [
+        {
+            "hospital_id": HOSPITAL_ID,
+            "facility_id": fac_ids[row["facility"]],
+            "ndc": row["ndc"],
+            "date": row["date"],
+            "qty_on_hand": int(row["qty"]),
+        }
+        for row in rows
+    ]
+    for i in range(0, len(payload), BATCH):
+        s.execute(insert(StockDaily), payload[i : i + BATCH])
+
+
 def _seed_forecast(s: Session, rows: list[dict], fac_ids: dict[str, int]) -> None:
     """The canonical demo run (issue #7): delete-and-reload like the other
     bulk series. data_through = END_DATE — pinned, so the artifact stays
@@ -249,6 +269,7 @@ def run() -> dict[str, int]:
     consumption = _read_gz(src / "consumption.csv.gz")
     conditions = _read_gz(src / "conditions.csv.gz")
     forecast = _read_gz(src / "forecast.csv.gz")
+    stock_history = _read_gz(src / "stock_history.csv.gz")
 
     with Session(engine) as s:
         _seed_hospital(s)
@@ -258,6 +279,7 @@ def run() -> dict[str, int]:
         _seed_consumption(s, consumption, fac_ids)
         _seed_conditions(s, conditions, loc_ids)
         _seed_forecast(s, forecast, fac_ids)
+        _seed_stock_history(s, stock_history, fac_ids)
         shortages = _seed_shortages(s, drugs)
         s.commit()
 
@@ -269,6 +291,7 @@ def run() -> dict[str, int]:
         "consumption": len(consumption),
         "conditions": len(conditions),
         "forecast": len(forecast),
+        "stock_history": len(stock_history),
         "shortages": shortages,
     }
 

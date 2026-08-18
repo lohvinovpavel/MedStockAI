@@ -62,6 +62,7 @@ type Forecast = {
   data_through: string | null;
   latest_data: string | null;
   history: { date: string; quantity: number }[];
+  stock_history: { date: string; quantity: number }[];
   forecast: { date: string; p10: number; p50: number; p90: number }[];
   depletion: {
     quantity: number;
@@ -82,6 +83,7 @@ const usageChartConfig: ChartConfig = {
 };
 
 const stockChartConfig: ChartConfig = {
+  stockActual: { label: "Recorded stock", color: "var(--chart-2)" },
   stock: { label: "Projected stock (p50)", color: "var(--chart-3)" },
   stockBand: { label: "if demand runs low–high", color: "var(--chart-3)" },
 };
@@ -201,8 +203,11 @@ export default function ForecastsPage() {
     let rem50 = onHand;
     let remSlow = onHand; // p10 usage — stock lasts longer
     let remFast = onHand; // p90 usage — stock drains sooner
+    // Recorded end-of-day stock (stock_daily; planted in the demo, B4
+    // receiving events eventually) keyed by date for the history half.
+    const recordedStock = new Map(forecast.stock_history.map((p) => [p.date, p.quantity]));
     const rows = [
-      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined, stock: null as number | null, stockBand: undefined as [number, number] | undefined })),
+      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined, stockActual: (recordedStock.get(p.date) ?? null) as number | null, stock: null as number | null, stockBand: undefined as [number, number] | undefined })),
       ...forecast.forecast.map((p) => {
         if (rem50 != null) rem50 = Math.max(0, rem50 - p.p50);
         if (remSlow != null) remSlow = Math.max(0, remSlow - p.p10);
@@ -212,6 +217,7 @@ export default function ForecastsPage() {
           actual: null,
           forecast: p.p50,
           band: [p.p10, p.p90] as [number, number],
+          stockActual: null,
           stock: rem50,
           stockBand: remFast != null && remSlow != null ? ([remFast, remSlow] as [number, number]) : undefined,
         };
@@ -390,7 +396,7 @@ export default function ForecastsPage() {
                     </ComposedChart>
                   </ChartContainer>
                   <p className="px-2 pt-2 text-[11px] font-medium text-muted-foreground">
-                    Stock on hand — projected from today&apos;s snapshot (per-day stock history isn&apos;t recorded yet)
+                    Stock on hand — recorded daily balance, projected forward to stockout
                   </p>
                   <ChartContainer config={stockChartConfig} className="aspect-auto h-40 w-full">
                     <ComposedChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }} syncId="forecast">
@@ -399,7 +405,8 @@ export default function ForecastsPage() {
                       <YAxis tickLine={false} axisLine={false} width={36} fontSize={10} />
                       <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
                       <Area dataKey="stockBand" stroke="none" fill="var(--color-stock)" fillOpacity={0.15} isAnimationActive={false} connectNulls />
-                      <Line dataKey="stock" stroke="var(--color-stock)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
+                      <Line dataKey="stockActual" stroke="var(--color-stockActual)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
+                      <Line dataKey="stock" stroke="var(--color-stock)" strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
                       {todayLabel && (
                         <ReferenceLine x={todayLabel} stroke="var(--muted-foreground)" strokeDasharray="2 2" strokeWidth={1} />
                       )}

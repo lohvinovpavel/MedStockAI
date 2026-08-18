@@ -22,7 +22,13 @@ import pytest
 from app import gen_demo
 from app.demo_layout import DEMO_SEED, data_dir
 
-ARTIFACTS = ("consumption.csv.gz", "stock.csv.gz", "conditions.csv.gz", "forecast.csv.gz")
+ARTIFACTS = (
+    "consumption.csv.gz",
+    "stock.csv.gz",
+    "conditions.csv.gz",
+    "forecast.csv.gz",
+    "stock_history.csv.gz",
+)
 
 
 @pytest.fixture(scope="module")
@@ -147,6 +153,31 @@ def test_stock_matches_history_tail(consumption, drugs):
         assert 5.0 <= stock[key] / mean <= 29.0, (key, stock[key], mean)
         checked += 1
     assert checked > 300
+
+
+def test_stock_history_ends_at_the_snapshot():
+    """The stock chart's history must meet its projection without a jump:
+    the last stock_history day equals stock.csv.gz aggregated per facility."""
+    with gzip.open(data_dir() / "stock.csv.gz", "rt", newline="") as fh:
+        snapshot = defaultdict(int)
+        for r in csv.DictReader(fh):
+            snapshot[(r["facility"], r["ndc"])] += int(r["qty"])
+    with gzip.open(data_dir() / "stock_history.csv.gz", "rt", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    last_day = max(r["date"] for r in rows)
+    assert last_day == "2026-08-14"  # demo END_DATE
+    checked = 0
+    for r in rows:
+        if r["date"] != last_day:
+            continue
+        assert int(r["qty"]) == snapshot[(r["facility"], r["ndc"])], (r["facility"], r["ndc"])
+        checked += 1
+    assert checked == len(snapshot)
+
+
+def test_stock_history_never_negative():
+    with gzip.open(data_dir() / "stock_history.csv.gz", "rt", newline="") as fh:
+        assert all(int(r["qty"]) >= 0 for r in csv.DictReader(fh))
 
 
 def test_planted_condition_excursions(conditions):

@@ -13,6 +13,9 @@ RxCUIs/NDCs) and writes three gzipped CSVs next to it:
                       with the same shared engine the prediction service
                       uses live — seeded so a fresh demo DB has a populated
                       forecast chart before anyone presses "Run forecast"
+  stock_history.csv.gz  180 days of end-of-day on-hand per facility/NDC,
+                      consistent with consumption and ending exactly at
+                      stock.csv.gz's snapshot (see gen_stock_history)
 
 Same seed → identical CSV content (gzip mtime pinned to 0 so even the .gz
 bytes are stable for one zlib build; different zlib builds deflate to
@@ -158,8 +161,9 @@ def demand_series(drug: dict, facility: dict, n_days: int) -> np.ndarray:
 
 def censor_stockouts(
     drug: dict, facility: dict, demand: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """(s,S) reorder simulation. Returns (recorded, stockout_flags, end_on_hand).
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(s,S) reorder simulation. Returns (recorded, stockout_flags,
+    end-of-day on_hand series — its last element is the current balance).
 
     Deliveries stop inside the drug's SHORTAGE_WINDOWS entry, so on-hand runs
     dry and recorded consumption < true demand — the censoring prediction (#7)
@@ -174,6 +178,7 @@ def censor_stockouts(
     pending: list[tuple[int, int]] = []  # (arrival_day, qty)
     recorded = np.zeros_like(demand)
     stockout = np.zeros(len(demand), dtype=bool)
+    on_hand_series = np.zeros_like(demand)
     for i in range(len(demand)):
         day = START_DATE + timedelta(days=i)
         arrived = [qty for arrive, qty in pending if arrive <= i]
@@ -183,10 +188,11 @@ def censor_stockouts(
         recorded[i] = served
         stockout[i] = served < int(demand[i])
         on_hand -= served
+        on_hand_series[i] = on_hand
         in_window = window is not None and window[0] <= day <= window[1]
         if on_hand <= reorder_at and not pending and not in_window:
             pending.append((i + REORDER_LEAD_DAYS, order_up_to - on_hand))
-    return recorded, stockout, on_hand
+    return recorded, stockout, on_hand_series
 
 
 def _write_gz(path: Path, header: list[str], rows) -> int:
@@ -206,10 +212,15 @@ def _write_gz(path: Path, header: list[str], rows) -> int:
     return count
 
 
-def gen_consumption(drugs: list[dict]) -> tuple[list, dict[tuple[str, str], int]]:
-    """All consumption rows + ending on-hand per (facility, ndc)."""
+def gen_consumption(
+    drugs: list[dict],
+) -> tuple[list, dict[tuple[str, str], int], dict[tuple[str, str], np.ndarray]]:
+    """All consumption rows + ending on-hand per (facility, ndc) + the prone
+    drugs' true daily on-hand series (their balance comes from the sim, so
+    the stock-history artifact reuses it verbatim)."""
     rows: list = []
     end_stock: dict[tuple[str, str], int] = {}
+    prone_on_hand: dict[tuple[str, str], np.ndarray] = {}
     dates = [START_DATE + timedelta(days=i) for i in range(HISTORY_DAYS)]
     date_strs = [d.isoformat() for d in dates]
     for facility in FACILITIES:
@@ -220,7 +231,9 @@ def gen_consumption(drugs: list[dict]) -> tuple[list, dict[tuple[str, str], int]
                 continue
             demand = demand_series(drug, facility, HISTORY_DAYS)
             if drug["stockout_prone"]:
-                recorded, flags, on_hand = censor_stockouts(drug, facility, demand)
+                recorded, flags, on_hand_series = censor_stockouts(drug, facility, demand)
+                on_hand = int(on_hand_series[-1])
+                prone_on_hand[(facility["code"], drug["ndc"])] = on_hand_series
             else:
                 recorded, flags = demand, np.zeros(HISTORY_DAYS, dtype=bool)
                 rng = _rng("stock", facility["code"], drug["ndc"])
@@ -232,7 +245,7 @@ def gen_consumption(drugs: list[dict]) -> tuple[list, dict[tuple[str, str], int]
                 rows.append(
                     (code, ndc, rxcui, date_strs[i], int(recorded[i]), int(flags[i]))
                 )
-    return rows, end_stock
+    return rows, end_stock, prone_on_hand
 
 
 def gen_forecast(consumption: list) -> list:
@@ -249,6 +262,66 @@ def gen_forecast(consumption: list) -> list:
             continue
         rows.extend(
             (code, ndc, target.isoformat(), p10, p50, p90) for target, p10, p50, p90 in points
+        )
+    return rows
+
+
+STOCK_HISTORY_DAYS = 180  # what the stock chart draws; consumption keeps 3y
+
+
+def gen_stock_history(
+    stock: list,
+    consumption: list,
+    prone_on_hand: dict[tuple[str, str], np.ndarray],
+    drugs: list[dict],
+) -> list:
+    """End-of-day on-hand per (facility, ndc), last STOCK_HISTORY_DAYS days.
+
+    Three cases, all ending exactly at the committed snapshot so the chart's
+    history meets its projection without a jump:
+    - stockout-prone: the (s,S) sim's true daily balance, verbatim;
+    - other operated drugs: reconstructed *backwards* from the committed end
+      stock — adding back each day's consumption, and when the walk exceeds
+      the (s,S) order-up-to cap, inserting a delivery that drops the earlier
+      balance near the reorder point. Backwards, because the committed
+      snapshot (and its cover-window invariant the tests pin) must not
+      change; a forward sim would land somewhere else.
+    - partner facilities (no consumption recorded): a flat line, so
+      hospital-wide sums stay continuous at the boundary.
+    """
+    prone_ndcs = {d["ndc"] for d in drugs if d["stockout_prone"]}
+    stock_by_key: dict[tuple[str, str], int] = {}
+    for code, _location, ndc, qty in stock:
+        stock_by_key[(code, ndc)] = stock_by_key.get((code, ndc), 0) + int(qty)
+    consumed: dict[tuple[str, str], list[int]] = {}
+    for code, ndc, _rxcui, _date, qty, _flag in consumption:
+        consumed.setdefault((code, ndc), []).append(int(qty))
+
+    dates = [
+        (END_DATE - timedelta(days=STOCK_HISTORY_DAYS - 1 - i)).isoformat()
+        for i in range(STOCK_HISTORY_DAYS)
+    ]
+    rows: list = []
+    for (code, ndc), end_qty in sorted(stock_by_key.items()):
+        if ndc in prone_ndcs and (code, ndc) in prone_on_hand:
+            qtys = [int(q) for q in prone_on_hand[(code, ndc)][-STOCK_HISTORY_DAYS:]]
+        elif (code, ndc) in consumed:
+            tail = consumed[(code, ndc)][-STOCK_HISTORY_DAYS:]
+            mean_daily = max(float(np.mean(tail)), 0.05)
+            order_up_to = max(round(mean_daily * REORDER_COVER_S), 1)
+            reorder_at = max(round(mean_daily * REORDER_POINT_s), 1)
+            rng = _rng("stock-history", code, ndc)
+            walk = [end_qty]
+            for day_qty in reversed(tail[1:]):
+                prev = walk[-1] + day_qty
+                if prev > order_up_to:  # a delivery landed that morning
+                    prev = max(round(reorder_at * rng.uniform(0.3, 0.95)), 0)
+                walk.append(prev)
+            qtys = list(reversed(walk))
+        else:
+            qtys = [end_qty] * STOCK_HISTORY_DAYS  # partner: static assortment
+        rows.extend(
+            (code, ndc, dates[i], qtys[i]) for i in range(min(len(qtys), STOCK_HISTORY_DAYS))
         )
     return rows
 
@@ -346,10 +419,11 @@ def gen_conditions() -> list:
 def run() -> dict[str, int]:
     out = data_dir()
     drugs = load_drugs(out / "drugs.csv")
-    consumption, end_stock = gen_consumption(drugs)
+    consumption, end_stock, prone_on_hand = gen_consumption(drugs)
     stock = gen_stock(drugs, end_stock)
     conditions = gen_conditions()
     forecast = gen_forecast(consumption)
+    stock_history = gen_stock_history(stock, consumption, prone_on_hand, drugs)
     counts = {
         "consumption": _write_gz(
             out / "consumption.csv.gz",
@@ -366,6 +440,11 @@ def run() -> dict[str, int]:
             out / "forecast.csv.gz",
             ["facility", "ndc", "date", "p10", "p50", "p90"],
             forecast,
+        ),
+        "stock_history": _write_gz(
+            out / "stock_history.csv.gz",
+            ["facility", "ndc", "date", "qty"],
+            stock_history,
         ),
     }
     return counts

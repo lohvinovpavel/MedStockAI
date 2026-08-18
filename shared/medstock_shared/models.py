@@ -788,3 +788,28 @@ class ForecastPoint(Base):
         ),
         Index("ix_forecast_lookup", "hospital_id", "facility_id", "ndc", "run_id"),
     )
+
+
+class StockDaily(Base):
+    """End-of-day on-hand per facility/NDC — the stock history the forecasts
+    page draws left of "today". Mirrors consumption_daily's shape. No writer
+    exists in production yet (B4 receiving events are the future source);
+    the demo seeder plants a series consistent with consumption_daily that
+    ends exactly at stock_snapshot's current quantity.
+    """
+
+    __tablename__ = "stock_daily"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    facility_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("facility.id"), nullable=False)
+    ndc: Mapped[str] = mapped_column(Text, nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    qty_on_hand: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "hospital_id", "facility_id", "ndc", "date", name="uq_stock_daily_natural"
+        ),
+        Index("ix_stock_daily_series", "facility_id", "ndc", "date"),
+    )
