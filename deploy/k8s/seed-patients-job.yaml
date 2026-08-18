@@ -38,6 +38,10 @@ spec:
       - name: seed-patients
         # Any image: all carry shared/ + scripts/ (see the root Dockerfile).
         image: ghcr.io/medstockai/patient-profiling:latest
+        # The image ends on WORKDIR /srv/services/<service>, but scripts/
+        # is copied to /srv. Without this the path below resolves under the
+        # service directory and python exits "No such file or directory".
+        workingDir: /srv
         command: ["python", "scripts/seed_patients.py"]
         env:
         # deploy-dev.yml rewrites this literal when the workflow is dispatched
