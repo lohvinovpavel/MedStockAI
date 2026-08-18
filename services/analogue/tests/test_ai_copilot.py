@@ -398,6 +398,44 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
 
 
+def test_assess_patient_for_drug_reports_the_verdict_verbatim(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import AssessPatientArgs, assess_patient_for_drug
+
+    captured = {}
+
+    def fake_assess_for_drug(principal, patient_id, rxcui):
+        captured["patient_id"] = patient_id
+        captured["rxcui"] = rxcui
+        return {"verdict": "blocked", "score": None, "request_id": "req-1"}
+
+    monkeypatch.setattr(
+        "medstock_shared.ai.tools.pharmacy._assess_for_drug", fake_assess_for_drug
+    )
+
+    result = assess_patient_for_drug(
+        AssessPatientArgs(patient_id="11111111-1111-1111-1111-111111111111", rxcui="308182"),
+        PHARMACIST,
+    )
+    assert captured == {"patient_id": "11111111-1111-1111-1111-111111111111", "rxcui": "308182"}
+    assert result["verdict"] == "blocked"
+
+
+def test_explain_assessment_tool_turns_sentinels_into_error_dicts(monkeypatch):
+    from medstock_shared.ai.tools import pharmacy
+    from medstock_shared.ai.tools.pharmacy import ExplainAssessmentArgs
+    from medstock_shared.patient_assess import NOT_FOUND
+
+    monkeypatch.setattr(pharmacy, "_explain_assessment", lambda principal, rid: NOT_FOUND)
+    result = pharmacy.explain_assessment(ExplainAssessmentArgs(request_id="nope"), PHARMACIST)
+    assert result == {"error": "no such assessment"}
+
+    monkeypatch.setattr(
+        pharmacy, "_explain_assessment", lambda principal, rid: {"request_id": rid, "assessments": []}
+    )
+    result = pharmacy.explain_assessment(ExplainAssessmentArgs(request_id="req-1"), PHARMACIST)
+    assert result["request_id"] == "req-1"
+
+
 def test_list_storage_excursions_caps_and_passes_facility_through(monkeypatch):
     from contextlib import contextmanager
 
@@ -491,6 +529,8 @@ def test_declarations_are_scoped_to_the_caller_role():
         "sweep_shelf_certificates",
         "explore_ndc",
         "list_storage_excursions",
+        "assess_patient_for_drug",
+        "explain_assessment",
     }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
@@ -510,6 +550,8 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
         "explore_ndc",
         "get_patient_regimen",
         "list_storage_excursions",
+        "assess_patient_for_drug",
+        "explain_assessment",
     }
 
 
@@ -543,4 +585,6 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
         "sweep_shelf_certificates",
         "get_patient_regimen",
         "list_storage_excursions",
+        "assess_patient_for_drug",
+        "explain_assessment",
     }

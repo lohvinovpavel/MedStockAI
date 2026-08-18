@@ -16,27 +16,26 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import (
-    AdrSignal,
-    AssessmentLog,
-    DrugRiskProfile,
-    Patient,
-    PgxGuideline,
-    PrognosisAssumption,
-)
+from medstock_shared.models import DrugRiskProfile, Patient, PrognosisAssumption
 from medstock_shared.patient import (
     BANDS,
     RULESET_VERSION,
     WEIGHTS,
-    AdrSignalRow,
     PatientVector,
-    PgxRecommendation,
-    RiskProfile,
     assess,
     avoided_ingredient_warnings,
     patient_row_to_vector,
     plan_demand,
     profile_avoided_ingredients,
+)
+from medstock_shared.patient_assess import (
+    NOT_FOUND,
+    UNAVAILABLE,
+    adr_signals_for,
+    approved_profiles,
+    explain_assessment,
+    pgx_for,
+    record_assessment,
 )
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
@@ -210,47 +209,6 @@ def get_ruleset(_: Principal = Depends(require("inventory:read"))) -> dict:
     }
 
 
-def approved_profiles(rxcuis: list[str]) -> list[RiskProfile]:
-    """Label-derived risk profiles for these drugs — **approved ones only**.
-
-    The filter is the point. An extracted profile is a model's reading of a
-    label until a pharmacist accepts it, and an unapproved one reaching a screen
-    is the single failure this design cannot tolerate
-    (docs/prognosis-and-procurement.md §1.3).
-
-    A missing table means the prognosis migration has not run; that degrades to
-    "no profiles" rather than failing the assessment, because the deterministic
-    stages are still perfectly valid without it.
-    """
-    if not rxcuis:
-        return []
-    try:
-        with Session(engine) as session:
-            rows = (
-                session.execute(
-                    select(DrugRiskProfile).where(
-                        DrugRiskProfile.rxcui.in_(rxcuis),
-                        DrugRiskProfile.status == "approved",
-                    )
-                )
-                .scalars()
-                .all()
-            )
-    except (ProgrammingError, SQLAlchemyError):
-        return []
-    return [
-        RiskProfile(
-            rxcui=str(r.rxcui),
-            reaction=r.reaction,
-            seriousness=r.seriousness,
-            risk_factors=tuple(r.risk_factors or ()),
-            citation=r.citation or "",
-            section=r.section or "",
-        )
-        for r in rows
-    ]
-
-
 REVIEW_ACTIONS = {"approve": "approved", "reject": "rejected"}
 PROFILE_STATUSES = ("awaiting_approval", "approved", "rejected")
 MAX_QUEUE = 200
@@ -411,117 +369,6 @@ def review_risk_profile(
     return {"previous_status": previous, "profile": profile}
 
 
-def record_assessment(principal: Principal, vector: PatientVector, results: list[dict]) -> str:
-    """Write the decision trail row, and return the request id.
-
-    **Fails the request if it cannot write.** An assessment that reaches a
-    clinician without a corresponding audit row is exactly the hole
-    docs/services.md §1.3 claims does not exist — and it is a silent hole, since
-    the answer looks identical either way. Answering unaudited is the worse
-    failure of the two, so this refuses rather than degrades.
-
-    Note the contrast with `approved_profiles`, which swallows a missing table:
-    that one degrades a *feature*, this one would falsify a *guarantee*.
-    """
-    request_id = str(uuid.uuid4())
-    with session_scope(principal.hospital_id, principal.user_id) as session:
-        session.add(
-            AssessmentLog(
-                hospital_id=principal.hospital_id,
-                request_id=request_id,
-                actor_id=principal.user_id,
-                feature_hash=vector.feature_hash(),
-                ruleset_version=RULESET_VERSION,
-                # The verdict and why, not the whole finding text — enough to
-                # reconstruct what the clinician was shown.
-                result={
-                    "assessments": [
-                        {
-                            "rxcui": r.get("rxcui"),
-                            "verdict": r.get("verdict"),
-                            "score": r.get("score"),
-                            # Code, weight, source and stage per finding — enough
-                            # for /explain to rebuild the score decomposition
-                            # without re-running anything.
-                            #
-                            # Deliberately **not** the finding's message. Those
-                            # embed the patient's own band values ("eGFR 30-44,
-                            # age 75-89"), and writing them here in clear would
-                            # put more of the vector into the audit table than
-                            # the feature hash beside it deliberately withholds.
-                            "findings": [
-                                {
-                                    "code": f.get("code"),
-                                    "weight": f.get("weight"),
-                                    "source": f.get("source"),
-                                    "stage": f.get("stage"),
-                                }
-                                for f in (r.get("findings") or [])
-                            ],
-                        }
-                        for r in results
-                    ]
-                },
-            )
-        )
-    return request_id
-
-
-def pgx_for(rxcuis: list[str]) -> list[PgxRecommendation]:
-    """CPIC guidelines for these drugs (Tier 3).
-
-    Degrades to "no guidelines" if the table is missing, like
-    `approved_profiles` and for the same reason: an unseeded feed should cost
-    the pharmacogenomic stage, not the whole assessment. Stage 8 simply does
-    not run, and `stages_completed` says so.
-    """
-    if not rxcuis:
-        return []
-    try:
-        with Session(engine) as session:
-            rows = session.scalars(select(PgxGuideline).where(PgxGuideline.rxcui.in_(rxcuis))).all()
-    except (ProgrammingError, SQLAlchemyError):
-        return []
-    return [
-        PgxRecommendation(
-            rxcui=str(r.rxcui),
-            gene=r.gene,
-            phenotype=r.phenotype,
-            recommendation=r.recommendation or "",
-            implication=r.implication or "",
-            classification=r.classification or "",
-            evidence_level=r.evidence_level or "",
-            action_required=bool(r.action_required),
-        )
-        for r in rows
-    ]
-
-
-def adr_signals_for(rxcuis: list[str]) -> list[AdrSignalRow]:
-    """Precomputed FAERS ratios for these drugs (Tier 1).
-
-    Degrades to "no signals" if the table is missing, like the other two feed
-    readers: an unseeded feed costs stage 7a, not the assessment.
-    """
-    if not rxcuis:
-        return []
-    try:
-        with Session(engine) as session:
-            rows = session.scalars(select(AdrSignal).where(AdrSignal.rxcui.in_(rxcuis))).all()
-    except (ProgrammingError, SQLAlchemyError):
-        return []
-    return [
-        AdrSignalRow(
-            rxcui=str(r.rxcui),
-            reaction=r.reaction,
-            prr=float(r.prr or 0),
-            ror=float(r.ror or 0),
-            n_reports=int(r.n_reports or 0),
-        )
-        for r in rows
-    ]
-
-
 @app.post("/assess")
 def post_assess(
     payload: dict = Body(...),
@@ -579,24 +426,6 @@ def _worst_verdict(result: dict) -> str | None:
         if a.get("verdict")
     }
     return next((v for v in _VERDICT_RANK if v in seen), None)
-
-
-def _band_for(score: int | None) -> dict | None:
-    """Which band turned this score into this verdict, and what the next one is.
-
-    "You are 4 points below amber" is a different conversation from "you are
-    just inside it", and neither is visible from a colour.
-    """
-    if score is None:
-        return None
-    applied = next((t, v) for t, v in reversed(BANDS) if score >= t)
-    above = [(t, v) for t, v in BANDS if t > score]
-    return {
-        "from_score": applied[0],
-        "verdict": str(applied[1]),
-        "next_verdict": str(above[0][1]) if above else None,
-        "points_to_next": (above[0][0] - score) if above else None,
-    }
 
 
 @patients.get("/assessments")
@@ -667,91 +496,18 @@ def explain(
     differ, this says so and refuses to pretend, because explaining a
     six-month-old decision with today's weights is exactly the lie §7 warns
     about — and it is a lie that would look like a perfectly good answer.
+
+    The lookup and the contribution arithmetic live in
+    `medstock_shared.patient_assess.explain_assessment` (promoted for DOC-3,
+    docs/ai_workflow_impl_plan.md) so this route and the copilot's
+    `explain_assessment` tool can never drift from each other.
     """
-    try:
-        with session_scope(principal.hospital_id, principal.user_id) as session:
-            row = session.scalars(
-                select(AssessmentLog)
-                .where(
-                    AssessmentLog.request_id == request_id,
-                    AssessmentLog.hospital_id == principal.hospital_id,
-                )
-                .limit(1)
-            ).first()
-            if row is None:
-                raise HTTPException(status_code=404, detail="no such assessment")
-            logged = {
-                "request_id": row.request_id,
-                "actor_id": row.actor_id,
-                "feature_hash": row.feature_hash,
-                "ruleset_version": row.ruleset_version,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "result": dict(row.result or {}),
-            }
-    except HTTPException:
-        raise
-    except (ProgrammingError, SQLAlchemyError) as exc:
-        raise HTTPException(status_code=503, detail="assessment log unavailable") from exc
-
-    current = logged["ruleset_version"] == RULESET_VERSION
-    explained = []
-    for entry in logged["result"].get("assessments") or []:
-        findings = entry.get("findings") or []
-        total = sum(int(f.get("weight") or 0) for f in findings)
-        explained.append(
-            {
-                "rxcui": entry.get("rxcui"),
-                "verdict": entry.get("verdict"),
-                "score": entry.get("score"),
-                "band": _band_for(entry.get("score")),
-                "contributions": [
-                    {
-                        "code": f.get("code"),
-                        "weight": f.get("weight"),
-                        "stage": f.get("stage"),
-                        "source": f.get("source"),
-                        # Of the points that were scored, how much came from
-                        # here. Zero-weight findings are informational and say so
-                        # rather than dividing by a total they never joined.
-                        "share": (round(int(f.get("weight") or 0) / total, 3) if total else None),
-                    }
-                    for f in sorted(findings, key=lambda x: -int(x.get("weight") or 0))
-                ],
-                # A blocked assessment has no score at all: a hard gate ends the
-                # pipeline and no number is produced, because a number beside an
-                # absolute contraindication invites someone to weigh it against
-                # a discount.
-                "blocked": entry.get("score") is None,
-            }
-        )
-
-    return {
-        "request_id": logged["request_id"],
-        "assessed_by": logged["actor_id"],
-        "assessed_at": logged["created_at"],
-        "feature_hash": logged["feature_hash"],
-        "ruleset_version": logged["ruleset_version"],
-        "current_ruleset_version": RULESET_VERSION,
-        # The honesty flag. False means the weights below are the ones that
-        # actually produced this answer, but they are no longer the ones the
-        # system would use today.
-        "explained_with_original_ruleset": current,
-        "caveat": None
-        if current
-        else (
-            f"This assessment ran under ruleset {logged['ruleset_version']}; the current "
-            f"ruleset is {RULESET_VERSION}. The contributions below are the ones that "
-            "produced this answer and do not describe how the same patient would be "
-            "assessed today."
-        ),
-        "assessments": explained,
-        # So a reader can check a weight against the published table rather than
-        # taking these numbers on trust.
-        "ruleset": {
-            "weights": WEIGHTS,
-            "bands": [{"from_score": t, "verdict": str(v)} for t, v in BANDS],
-        },
-    }
+    result = explain_assessment(principal, request_id)
+    if result == NOT_FOUND:
+        raise HTTPException(status_code=404, detail="no such assessment")
+    if result == UNAVAILABLE:
+        raise HTTPException(status_code=503, detail="assessment log unavailable")
+    return result
 
 
 @app.post("/demand")

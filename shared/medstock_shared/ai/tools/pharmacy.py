@@ -23,6 +23,8 @@ from ...db import engine, session_scope
 from ...explore import explore
 from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
+from ...patient_assess import NOT_FOUND, UNAVAILABLE, assess_for_drug as _assess_for_drug
+from ...patient_assess import explain_assessment as _explain_assessment
 from ...rxnorm import RxNormError, ndcs_for_rxcui, related_scd_sbd, therapeutic_scd_sbd
 from ...stock import stock_fields
 from ...warehouse import excursions
@@ -341,3 +343,51 @@ def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
             "condition_codes": list(row.condition_codes or []),
             "pgx_phenotypes": list(row.pgx_phenotypes or []),
         }
+
+
+class AssessPatientArgs(BaseModel):
+    patient_id: str = Field(description="UUID of the patient")
+    rxcui: str = Field(description="RxCUI of the drug being considered")
+
+
+@tool(
+    permission="profile:assess",
+    description=(
+        "Run the deterministic safety rules for one patient against one "
+        "candidate drug -- allergy and duplicate-ingredient hard gates, "
+        "interactions with their regimen, renal/hepatic limits, age caution, "
+        "prior ADR history, and any approved label or pharmacogenomic "
+        "findings. Use before answering whether a drug is safe to start on "
+        "this patient. The verdict is the rules engine's arithmetic -- "
+        "report it verbatim, never soften, override, or recompute it. If the "
+        "verdict is 'blocked' or the drug is out of stock, "
+        "search_analogues_rxnorm is the natural next call."
+    ),
+    args=AssessPatientArgs,
+)
+def assess_patient_for_drug(args: AssessPatientArgs, principal: Principal) -> dict:
+    return _assess_for_drug(principal, args.patient_id, args.rxcui)
+
+
+class ExplainAssessmentArgs(BaseModel):
+    request_id: str = Field(description="The request_id returned by a prior assessment")
+
+
+@tool(
+    permission="profile:explain",
+    description=(
+        "Explain a previously logged safety assessment by its request_id -- "
+        "every finding that contributed to the score, its weight, and its "
+        "share of the total. Every stage is deterministic arithmetic, so "
+        "only narrate numbers that appear in this tool's result; never state "
+        "a number that is not in the returned contributions."
+    ),
+    args=ExplainAssessmentArgs,
+)
+def explain_assessment(args: ExplainAssessmentArgs, principal: Principal) -> dict:
+    result = _explain_assessment(principal, args.request_id)
+    if result == NOT_FOUND:
+        return {"error": "no such assessment"}
+    if result == UNAVAILABLE:
+        return {"error": "assessment log unavailable"}
+    return result
