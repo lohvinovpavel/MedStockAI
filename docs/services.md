@@ -215,10 +215,22 @@ All seven share one shape, described once here. Only their domain differs.
 
 ### The rule that shapes the two that touch AI
 
-**Only `analogue` and `prediction` call Gemini, and only through `ask_ai()`.** Not the raw
-`google-genai` SDK — one shared function in `shared/medstock_shared/ai.py`, so there is one
-place that holds the retry/backoff logic and one place the cache lives, even though the
-network call itself now happens inline, in each of those two services' own pods.
+**Only `analogue` and `prediction` call Gemini on a request path, and only through
+`ask_ai()` — plus `ingest`'s offline `CronJob`s.** Not the raw `google-genai` SDK — one
+shared function in `shared/medstock_shared/ai.py`, so there is one place that holds the
+retry/backoff logic and one place the cache lives, even though the network call itself now
+happens inline, in each of those two services' own pods.
+
+The `ingest` clause is the amendment [prognosis-and-procurement.md](prognosis-and-procurement.md)
+§5.1 asked for, and it is a smaller concession than it looks. `ingest` extracts PP-3 risk
+profiles from FDA label prose, per drug, on a schedule — so **no request ever waits on a
+model**, and no patient data is anywhere near the call: the input is a public label. That is
+the opposite trade from making a request-serving service an AI consumer, which is the thing
+this rule exists to prevent. The two request-path callers are still exactly two.
+
+`ingest` also runs with a longer retry budget than `ask_ai()`'s default, for the same reason:
+offline, nobody is waiting, and a 503 that clears in seconds is worth waiting out rather than
+degrading (`services/ingest/app/prognosis.py`).
 
 The other five services have one external dependency: Postgres. `analogue` and `prediction`
 have that same one plus Gemini directly — there used to be a second, internal dependency
@@ -248,12 +260,14 @@ browser ──HTTPS──▶ Ingress ──▶ <service> pod
 | `inventory` | Pavlo | `/api/inventory` | Pharmacy availability per clinic / city / country. Owns the exposure query (`formulary × stock × shortage`) that the earlier sketch called `exposure-engine`. Resolves shelf rows from a clinical RxCUI by joining RxNorm NDCs to `stock_snapshot`. | `GET /stock?rxcui=` · `GET /exposure` · `POST /formulary/import` (CSV) |
 | `analogue` | Pavlo | `/api/analogue` | Drug identity (UC-1) plus therapeutic equivalents. Search turns a typed name into a `DrugIdentity` (RxCUI SCD/SBD); packages lists NDCs for that concept. Equivalents walk RxNorm, filter by indication/form/dose, price via NADAC, then `ask_ai()` ranks with a citation. | `GET /drugs/search` · `GET /drugs/{rxcui}/packages` · `GET /analogues/{rxcui}` · `GET /recommendations` · `POST /recommendations/{id}/approve\|reject` |
 | `compliance` | Andrii | `/api/compliance` | Watch and validate pharmacy certificates; produce the audit export. Read-heavy, reads `audit_log_entry`, never writes it. | `GET /certificates` · `GET /export/compliance.csv` |
-| `patient-profiling` | Andrii | `/api/patients` | Analyze patient profile for substitution safety — contraindications, allergies, interactions. | `GET /profiles/{id}` · `POST /profiles/{id}/assess` |
+| `patient-profiling` | Andrii | `/api/patients` | Substitution safety for one patient (contraindications, allergies, interactions, label-derived prognosis), cohort demand and the PP-4 forecast, the demo patient CRUD behind the prescription cart, and the PP-5 queue where a pharmacist rules on extracted risk profiles. | `POST /assess` · `POST /demand` · `POST /forecast` · `GET /ruleset` · `GET /risk-profiles` · `POST /risk-profiles/{id}/review` · `GET\|POST /patients` · `GET\|PATCH /patients/{id}` · `POST /cart-check` |
 | `prediction` | Mykhailo | `/api/prediction` | Predict usage, stock burn-down, future need. Days-of-supply is the core metric of the whole product. | `GET /forecast/{rxcui}` · `GET /at-risk` |
 | `warehouse` | Mykhailo | `/api/warehouse` | Warehouse structure (B1 facility registry), storage locations, stock placement, recorded consumption history, and storage-condition monitoring — hourly temperature/humidity telemetry checked against per-drug storage requirements, violations computed on read. Also hosts the connector admin endpoints (planned). | `GET /facilities` · `GET /locations` · `GET /stock` · `GET /consumption` · `GET /locations/{id}/conditions` · `GET /excursions` · `POST /connectors/{id}/propose-spec` (planned) |
 
 Two of these — `analogue` and `prediction` — are AI consumers and call `ask_ai()` directly
 (§4). The other five are ordinary CRUD-plus-query services with no path to Gemini at all.
+`ingest` is the third caller but is not in this table: it is not a service, it is a set of
+`CronJob`s (§7), and it calls the model offline rather than on anyone's request.
 
 #### UC-1 — resolve a drug from a typed name
 

@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -309,13 +310,55 @@ class DrugRiskProfile(Base):
     section: Mapped[str | None] = mapped_column(Text)
     spl_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="awaiting_approval")
-    approved_by: Mapped[str | None] = mapped_column(Text)
+    # Who last ruled on it, either way. A rejection has a reviewer too, and only
+    # `status` says which way they ruled.
+    reviewed_by: Mapped[str | None] = mapped_column(Text)
+    # Not derivable from extracted_at, which moves on re-extraction.
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Why. Chiefly why *not* — a rejected extraction that records its reason can
+    # be re-reviewed against that reason instead of from scratch.
+    review_note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # No `onupdate`. This is the extraction date gate 4 versions a prediction by
+    # (docs/prognosis-and-procurement.md §1.3) — approving a profile is not
+    # re-extracting it, and an ORM update carrying onupdate would silently
+    # restamp the row every time a pharmacist ruled on it. Re-extraction sets it
+    # explicitly instead; see services/ingest/app/prognosis.py.
     extracted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
         UniqueConstraint("rxcui", "reaction", name="uq_drug_risk_profile_natural"),
+        CheckConstraint(
+            "status IN ('awaiting_approval', 'approved', 'rejected')",
+            name="ck_drug_risk_profile_status",
+        ),
+    )
+
+
+class PrognosisAssumption(Base):
+    """PP-4: a number the forecast assumes rather than measures.
+
+    Reference class, no `hospital_id` — these are model parameters, not tenant
+    data.
+
+    `switch_rate` lives here rather than in code for one reason: it is the share
+    of flagged patients a pharmacist actually switches, and nobody has measured
+    it. A literal in a function reads like a derived constant. A row with a
+    `note` reads like what it is — an assumption someone chose, which a director
+    can see, question and change without a deploy
+    (docs/prognosis-and-procurement.md §2.2).
+    """
+
+    __tablename__ = "prognosis_assumption"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    # Why this number and not another. Shown wherever the forecast is.
+    note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -371,11 +414,217 @@ class Patient(Base):
     condition_codes: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
+    # Tier 3 input, as "GENE:phenotype" in CPIC's vocabulary. Reported by the
+    # lab, never derived here — see PatientVector.pgx_phenotypes.
+    pgx_phenotypes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ImportAlert(Base):
+    """A foreign establishment on an FDA Import Alert Red List.
+
+    Reference class. docs/compliance-usecases.md §4.1 — the import-certification
+    source, and the one no JSON API exposes. Scraped weekly from
+    accessdata.fda.gov by `services/ingest/app/import_alerts.py`.
+
+    "Red List" is FDA's term and means detention without physical examination:
+    goods from this establishment are held at the border unless the firm shows
+    the violation is corrected. It is a standing regulatory posture, not an
+    event, so the finding it produces is persistent rather than transient.
+    """
+
+    __tablename__ = "import_alert"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # "66-40" (GMP failure) or "66-41" (unapproved drugs).
+    alert_number: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    firm_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Normalised for matching — see medstock_shared.certification.firm_key.
+    # Stored rather than computed on read so the match is indexable and so the
+    # normalisation that produced it is inspectable.
+    firm_key: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    country: Mapped[str | None] = mapped_column(Text)
+    address: Mapped[str | None] = mapped_column(Text)
+    listed_at: Mapped[date | None] = mapped_column(Date)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("alert_number", "firm_name", name="uq_import_alert_natural"),
+    )
+
+
+class NewsSignal(Base):
+    """An informal report about a drug. **Can only ever raise yellow.**
+
+    docs/compliance-usecases.md §4.3, and the rule there is structural rather
+    than a preference: a news article is an unverified claim about a third
+    party, so acting on it as fact would let the system tell a pharmacist a drug
+    is uncertified because a blog said so. Only a government source sets red.
+    Yellow means "check this", which is exactly what an unconfirmed report
+    warrants.
+
+    Reference class — an article is about a drug, not a hospital.
+    """
+
+    __tablename__ = "news_signal"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ndc: Mapped[str | None] = mapped_column(Text, index=True)
+    # What the article was found by, kept so a reader can judge the match.
+    query_term: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    headline: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    domain: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AdrSignal(Base):
+    """Tier 1: how far above baseline a reaction is *reported* for a drug.
+
+    Reference class. Computed offline from openFDA FAERS by
+    `services/ingest/app/faers.py` and read at stage 7.
+
+    **These are reporting ratios, not risks.** FAERS is a spontaneous reporting
+    system: it has no denominator, it is subject to notoriety bias (a drug in
+    the news gets reported more), and it is confounded by indication (the
+    reaction may belong to the disease, not the drug). A PRR of 4 means this
+    reaction is reported four times more often for this drug than across all
+    drugs — it does not mean the drug caused anything. Every message this table
+    produces says so, because a ratio presented as a risk is the single way this
+    tier misleads.
+
+    `n_reports` is kept because the ratio alone is meaningless: 2 reports out of
+    3 is a PRR that will move wildly on the next report, and the standard signal
+    criteria require a minimum count for exactly that reason.
+    """
+
+    __tablename__ = "adr_signal"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # MedDRA preferred term as openFDA reports it, e.g. "LACTIC ACIDOSIS".
+    reaction: Mapped[str] = mapped_column(Text, nullable=False)
+    # Proportional reporting ratio and reporting odds ratio.
+    prr: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    ror: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    # a — reports naming both this drug and this reaction.
+    n_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # a+b — all reports naming this drug, so the ratio can be re-derived.
+    n_drug_reports: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("rxcui", "reaction", name="uq_adr_signal_natural"),)
+
+
+class PgxGuideline(Base):
+    """Tier 3: a CPIC gene–drug recommendation, keyed the way CPIC keys it.
+
+    Reference class — a guideline is about a drug and a phenotype, never about a
+    person, so no `hospital_id`.
+
+    `phenotype` holds CPIC's own `lookupkey` value ("Poor Metabolizer",
+    "*57:01 positive"), not a vocabulary of ours. Inventing a parallel one would
+    mean a mapping layer nobody could audit against the source, and the source
+    is the whole point of a guideline lookup.
+
+    `action_required` separates "this genotype changes prescribing" from "use
+    per standard dosing". CPIC publishes no usable flag for it — its three
+    candidate booleans are `false` on every row — so it is derived from the
+    phenotype by `patient.is_baseline_phenotype`, which is the one piece of
+    judgement in this feed and is documented as ours there.
+    """
+
+    __tablename__ = "pgx_guideline"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    gene: Mapped[str] = mapped_column(Text, nullable=False)
+    rxcui: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    phenotype: Mapped[str] = mapped_column(Text, nullable=False)
+    # Verbatim CPIC. Shown to the pharmacist as-is — the reviewable basis again.
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    implication: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # CPIC's own strength field: Strong | Moderate | Optional | No Recommendation.
+    classification: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # CPIC level of the underlying gene-drug pair: A | B.
+    evidence_level: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    action_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    population: Mapped[str] = mapped_column(Text, nullable=False, server_default="general")
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("gene", "rxcui", "phenotype", "population", name="uq_pgx_guideline"),
+    )
+
+
+class AssessmentLog(Base):
+    """Who asked what of the rules engine, and what it answered.
+
+    Tenant class, and the only patient-adjacent table that is *supposed* to
+    exist under the no-PHI design (docs/patient-profiling-usecases.md §7). It
+    holds **no patient identifier at all** — `feature_hash` proves what was
+    asked without recording who it was about, which is what makes the decision
+    trail in docs/services.md §1.3 work while §2.4's "the audit log records the
+    decision, not the patient" stays true. Asked "which patient was this?", this
+    table cannot answer, and the hospital's own EHR can.
+
+    `patient_ref` is deliberately excluded from the hash. It is opaque to us,
+    but it is stable per patient, so hashing it would let anyone with the table
+    group every assessment ever made about one person — a re-identification
+    handle built out of the audit trail itself.
+
+    Recovering a vector from `feature_hash` is possible in principle: the field
+    space is small enough to enumerate. That is acceptable precisely because
+    what it would recover is a de-identified band vector — age band, eGFR band,
+    codes — and never an identity. The hash is an integrity check on the
+    question, not a secret.
+
+    `ruleset_version` rather than the `model_version` of §7's sketch: this
+    pipeline is deterministic, so what has to be pinned to explain an old answer
+    is the weight table and bands that produced it. When a Tier 2 model lands it
+    gets its own column and its own table; a version string that silently means
+    two different things would be worse than either.
+    """
+
+    __tablename__ = "assessment_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hospital_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # One id per API call, echoed back to the caller so a clinician can quote it
+    # when they disagree with an answer.
+    request_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # The clinician, from the JWT `sub`. The decision is attributable to a
+    # person even though the subject of it is not.
+    actor_id: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    ruleset_version: Mapped[str] = mapped_column(Text, nullable=False)
+    # [{"rxcui": …, "verdict": …, "score": …, "codes": [...]}, …]
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # The audit read is "what happened at this hospital, newest first".
+        Index("ix_assessment_log_hospital_time", "hospital_id", "created_at"),
+        Index("ix_assessment_log_request", "request_id"),
     )
 
 

@@ -26,6 +26,7 @@ measuring real openFDA data:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -130,7 +131,70 @@ RULES: dict[str, Rule] = {
     "NDC_UNRESOLVED": Rule(
         Category.DATA, Severity.INFO, False, "No formal source recognised this NDC"
     ),
+    # Import alerts. Yellow rather than red, and persistent rather than
+    # transient: detention without physical examination is a standing regulatory
+    # posture on a *manufacturer*, not a defect found in this product. It says
+    # "check where this came from", which is what yellow means.
+    "IMPORT_ALERT_GMP": Rule(
+        Category.ENFORCEMENT,
+        Severity.YELLOW,
+        False,
+        "Labeler is on FDA Import Alert 66-40 — detained for CGMP failure",
+    ),
+    "IMPORT_ALERT_UNAPPROVED": Rule(
+        Category.ENFORCEMENT,
+        Severity.YELLOW,
+        False,
+        "Labeler is on FDA Import Alert 66-41 — detained as an unapproved drug",
+    ),
+    # News. §4.3 makes this structural: an article is an unverified claim about
+    # a third party, so it can raise yellow and never red. Acting on one as fact
+    # would let the system call a drug uncertified because a blog said so.
+    "NEWS_SIGNAL": Rule(
+        Category.ENFORCEMENT,
+        Severity.YELLOW,
+        True,
+        "Recent press reporting mentions this drug — unverified, check the source",
+    ),
 }
+
+# Corporate suffixes carry no identity: "Aruba Aloe Balm N.V." and "Aruba Aloe
+# Balm NV" are one firm. Everything else is left alone on purpose — see firm_key.
+_FIRM_SUFFIXES = {
+    "inc", "incorporated", "llc", "ltd", "limited", "co", "corp", "corporation",
+    "plc", "gmbh", "ag", "sa", "srl", "spa", "bv", "nv", "cjsc", "jsc", "ojsc",
+    "pty", "pte", "sdn", "bhd", "kk", "as", "ab", "oy", "aps", "kft", "doo",
+    "sas", "sarl", "lp", "llp", "pvt", "private",
+}
+
+
+def firm_key(name: str) -> str:
+    """Normalise a firm name for **exact** matching, and no more than that.
+
+    Casefold, drop punctuation, drop trailing corporate suffixes, collapse
+    whitespace. Deliberately *not* fuzzy: no edit distance, no token subset, no
+    substring containment.
+
+    The asymmetry matters. A missed import alert shows up as a drug with no
+    finding, which is the state everything not on an alert is already in. A
+    false match publicly accuses a named manufacturer of being detained at the
+    border over a product that has nothing to do with them. Under-matching is
+    recoverable and over-matching is a libel, so this errs hard toward missing
+    and the finding names the matched firm so a human can check it.
+    """
+    # Periods vanish rather than becoming spaces: "N.V." and "NV" are the same
+    # suffix, and splitting the first into "n v" would leave two tokens that
+    # match no suffix at all — so the punctuated spelling, which is the common
+    # one on FDA listings, would never match the unpunctuated one. That was the
+    # first thing these tests caught.
+    lowered = str(name).casefold().replace(".", "")
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    tokens = [t for t in cleaned.split() if t]
+    # Never strip to nothing. A firm named "Limited" would otherwise normalise
+    # to the empty string and match every other name that did the same.
+    while len(tokens) > 1 and tokens[-1] in _FIRM_SUFFIXES:
+        tokens.pop()
+    return " ".join(tokens)
 
 
 _RETIRED_RULE = Rule(
@@ -192,10 +256,34 @@ class Shortage:
     raw: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class AlertListing:
+    """One Red List entry, already matched to this NDC's labeler."""
+
+    alert_number: str  # "66-40" | "66-41"
+    firm_name: str
+    country: str = ""
+    listed_at: date | None = None
+    source_url: str = ""
+
+
+@dataclass(frozen=True)
+class NewsItem:
+    """One press mention. Yellow at most, always — §4.3."""
+
+    headline: str
+    url: str = ""
+    domain: str = ""
+    published_at: datetime | None = None
+
+
 NDC_DIRECTORY = "openFDA NDC Directory"
 ENFORCEMENT = "openFDA Enforcement"
 SHORTAGES = "openFDA Drug Shortages"
 RXNORM = "RxNorm NDC Status (NLM)"
+IMPORT_ALERTS = "FDA Import Alerts (DWPE)"
+NEWS = "Press reporting"
+_IMPORT_ALERT_RULES = {"66-40": "IMPORT_ALERT_GMP", "66-41": "IMPORT_ALERT_UNAPPROVED"}
 _NDC_URL = "https://api.fda.gov/drug/ndc.json"
 _ENFORCEMENT_URL = "https://api.fda.gov/drug/enforcement.json"
 _SHORTAGE_URL = "https://api.fda.gov/drug/shortages.json"
@@ -277,6 +365,8 @@ def evaluate(
     finished: bool | None = None,
     recalls: Sequence[Recall] = (),
     shortages: Sequence[Shortage] = (),
+    import_alerts: Sequence[AlertListing] = (),
+    news: Sequence[NewsItem] = (),
     ndc_status: object | None = None,
     in_directory: bool = True,
     today: date | None = None,
@@ -376,6 +466,37 @@ def evaluate(
             _SHORTAGE_URL,
             str(shortage.update_date or ""),
             shortage.raw,
+        )
+
+    # --- import certification (§4.1) ---------------------------------------
+    # The caller matched these to this NDC's labeler; `firm_key` documents why
+    # the match is exact-only. The firm is named in the message so a pharmacist
+    # can check the claim rather than take it, which matters more here than
+    # anywhere else in this module: this one is about a company, not a product.
+    for listing in import_alerts:
+        code = _IMPORT_ALERT_RULES.get(listing.alert_number.strip())
+        if code is None:
+            continue
+        where = f", {listing.country}" if listing.country else ""
+        since = f" since {listing.listed_at.isoformat()}" if listing.listed_at else ""
+        add(
+            code,
+            f"Labeler matches '{listing.firm_name}'{where} on FDA Import Alert "
+            f"{listing.alert_number}{since} — detained without physical examination",
+            IMPORT_ALERTS,
+            listing.source_url,
+            listing.alert_number,
+        )
+
+    # --- news (§4.2, and §4.3 for why it stops at yellow) -------------------
+    for item in news:
+        when = f" ({item.published_at.date().isoformat()})" if item.published_at else ""
+        source = f" — {item.domain}" if item.domain else ""
+        add(
+            "NEWS_SIGNAL",
+            f"{item.headline}{source}{when}",
+            NEWS,
+            item.url,
         )
 
     # --- RxNorm, the second formal source (COMP-2) --------------------------

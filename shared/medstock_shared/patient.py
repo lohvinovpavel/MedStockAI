@@ -18,8 +18,10 @@ change when they do.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
@@ -54,6 +56,11 @@ WEIGHTS: dict[str, int] = {
     "AGE_INAPPROPRIATE": 20,
     "INTERACTION_MODERATE": 15,
     "NARROW_THERAPEUTIC_INDEX": 10,
+    # Tier 1. Small on purpose: a FAERS ratio is the same for every patient on
+    # the drug, so it must not outweigh a stage that knows something about this
+    # person. It nudges; it does not decide.
+    "ADR_SIGNAL_STRONG": 10,
+    "ADR_SIGNAL": 5,
 }
 BANDS: tuple[tuple[int, Verdict], ...] = ((0, Verdict.GREEN), (30, Verdict.AMBER), (60, Verdict.RED))
 
@@ -81,6 +88,17 @@ class PatientVector:
     condition_codes: tuple[str, ...] = ()
     active_rxcuis: tuple[str, ...] = ()
     prior_adr_rxcuis: tuple[str, ...] = ()
+    # Tier 3. "GENE:phenotype" pairs in CPIC's own vocabulary, e.g.
+    # "CYP2C19:Poor Metabolizer", "HLA-B:*57:01 positive".
+    #
+    # §2.3 of the use-cases doc calls this `pgx_alleles`, and this takes
+    # phenotypes instead **on purpose**: turning a diplotype like *2/*2 into a
+    # phenotype needs CPIC's allele-definition and diplotype tables, and a
+    # mis-mapped diplotype is a clinical error we would have authored. The
+    # reporting lab already states the phenotype, and every CPIC recommendation
+    # is keyed on it. Taking what the lab asserts keeps that inference where the
+    # accountability for it already sits.
+    pgx_phenotypes: tuple[str, ...] = ()
     patient_ref: str | None = None
 
     @classmethod
@@ -101,8 +119,39 @@ class PatientVector:
             condition_codes=tup("condition_codes"),
             active_rxcuis=tup("active_rxcuis"),
             prior_adr_rxcuis=tup("prior_adr_rxcuis"),
+            pgx_phenotypes=tup("pgx_phenotypes"),
             patient_ref=(str(payload["patient_ref"]) if payload.get("patient_ref") else None),
         )
+
+    def feature_hash(self) -> str:
+        """Stable fingerprint of the question, for `assessment_log`.
+
+        **`patient_ref` is excluded, and that exclusion is the point.** It is
+        opaque to us but stable per patient, so including it would let anyone
+        holding the audit table group every assessment ever made about one
+        person — building a re-identification handle out of the audit trail the
+        no-PHI design depends on (docs/patient-profiling-usecases.md §2.4).
+
+        Sequence fields are sorted before hashing: the same allergies in a
+        different order are the same question, and a hash that disagreed would
+        make the log unable to recognise a repeat.
+        """
+        payload = json.dumps(
+            {
+                "age_band": self.age_band,
+                "sex": self.sex,
+                "egfr_band": self.egfr_band,
+                "hepatic": self.hepatic,
+                "allergy_codes": sorted(self.allergy_codes),
+                "condition_codes": sorted(self.condition_codes),
+                "active_rxcuis": sorted(self.active_rxcuis),
+                "prior_adr_rxcuis": sorted(self.prior_adr_rxcuis),
+                "pgx_phenotypes": sorted(self.pgx_phenotypes),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -302,6 +351,180 @@ def prognosis_findings(
     return findings
 
 
+@dataclass(frozen=True)
+class AdrSignalRow:
+    """One precomputed FAERS disproportionality row, as Tier 1 consumes it."""
+
+    rxcui: str
+    reaction: str
+    prr: float = 0.0
+    ror: float = 0.0
+    n_reports: int = 0
+
+
+# Evans et al. — the conventional screening criteria for a spontaneous-reporting
+# signal. The count floor matters more than the ratio: 2 reports out of 3 gives
+# a spectacular PRR that the next report will destroy.
+ADR_MIN_REPORTS = 3
+ADR_PRR_SIGNAL = 2.0
+ADR_PRR_STRONG = 4.0
+
+
+def adr_findings(signals: Sequence[AdrSignalRow]) -> list[Finding]:
+    """Tier 1 — a population reporting signal for the drug.
+
+    Deliberately **not patient-specific**: FAERS knows about drugs and
+    reactions, not about this patient. It is the same offset for everyone on the
+    drug, which is why it carries a small weight and sits below every stage that
+    does know something about the person.
+
+    Every message says "reported", never "causes". FAERS has no denominator, is
+    subject to notoriety bias, and is confounded by indication — a PRR of 4 says
+    this reaction is reported four times more often for this drug than across
+    all drugs, and says nothing about causation. Presenting a reporting ratio as
+    a risk is the one way this tier misleads, so the wording is part of the
+    contract, not decoration.
+    """
+    findings: list[Finding] = []
+    for signal in signals:
+        if signal.n_reports < ADR_MIN_REPORTS or signal.prr < ADR_PRR_SIGNAL:
+            continue
+        strong = signal.prr >= ADR_PRR_STRONG
+        findings.append(
+            Finding(
+                code="ADR_SIGNAL_STRONG" if strong else "ADR_SIGNAL",
+                severity=Severity.MODERATE if strong else Severity.LOW,
+                weight=WEIGHTS["ADR_SIGNAL_STRONG"] if strong else WEIGHTS["ADR_SIGNAL"],
+                message=(
+                    f"{signal.reaction.title()} is *reported* {signal.prr:.1f}x above baseline "
+                    f"for this drug ({signal.n_reports} reports). A reporting ratio, not a "
+                    f"risk — FAERS has no denominator and does not establish cause."
+                ),
+                source="openFDA FAERS",
+                stage=7,
+            )
+        )
+    return findings
+
+
+@dataclass(frozen=True)
+class PgxRecommendation:
+    """One CPIC gene–drug–phenotype row, as Tier 3 consumes it."""
+
+    rxcui: str
+    gene: str
+    phenotype: str
+    recommendation: str = ""
+    implication: str = ""
+    classification: str = ""
+    evidence_level: str = ""
+    action_required: bool = False
+
+
+# CPIC's own strength field drives the weight, once a phenotype is judged worth
+# weighting at all — see is_baseline_phenotype.
+PGX_BASE: dict[str, int] = {"strong": 40, "moderate": 25, "optional": 10}
+
+# Phenotype values that mean "this genotype is the ordinary one", and values
+# that mean "we could not tell". Neither is a finding worth scoring.
+#
+# **This list is ours, not CPIC's, and that is worth knowing.** The API carries
+# `dosinginformation`, `alternatedrugavailable` and `otherprescribingguidance`,
+# which look exactly like the structured actionable flag this needs — and they
+# are `false` on every row (checked across the full recommendation set, not a
+# sample). So the reassuring-versus-actionable split has to come from somewhere,
+# and the phenotype vocabulary is the least inferential source available: it is
+# a short enumerable set, it describes the *patient's* genotype rather than
+# CPIC's prose, and a reader can check it against the values in `pgx_guideline`.
+# The alternative was matching words like "avoid" in the recommendation text,
+# which is not a thing a clinical weight should rest on.
+_BASELINE_PHENOTYPES: tuple[str, ...] = (
+    "normal metabolizer",
+    "normal function",
+    "normal risk",
+    "negative",
+)
+_UNINFORMATIVE_PHENOTYPES: tuple[str, ...] = ("indeterminate", "uncertain", "unknown", "n/a")
+
+
+def is_baseline_phenotype(phenotype: str) -> bool:
+    """True when this phenotype warrants no score — either it is the ordinary
+    genotype, or it is one CPIC could not resolve."""
+    value = phenotype.strip().casefold()
+    return any(m in value for m in (*_BASELINE_PHENOTYPES, *_UNINFORMATIVE_PHENOTYPES))
+
+
+def _pgx_key(value: str) -> tuple[str, str]:
+    """Split "CYP2C19:Poor Metabolizer" into its gene and phenotype, casefolded
+    for comparison. A value with no colon is treated as a bare phenotype with no
+    gene, which will simply never match."""
+    gene, _, phenotype = value.partition(":")
+    return gene.strip().casefold(), phenotype.strip().casefold()
+
+
+def pgx_findings(
+    vector: PatientVector, recommendations: Sequence[PgxRecommendation]
+) -> list[Finding]:
+    """Tier 3 — a guideline lookup, not a prediction.
+
+    Deterministic and trivially explainable: the patient's reported phenotype
+    either matches a CPIC row for this drug or it does not, and the row's own
+    text is what the pharmacist reads.
+
+    **It never blocks**, even for a pairing as absolute as abacavir with
+    HLA-B*57:01. Hard gates stay in Tier 0 where they are human-curated, because
+    the only way to derive a block here would be to read CPIC's recommendation
+    prose for words like "avoid" — and a text match is not a thing a hard
+    contraindication should rest on. What Tier 3 contributes is a strongly
+    weighted, verbatim-cited finding; the pharmacist decides.
+
+    A matched row where CPIC asks for nothing different still produces a
+    finding, at weight 0. "We checked your genotype against this drug and the
+    guideline says standard dosing" is worth saying — silence would be
+    indistinguishable from never having looked.
+    """
+    if not vector.pgx_phenotypes:
+        return []
+
+    held = {_pgx_key(p) for p in vector.pgx_phenotypes}
+    findings: list[Finding] = []
+    for rec in recommendations:
+        if (rec.gene.strip().casefold(), rec.phenotype.strip().casefold()) not in held:
+            continue
+
+        if not rec.action_required:
+            findings.append(
+                Finding(
+                    code="PGX_STANDARD_DOSING",
+                    severity=Severity.INFO,
+                    weight=0,
+                    message=(
+                        f"{rec.gene} {rec.phenotype}: CPIC advises standard dosing "
+                        f"({rec.recommendation or 'no change'})"
+                    ),
+                    source=f"CPIC level {rec.evidence_level or '?'}",
+                    stage=8,
+                )
+            )
+            continue
+
+        weight = PGX_BASE.get(rec.classification.strip().casefold(), PGX_BASE["moderate"])
+        findings.append(
+            Finding(
+                code="PGX_ACTIONABLE",
+                severity=Severity.HIGH if weight >= 25 else Severity.MODERATE,
+                weight=weight,
+                message=(
+                    f"{rec.gene} {rec.phenotype}: {rec.recommendation or 'see guideline'}"
+                    + (f" — {rec.implication}" if rec.implication else "")
+                ),
+                source=f"CPIC level {rec.evidence_level or '?'}, {rec.classification or 'unclassified'}",
+                stage=8,
+            )
+        )
+    return findings
+
+
 def _class_of(rxcui: str) -> str | None:
     return DRUG_CLASS.get(str(rxcui))
 
@@ -334,12 +557,16 @@ def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> Patien
     """
     allergies = tuple(str(a) for a in (getattr(row, "allergy_codes", None) or ()))
     conditions = tuple(str(c) for c in (getattr(row, "condition_codes", None) or ()))
+    phenotypes = tuple(str(p) for p in (getattr(row, "pgx_phenotypes", None) or ()))
     dob = getattr(row, "date_of_birth", None)
     return PatientVector(
         age_band=age_band_from_dob(dob) if isinstance(dob, date) else "unknown",
         allergy_codes=allergies,
         condition_codes=conditions,
         active_rxcuis=tuple(str(r) for r in active_rxcuis),
+        # A phenotype is not an identifier: it is a band-like clinical fact, the
+        # same class of thing as the eGFR band beside it.
+        pgx_phenotypes=phenotypes,
         patient_ref=str(row.id) if getattr(row, "id", None) else None,
     )
 
@@ -396,6 +623,8 @@ def assess(
     rxcui: str,
     today=None,
     risk_profiles: Sequence[RiskProfile] = (),
+    pgx: Sequence[PgxRecommendation] = (),
+    adr_signals: Sequence[AdrSignalRow] = (),
 ) -> Assessment:
     """Run the deterministic stages for one candidate drug.
 
@@ -485,17 +714,36 @@ def assess(
                         "feature vector", 6)
             )
 
-    # --- stage 7: label-derived prognosis (PP-3) ----------------------------
+    # --- stage 7a: population signal (Tier 1, FAERS) ------------------------
+    # patient-pipeline.md §2 puts the FAERS ratio at stage 7 and
+    # prognosis-and-procurement.md §1.4 calls the label-derived stage "7b", so
+    # both live here: two population-level signals, told apart by their code.
+    applicable_adr = [s for s in adr_signals if str(s.rxcui) == str(rxcui)]
+    if applicable_adr:
+        stages.append(7)
+        findings.extend(adr_findings(applicable_adr))
+
+    # --- stage 7b: label-derived prognosis (PP-3) ---------------------------
     # Only profiles for this drug, and only ones a pharmacist has approved —
     # the caller is responsible for that filter, but guard it here too, because
     # an unapproved profile reaching a screen is the one failure this design
     # cannot tolerate.
     applicable = [p for p in risk_profiles if str(p.rxcui) == str(rxcui)]
     if applicable:
-        stages.append(7)
+        # 7a may already have claimed it; `stages_completed` is a list of stages
+        # that ran, not a tally of findings, so 7 must appear at most once.
+        if 7 not in stages:
+            stages.append(7)
         findings.extend(prognosis_findings(vector, applicable))
 
-    # --- stage 8 (pharmacogenomics) is an offline table; not seeded here ----
+    # --- stage 8: pharmacogenomics (Tier 3) --------------------------------
+    # Only rows for this drug. Like stage 7 the caller does the filtering, and
+    # like stage 7 it is repeated here so a caller that forgets cannot leak
+    # another drug's guideline into this answer.
+    applicable_pgx = [p for p in pgx if str(p.rxcui) == str(rxcui)]
+    if applicable_pgx and vector.pgx_phenotypes:
+        stages.append(8)
+        findings.extend(pgx_findings(vector, applicable_pgx))
 
     # --- stage 9: age ------------------------------------------------------
     stages.append(9)
@@ -542,10 +790,60 @@ class DemandLine:
     units_needed: int = 0
     on_hand: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
+    # PP-4. at_risk counts only patients *on* the drug whose own profile flags
+    # it — a subset of on_therapy, unlike `flagged` which spans the whole
+    # cohort including people who will never take it. Conflating the two
+    # inflates the projection with patients who are not there to leave.
+    at_risk: int = 0
+    switch_in: int = 0  # expected arrivals from a drug they are at risk on
 
     @property
     def shortfall(self) -> int:
         return max(0, self.units_needed - self.on_hand)
+
+    def cohort_fit(self, cohort_size: int) -> float:
+        """Share of the whole cohort who could ever take this.
+
+        A drug most of the cohort cannot take is a bad stocking bet even when
+        current usage looks healthy (docs/prognosis-and-procurement.md §2.3).
+        """
+        if cohort_size <= 0:
+            return 0.0
+        return round(self.eligible / cohort_size, 4)
+
+    def projected(self, switch_rate: float) -> int:
+        """projected = on_therapy − (at_risk × switch_rate) + switch_in
+
+        Rounded to whole patients, and never below zero: switch_rate is an
+        assumption, and an assumption must not be able to produce a negative
+        headcount and have it read as a real number downstream.
+        """
+        moved = self.at_risk * switch_rate
+        return max(0, round(self.on_therapy - moved + self.switch_in))
+
+
+def assess_current_therapy(
+    patient: PatientVector,
+    rxcui: str,
+    risk_profiles: Sequence[RiskProfile] = (),
+) -> Assessment:
+    """Risk of a drug the patient is **already taking**.
+
+    `assess` answers a different question: *should we start this patient on this
+    drug*. Asked about current therapy it blocks every time on
+    DUPLICATE_INGREDIENT -- the patient is, correctly, already on it. Used as a
+    risk signal that reads as "100% of patients are at risk", which is not a
+    finding, it is the question being asked wrong.
+
+    So the drug is removed from the active list and the patient re-assessed as
+    if considering it fresh. Everything that makes current therapy risky still
+    fires -- renal floor, age, prior ADR, PP-3 label profiles, interactions with
+    the *rest* of the regimen -- while the tautology does not. Interactions are
+    unaffected by the removal because a drug cannot interact with itself.
+    """
+    others = tuple(r for r in patient.active_rxcuis if str(r) != str(rxcui))
+    as_if_new = replace(patient, active_rxcuis=others)
+    return assess(as_if_new, rxcui, risk_profiles=risk_profiles)
 
 
 def best_substitute(
@@ -553,6 +851,7 @@ def best_substitute(
     withdrawn: str,
     candidates: Sequence[str],
     unavailable: set[str],
+    risk_profiles: Sequence[RiskProfile] = (),
 ) -> tuple[str | None, str]:
     """The safest in-class replacement for one patient, or a reason there is none.
 
@@ -571,7 +870,7 @@ def best_substitute(
             continue
         if _class_of(rxcui) != target_class:
             continue
-        result = assess(patient, rxcui)
+        result = assess(patient, rxcui, risk_profiles=risk_profiles)
         if result.verdict is Verdict.BLOCKED:
             continue
         score = result.score or 0
@@ -588,6 +887,7 @@ def plan_demand(
     on_hand: dict[str, int] | None = None,
     unavailable: Sequence[str] = (),
     units_per_patient: int = 30,
+    risk_profiles: Sequence[RiskProfile] = (),
 ) -> tuple[dict[str, DemandLine], dict[str, int]]:
     """Aggregate a cohort into a purchasing plan.
 
@@ -614,7 +914,7 @@ def plan_demand(
         # Safety statistics across every candidate — useful to a pharmacist even
         # where it does not drive a purchase.
         for rxcui in known:
-            result = assess(patient, rxcui)
+            result = assess(patient, rxcui, risk_profiles=risk_profiles)
             line = lines[rxcui]
             if result.verdict is Verdict.BLOCKED:
                 line.blocked += 1
@@ -634,8 +934,27 @@ def plan_demand(
             if rxcui not in unavailable_set:
                 lines[rxcui].on_therapy += 1
                 lines[rxcui].units_needed += units_per_patient
+                # PP-4: is this patient, on this drug, flagged by their own
+                # profile? Assessed as current therapy rather than as a new
+                # prescription -- see assess_current_therapy for why the plain
+                # call would count every patient as at risk.
+                on_therapy_result = assess_current_therapy(
+                    patient, rxcui, risk_profiles=risk_profiles
+                )
+                if on_therapy_result.verdict is not Verdict.GREEN:
+                    lines[rxcui].at_risk += 1
+                    # Where they would go if switched. Counted as pressure on
+                    # the alternative now, so a re-order decision is visible
+                    # this quarter rather than a surprise next.
+                    destination, _ = best_substitute(
+                        patient, rxcui, known, unavailable_set, risk_profiles=risk_profiles
+                    )
+                    if destination is not None:
+                        lines[destination].switch_in += 1
                 continue
-            alternative, reason = best_substitute(patient, rxcui, known, unavailable_set)
+            alternative, reason = best_substitute(
+                patient, rxcui, known, unavailable_set, risk_profiles=risk_profiles
+            )
             if alternative is None:
                 unserved[reason] = unserved.get(reason, 0) + 1
                 continue
