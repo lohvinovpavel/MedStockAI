@@ -70,7 +70,6 @@ import {
   type CertResult,
 } from "@/components/CertificationBadge";
 import { explainCertification, exploreStance, gatesFor, type Gate } from "@/lib/certification";
-import { useSession } from "@/lib/session";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory } from "@/lib/inventory-context";

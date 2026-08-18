@@ -248,6 +248,13 @@ export function gatesFor(detail: CertDetail | null, ruleset: Ruleset | null): Ga
  * cannot be confirmed the control is offered and the server decides, because
  * gating on auth being reachable would put auth back in the critical path of a
  * page that deliberately does not depend on it.
+ *
+ * Deliberately not `can()` from lib/rbac.ts, though both gate a button on this
+ * page. `CAN` covers actions on the mock pages, where hiding the control *is*
+ * the enforcement because there is no endpoint behind it. This one sits in
+ * front of a real 403, so it needs the third state: `unconfirmed` offers the
+ * control rather than hiding it, and a denial arrives as a toast from the
+ * server. Folding the two together would lose that state.
  */
 export type ExploreStance = "allowed" | "denied" | "unconfirmed";
 
