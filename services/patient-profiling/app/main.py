@@ -37,6 +37,7 @@ from medstock_shared.patient_assess import (
     pgx_for,
     record_assessment,
 )
+from medstock_shared.review_queue import MAX_QUEUE, PROFILE_STATUSES, accept_rate, apply_review, load_queue
 from medstock_shared.rxnorm import RxNormError, ingredients_for_rxcui
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
@@ -210,8 +211,6 @@ def get_ruleset(_: Principal = Depends(require("inventory:read"))) -> dict:
 
 
 REVIEW_ACTIONS = {"approve": "approved", "reject": "rejected"}
-PROFILE_STATUSES = ("awaiting_approval", "approved", "rejected")
-MAX_QUEUE = 200
 # A ceiling on /patients, not a page size. The picker asks for far fewer;
 # this is what stops `?limit=100000` turning the demo PHI table into a bulk
 # export with one query parameter.
@@ -232,76 +231,6 @@ def review_update(action: str, actor: str, note: str, now: datetime) -> dict:
         "reviewed_at": now,
         "review_note": note.strip(),
     }
-
-
-def _profile_dict(row: DrugRiskProfile) -> dict:
-    return {
-        "id": row.id,
-        "rxcui": str(row.rxcui),
-        "reaction": row.reaction,
-        "seriousness": row.seriousness,
-        # The reviewable basis. A queue that showed a verdict without the
-        # factors and the quote would be asking for a signature on nothing.
-        "risk_factors": list(row.risk_factors or []),
-        "citation": row.citation or "",
-        "section": row.section or "",
-        "spl_id": row.spl_id,
-        "status": row.status,
-        "reviewed_by": row.reviewed_by,
-        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
-        "review_note": row.review_note or "",
-        "extracted_at": row.extracted_at.isoformat() if row.extracted_at else None,
-    }
-
-
-def accept_rate(counts: dict[str, int]) -> float | None:
-    """Approved as a share of everything ruled on — docs §5.4's number, the one
-    that says whether extraction is good enough to trust.
-
-    Profiles still awaiting review are excluded on purpose. Counting them as
-    failures would make the rate start at zero and climb as reviewing happens,
-    which measures the reviewer's progress rather than the model's accuracy.
-    `None` while nothing has been ruled on, because a rate over no decisions is
-    not 0.0 — it is unknown, and the two must not print the same.
-    """
-    ruled = counts.get("approved", 0) + counts.get("rejected", 0)
-    return round(counts.get("approved", 0) / ruled, 3) if ruled else None
-
-
-def load_queue(status: str, rxcui: str | None, limit: int) -> tuple[list[dict], dict[str, int]]:
-    """The queue and the tally behind it. Separated from the endpoint so the
-    response shape can be tested without a Postgres to point at."""
-    with Session(engine) as session:
-        query = select(DrugRiskProfile)
-        if status != "all":
-            query = query.where(DrugRiskProfile.status == status)
-        if rxcui:
-            query = query.where(DrugRiskProfile.rxcui == str(rxcui))
-        # Oldest first: a queue that shows the newest extraction first leaves
-        # the backlog sitting at the bottom for ever.
-        rows = session.scalars(query.order_by(DrugRiskProfile.extracted_at).limit(limit)).all()
-        # Over the whole table, not the page — this is what the accept rate is
-        # computed from, and a rate over one page of 50 is not the accept rate.
-        tally = session.execute(
-            select(DrugRiskProfile.status, func.count()).group_by(DrugRiskProfile.status)
-        ).all()
-    counts = {s: 0 for s in PROFILE_STATUSES} | {str(s): int(n) for s, n in tally}
-    return [_profile_dict(r) for r in rows], counts
-
-
-def apply_review(profile_id: int, updates: dict) -> tuple[str, dict] | None:
-    """Write a ruling. Returns (status before, the row after), or None if there
-    is no such profile."""
-    with Session(engine) as session:
-        row = session.get(DrugRiskProfile, profile_id)
-        if row is None:
-            return None
-        previous = row.status
-        for column, value in updates.items():
-            setattr(row, column, value)
-        session.commit()
-        session.refresh(row)
-        return previous, _profile_dict(row)
 
 
 @patients.get("/risk-profiles")

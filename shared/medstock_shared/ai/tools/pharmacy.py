@@ -20,11 +20,14 @@ import uuid
 from ...auth import Principal
 from ...certification import Finding, signal
 from ...db import engine, session_scope
+from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...explore import explore
 from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
 from ...patient_assess import NOT_FOUND, UNAVAILABLE, assess_for_drug as _assess_for_drug
 from ...patient_assess import explain_assessment as _explain_assessment
+from ...review_queue import PROFILE_STATUSES, accept_rate
+from ...review_queue import load_queue as _load_queue
 from ...rxnorm import RxNormError, ndcs_for_rxcui, related_scd_sbd, therapeutic_scd_sbd
 from ...stock import stock_fields
 from ...warehouse import excursions
@@ -391,3 +394,65 @@ def explain_assessment(args: ExplainAssessmentArgs, principal: Principal) -> dic
     if result == UNAVAILABLE:
         return {"error": "assessment log unavailable"}
     return result
+
+
+class AuditQueryArgs(BaseModel):
+    days: int = Field(30, description="Look-back window in days")
+    task_type: str | None = Field(None, description="e.g. 'copilot'")
+    outcome: str | None = Field(None, description="live | cache_hit | error | breaker_open")
+
+
+@tool(
+    permission="audit:read",
+    description=(
+        "Summarise this hospital's AI-assisted decisions -- counts by "
+        "outcome, the tools called most often, the error rate, latency, and "
+        "a handful of the most recent turns. Use for questions like 'what "
+        "has the AI assistant been doing' or 'show me AI activity this "
+        "month'. Aggregated, not a full transcript dump."
+    ),
+    args=AuditQueryArgs,
+)
+def query_ai_decisions(args: AuditQueryArgs, principal: Principal) -> dict:
+    return _query_ai_decisions(
+        principal.hospital_id, days=args.days, task_type=args.task_type, outcome=args.outcome
+    )
+
+
+class ReviewQueueArgs(BaseModel):
+    status: str = Field(
+        "awaiting_approval",
+        description="'awaiting_approval' (default), 'approved', 'rejected', or 'all'",
+    )
+
+
+# Worst-first, same idea as PROGNOSIS_BASE in shared/medstock_shared/patient.py
+# -- a queue is as urgent as its most serious pending item.
+_SERIOUSNESS_RANK = {"fatal": 0, "serious": 1, "moderate": 2}
+_QUEUE_PEEK = 10
+
+
+@tool(
+    permission="profile:review",
+    description=(
+        "Summarise the label-derived risk-profile review queue: how many "
+        "are awaiting approval, already ruled on, and the accept rate, plus "
+        "the most serious few items pending review. Use for questions like "
+        "'what is waiting on a pharmacist' or 'is anything urgent in the "
+        "queue' rather than opening the queue card by card."
+    ),
+    args=ReviewQueueArgs,
+)
+def list_review_queue(args: ReviewQueueArgs, principal: Principal) -> dict:
+    if args.status != "all" and args.status not in PROFILE_STATUSES:
+        return {"error": f"status must be 'all' or one of {PROFILE_STATUSES}"}
+    items, counts = _load_queue(args.status, None, limit=200)
+    items.sort(key=lambda r: _SERIOUSNESS_RANK.get(str(r["seriousness"]).lower(), 9))
+    return {
+        "counts": counts,
+        "accept_rate": accept_rate(counts),
+        "most_urgent": [
+            {"rxcui": r["rxcui"], "reaction": r["reaction"], "seriousness": r["seriousness"], "citation": r["citation"]}
+            for r in items[:_QUEUE_PEEK]
+        ],
+    }

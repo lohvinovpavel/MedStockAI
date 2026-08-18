@@ -398,6 +398,55 @@ def test_sweep_shelf_certificates_separates_flagged_from_unknown(monkeypatch):
     assert all(f["ndc"] != "green-ndc" for f in result["flagged"])
 
 
+def test_query_ai_decisions_scopes_to_the_caller_hospital(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import AuditQueryArgs, query_ai_decisions
+
+    captured = {}
+
+    def fake_query(hospital_id, days, task_type, outcome):
+        captured.update(hospital_id=hospital_id, days=days, task_type=task_type, outcome=outcome)
+        return {"total": 3, "by_outcome": {"live": 3}}
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._query_ai_decisions", fake_query)
+
+    result = query_ai_decisions(AuditQueryArgs(days=7, outcome="live"), PHARMACIST)
+    assert captured == {
+        "hospital_id": "hospital-1",
+        "days": 7,
+        "task_type": None,
+        "outcome": "live",
+    }
+    assert result["total"] == 3
+
+
+def test_list_review_queue_ranks_by_seriousness(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import ReviewQueueArgs, list_review_queue
+
+    rows = [
+        {"rxcui": "1", "reaction": "mild rash", "seriousness": "moderate", "citation": "c1"},
+        {"rxcui": "2", "reaction": "cardiac arrest", "seriousness": "fatal", "citation": "c2"},
+        {"rxcui": "3", "reaction": "liver injury", "seriousness": "serious", "citation": "c3"},
+    ]
+    counts = {"awaiting_approval": 3, "approved": 5, "rejected": 1}
+
+    def fake_load_queue(status, rxcui, limit):
+        return list(rows), counts
+
+    monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._load_queue", fake_load_queue)
+
+    result = list_review_queue(ReviewQueueArgs(), PHARMACIST)
+    assert [r["rxcui"] for r in result["most_urgent"]] == ["2", "3", "1"]  # fatal, serious, moderate
+    assert result["accept_rate"] == round(5 / 6, 3)
+    assert result["counts"] == counts
+
+
+def test_list_review_queue_rejects_a_bad_status(monkeypatch):
+    from medstock_shared.ai.tools.pharmacy import ReviewQueueArgs, list_review_queue
+
+    result = list_review_queue(ReviewQueueArgs(status="not-a-status"), PHARMACIST)
+    assert "error" in result
+
+
 def test_assess_patient_for_drug_reports_the_verdict_verbatim(monkeypatch):
     from medstock_shared.ai.tools.pharmacy import AssessPatientArgs, assess_patient_for_drug
 
@@ -531,16 +580,20 @@ def test_declarations_are_scoped_to_the_caller_role():
         "list_storage_excursions",
         "assess_patient_for_drug",
         "explain_assessment",
+        "list_review_queue",
     }
     assert declarations_for(Principal("u", "h", "not-a-real-role")) == []
 
 
 def test_denied_tools_for_is_the_complement_of_declarations_for():
-    """Pharmacist lacks patient:read, so get_patient_regimen is the one tool
-    denied to the role with the widest permission set in the system."""
+    """Pharmacist lacks patient:read and audit:read -- the two tools denied
+    even to the role with the widest permission set in the system."""
     from medstock_shared.ai.tools import denied_tools_for
 
-    assert {d["name"] for d in denied_tools_for(PHARMACIST)} == {"get_patient_regimen"}
+    assert {d["name"] for d in denied_tools_for(PHARMACIST)} == {
+        "get_patient_regimen",
+        "query_ai_decisions",
+    }
     names = {d["name"] for d in denied_tools_for(Principal("u", "h", "not-a-real-role"))}
     assert names == {
         "search_analogues_rxnorm",
@@ -552,6 +605,8 @@ def test_denied_tools_for_is_the_complement_of_declarations_for():
         "list_storage_excursions",
         "assess_patient_for_drug",
         "explain_assessment",
+        "query_ai_decisions",
+        "list_review_queue",
     }
 
 
