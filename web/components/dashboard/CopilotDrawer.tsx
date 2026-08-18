@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, Plane, Repeat2, ShieldCheck, Send, Truck, X, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Copy, Eraser, FileText, History, Plane, Plus, Repeat2, ShieldCheck, Send, Truck, X, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { useCopilot, type CopilotFocus, type EmergencyPlanRequest } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
@@ -62,6 +63,16 @@ let nextId = 1;
 function id() {
   return `m-${nextId++}`;
 }
+
+// Past conversations, persisted so "history" survives a refresh — same
+// localStorage pattern as the open/collapsed flag in copilot-context.tsx.
+type SavedConversation = { id: string; savedAt: number; messages: Message[] };
+const HISTORY_STORAGE_KEY = "medstock-copilot-history";
+const GREETING: Message = {
+  id: "m-greeting",
+  role: "assistant",
+  text: "Hi, I'm the AI MedStock Assistant. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages.",
+};
 
 const QUICK_ACTIONS = [
   { key: "po", label: "Generate PO", icon: FileText },
@@ -381,10 +392,14 @@ export function CopilotDrawer() {
   // because this component owns live conversation state; two mounted
   // instances would silently diverge.
   const isDesktop = useMediaQuery("(min-width: 1024px)");
-  const [messages, setMessages] = useState<Message[]>([
-    { id: id(), role: "assistant", text: "Hi, I'm the MedStock AI Copilot. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages." },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [draft, setDraft] = useState("");
+  const [history, setHistory] = useState<SavedConversation[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => {
+    const stored = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (stored) setHistory(JSON.parse(stored));
+  }, []);
   // Message ids whose PO card has already been turned into a real draft
   // order — keyed by message, not by drug, so two suggestions for the same
   // SKU in one conversation stay independent.
@@ -431,9 +446,32 @@ export function CopilotDrawer() {
   }
 
   function clearConversation() {
-    setMessages([
-      { id: id(), role: "assistant", text: "Hi, I'm the MedStock AI Copilot. Select a SKU or alert on the page, or ask me anything about inventory, forecasts, and shortages." },
-    ]);
+    setMessages([GREETING]);
+  }
+
+  // Archives the active conversation (if anything actually happened beyond
+  // the canned greeting) then persists it — this backs both "start a new
+  // chat" and "switch to a past one", so neither one silently drops what
+  // was on screen.
+  function archiveCurrent(current: Message[]) {
+    if (current.length <= 1) return;
+    setHistory((prev) => {
+      const next = [{ id: id(), savedAt: Date.now(), messages: current }, ...prev];
+      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function startNewConversation() {
+    archiveCurrent(messages);
+    setMessages([GREETING]);
+    setHistoryOpen(false);
+  }
+
+  function openConversation(saved: SavedConversation) {
+    archiveCurrent(messages);
+    setMessages(saved.messages);
+    setHistoryOpen(false);
   }
 
   // Same order pipeline the Forecasts page suggestion writes to — lands in
@@ -454,7 +492,7 @@ export function CopilotDrawer() {
       status: "draft",
       source: "ai_suggestion",
       expectedDelivery: isoPlusDays(card.leadTimeDays),
-      note: `Generated from ${card.confidence}% confidence forecast via AI Copilot.`,
+      note: `Generated from ${card.confidence}% confidence forecast via AI MedStock Assistant.`,
     });
     setDraftedMessageIds((prev) => new Set(prev).add(messageId));
     toast.success(`Draft order ${order.id} created.`, {
@@ -484,9 +522,20 @@ export function CopilotDrawer() {
 
   if (!open) {
     return (
-      <div className="hidden shrink-0 border-l bg-card lg:flex lg:w-12 lg:flex-col lg:items-center lg:py-3">
-        <Button variant="ghost" size="icon" onClick={() => setOpen(true)} aria-label="Open AI Copilot">
+      <div className="hidden shrink-0 border-l bg-card lg:flex lg:w-12 lg:flex-col lg:items-center lg:gap-1 lg:py-3">
+        <Button variant="ghost" size="icon" onClick={() => setOpen(true)} aria-label="Open AI MedStock Assistant">
           <Bot />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => {
+            setOpen(true);
+            setHistoryOpen(true);
+          }}
+          aria-label="Open conversation history"
+        >
+          <History />
         </Button>
       </div>
     );
@@ -497,13 +546,16 @@ export function CopilotDrawer() {
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-primary" />
-          <span className="text-sm font-semibold">AI Copilot</span>
+          <span className="text-sm font-semibold">AI MedStock Assistant</span>
         </div>
         <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={() => setHistoryOpen(true)} aria-label="Conversation history">
+            <History />
+          </Button>
           <Button variant="ghost" size="icon" onClick={clearConversation} aria-label="Clear conversation" disabled={messages.length <= 1}>
             <Eraser />
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="Collapse AI Copilot">
+          <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="Collapse AI MedStock Assistant">
             <X />
           </Button>
         </div>
@@ -587,7 +639,7 @@ export function CopilotDrawer() {
                 send();
               }
             }}
-            placeholder="Ask the copilot…"
+            placeholder="Ask the assistant…"
             className="min-h-9 resize-none py-2 text-sm"
             rows={1}
           />
@@ -600,16 +652,58 @@ export function CopilotDrawer() {
     </div>
   );
 
+  const historyDialog = (
+    <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+      <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Conversation history</DialogTitle>
+          <DialogDescription>Past AI MedStock Assistant conversations at {facility.name}.</DialogDescription>
+        </DialogHeader>
+        <Button variant="outline" size="sm" className="w-fit gap-1.5 text-xs" onClick={startNewConversation}>
+          <Plus data-icon="inline-start" />
+          New chat
+        </Button>
+        {history.length === 0 ? (
+          <p className="py-6 text-center text-xs text-muted-foreground">No past conversations yet.</p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {history.map((h) => {
+              const preview = h.messages.find((m) => m.role === "user")?.text ?? "New conversation";
+              return (
+                <button
+                  key={h.id}
+                  onClick={() => openConversation(h)}
+                  className="flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted"
+                >
+                  <span className="truncate font-medium">{preview}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {new Date(h.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} · {h.messages.length} messages
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+
   if (isDesktop) {
-    return <aside className="flex min-h-0 w-[380px] shrink-0 flex-col border-l bg-card">{panel}</aside>;
+    return (
+      <>
+        <aside className="flex min-h-0 w-[380px] shrink-0 flex-col border-l bg-card">{panel}</aside>
+        {historyDialog}
+      </>
+    );
   }
 
   return (
     <Sheet open onOpenChange={(next) => !next && setOpen(false)}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-        <SheetTitle className="sr-only">AI Copilot</SheetTitle>
+        <SheetTitle className="sr-only">AI MedStock Assistant</SheetTitle>
         {panel}
       </SheetContent>
+      {historyDialog}
     </Sheet>
   );
 }

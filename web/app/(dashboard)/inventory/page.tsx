@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
 import { StatTile } from "@/components/dashboard/StatTile";
+import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import {
   CertificationBadge,
   useCertificateDetail,
@@ -68,6 +69,8 @@ import {
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory } from "@/lib/inventory-context";
+import { useSession } from "@/lib/session";
+import { can } from "@/lib/rbac";
 import {
   inventoryKpisFor,
   isoPlusDays,
@@ -89,6 +92,22 @@ function expiryTone(days: number): StatusTone {
 }
 
 const OTHER_SKU = "__other__";
+
+type SortKey = "drugName" | "batchNumber" | "stock" | "burn" | "risk" | "expiry";
+
+// Risk sorts by days-of-supply (the number actually driving the badge), not
+// the tone label — "most urgent first" is what a pharmacist wants from this
+// column, and daysOfSupply is what "urgent" means here.
+function sortValue(item: InventoryItem, key: SortKey): string | number {
+  switch (key) {
+    case "drugName": return item.drugName;
+    case "batchNumber": return item.batchNumber;
+    case "stock": return item.currentStock;
+    case "burn": return item.dailyBurnRate;
+    case "risk": return Number.isFinite(daysOfSupply(item)) ? daysOfSupply(item) : Infinity;
+    case "expiry": return item.expiryDate;
+  }
+}
 
 // Actually writes into inventory now — previously validated a full form
 // and then discarded it, with a success toast in front of a no-op. A
@@ -369,6 +388,7 @@ function CertificateDialog({
 export default function InventoryPage() {
   const router = useRouter();
   const { setFocus } = useCopilot();
+  const { user } = useSession();
   const { facilityId, facility } = useFacility();
   const { itemsFor } = useInventory();
   const [search, setSearch] = useState("");
@@ -376,6 +396,7 @@ export default function InventoryPage() {
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [certItem, setCertItem] = useState<InventoryItem | null>(null);
+  const [sort, setSort] = useState<SortState<SortKey>>(null);
 
   const items = useMemo(() => itemsFor(facilityId), [itemsFor, facilityId]);
 
@@ -429,6 +450,12 @@ export default function InventoryPage() {
     });
   }, [items, search, status, range]);
 
+  const sorted = useMemo(() => {
+    if (!sort) return filtered;
+    const dir = sort.direction === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => dir * compareValues(sortValue(a, sort.key), sortValue(b, sort.key)));
+  }, [filtered, sort]);
+
   function selectRow(item: InventoryItem) {
     const next = selectedId === item.id ? null : item.id;
     setSelectedId(next);
@@ -443,7 +470,7 @@ export default function InventoryPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">Inventory & Batches</h1>
         <p className="text-xs text-muted-foreground">
@@ -502,9 +529,11 @@ export default function InventoryPage() {
           </PopoverContent>
         </Popover>
 
-        <div className="ml-auto">
-          <ReceiveBatchDialog facilityId={facilityId} items={items} />
-        </div>
+        {can(user?.role, "receiveBatch") && (
+          <div className="ml-auto">
+            <ReceiveBatchDialog facilityId={facilityId} items={items} />
+          </div>
+        )}
       </div>
 
       <p className="text-[11px] text-muted-foreground">
@@ -512,29 +541,33 @@ export default function InventoryPage() {
         {filtered.length !== items.length ? " · filters applied" : ""}.
       </p>
 
-      <div className="overflow-hidden rounded-lg border bg-card">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
         {/* Table's own wrapper is `overflow-x-auto`, which forces its
             overflow-y to compute as "auto" too (CSS Overflow §3: if one
             axis is non-visible, "visible" on the other computes to "auto")
-            — that stray, unbounded vertical scrollbox, not main's real
+            — that stray, unbounded vertical scrollbox, not the page's real
             scroll, was what the sticky header was binding to, so it never
             actually stuck. Bounding its height via containerClassName makes
-            it a real scroll container the header can stick within. */}
-          <Table containerClassName="max-h-[32rem] overflow-auto">
+            it a real scroll container the header can stick within.
+            Filling the remaining page height (rather than a fixed max-h)
+            means this is the page's only scroll container — a fixed cap
+            plus the page's own overflow-y-auto produced two independently
+            scrolling bars stacked at the same edge. */}
+          <Table containerClassName="h-full overflow-auto">
             <TableHeader className="sticky top-0 z-10 border-b bg-card">
               <TableRow>
-                <TableHead>Drug Name & Form</TableHead>
-                <TableHead>Batch #</TableHead>
-                <TableHead>Stock</TableHead>
-                <TableHead>Daily Burn</TableHead>
-                <TableHead>Stockout Risk</TableHead>
-                <TableHead>Expiry</TableHead>
+                <SortableHead sortKey="drugName" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Drug Name & Form</SortableHead>
+                <SortableHead sortKey="batchNumber" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Batch #</SortableHead>
+                <SortableHead sortKey="stock" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Stock</SortableHead>
+                <SortableHead sortKey="burn" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Daily Burn</SortableHead>
+                <SortableHead sortKey="risk" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Stockout Risk</SortableHead>
+                <SortableHead sortKey="expiry" sort={sort} onSort={(k) => setSort(nextSortState(sort, k))}>Expiry</SortableHead>
                 <TableHead>Certificate</TableHead>
                 <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((item) => {
+              {sorted.map((item) => {
                 const risk = stockRisk(item);
                 const expiryDays = daysUntil(item.expiryDate);
                 const selected = selectedId === item.id;

@@ -18,6 +18,8 @@ import { Callout } from "@/components/dashboard/Callout";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
+import { useSession } from "@/lib/session";
+import { can } from "@/lib/rbac";
 import { forecastFor, forecastableItemIds, inventoryFor, isoPlusDays, parLevel, suppliers } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +42,10 @@ export default function ForecastsPage() {
   const { setFocus, requestEmergencyPlan } = useCopilot();
   const { facilityId, facility } = useFacility();
   const { addOrder } = useOrders();
+  const { user } = useSession();
+  // Restock/decline/emergency-plan are procurement actions — a director can
+  // see the forecast and the AI suggestion but not act on either (docs/rbac-matrix.md #9-10).
+  const canAct = can(user?.role, "actOnForecast");
 
   const items = useMemo(() => inventoryFor(facilityId), [facilityId]);
   const forecastable = useMemo(() => new Set(forecastableItemIds()), []);
@@ -224,30 +230,36 @@ export default function ForecastsPage() {
   }
 
   return (
-    <div className="grid gap-4 p-4 lg:grid-cols-[60%_40%]">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Restock & Forecasts</h1>
-            <p className="text-xs text-muted-foreground">Burn-rate history and ML-predicted demand at {facility.name}.</p>
-          </div>
-          <Select value={item.id} onValueChange={selectItem}>
-            <SelectTrigger size="sm" className="h-8 w-56 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {items.map((i) => (
-                  <SelectItem key={i.id} value={i.id}>
-                    {i.drugName}
-                    {!forecastable.has(i.id) && <span className="text-muted-foreground"> (no model)</span>}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+    <div className="flex flex-col gap-4 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Restock & Forecasts</h1>
+          <p className="text-xs text-muted-foreground">Burn-rate history and ML-predicted demand at {facility.name}.</p>
         </div>
+        <Select value={item.id} onValueChange={selectItem}>
+          <SelectTrigger size="sm" className="h-8 w-56 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {items.map((i) => (
+                <SelectItem key={i.id} value={i.id}>
+                  {i.drugName}
+                  {!forecastable.has(i.id) && <span className="text-muted-foreground"> (no model)</span>}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </div>
 
+      {/* Both columns start with a Card (chart / no-forecast placeholder on
+          the left, AI suggestion / dismissed / no-model on the right) so
+          they align at the same top edge — the header row above used to
+          live inside the left column only, pushing its Card down past the
+          right column's Card by that row's height. */}
+      <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+      <div className="flex flex-col gap-3">
         {!forecast ? (
           <Card className="gap-2 py-4">
             <CardContent className="flex flex-col items-center gap-2 px-4 py-16 text-center">
@@ -316,15 +328,17 @@ export default function ForecastsPage() {
               <span>1× Standard</span>
               <span>3× Epidemic Surge</span>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 w-fit gap-1.5 self-start text-xs"
-              onClick={() => requestEmergencyPlan({ drugName: item.drugName, surgePct, depletionDays: depletion ? depletion.days : null })}
-            >
-              <Bot className="size-3.5" />
-              Generate emergency supply plan for current load
-            </Button>
+            {canAct && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-fit gap-1.5 self-start text-xs"
+                onClick={() => requestEmergencyPlan({ drugName: item.drugName, surgePct, depletionDays: depletion ? depletion.days : null })}
+              >
+                <Bot className="size-3.5" />
+                Generate emergency supply plan for current load
+              </Button>
+            )}
           </div>
 
           <CardContent className="px-2">
@@ -413,14 +427,16 @@ export default function ForecastsPage() {
                   <span>
                     Standard shipping arrives in {forecast.purchaseOrder.leadTimeDays}d — stock depletes in {depletion!.days}d.
                   </span>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto w-fit p-0 text-xs text-red-700 underline dark:text-red-400"
-                    onClick={() => requestEmergencyPlan({ drugName: item.drugName, surgePct, depletionDays: depletion ? depletion.days : null })}
-                  >
-                    Generate emergency supply plan
-                  </Button>
+                  {canAct && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto w-fit p-0 text-xs text-red-700 underline dark:text-red-400"
+                      onClick={() => requestEmergencyPlan({ drugName: item.drugName, surgePct, depletionDays: depletion ? depletion.days : null })}
+                    >
+                      Generate emergency supply plan
+                    </Button>
+                  )}
                 </div>
               </Callout>
             )}
@@ -451,21 +467,28 @@ export default function ForecastsPage() {
             <div className="flex justify-between text-sm font-semibold"><span>Estimated total</span><span className="font-mono tabular-nums">${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
           </CardContent>
           <CardFooter className="flex flex-wrap gap-2 px-4">
-            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={declineSuggestion} disabled={accepted}>
-              <X data-icon="inline-start" />
-              Decline
-            </Button>
-            <Button variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => setEditingQty(true)} disabled={accepted}>
-              <PencilLine data-icon="inline-start" />
-              Adjust Quantity
-            </Button>
-            <Button size="sm" className="h-8 flex-1 text-xs" disabled={accepted} onClick={acceptSuggestion}>
-              {accepted ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
-              {accepted ? "Draft created" : "Create Draft Order"}
-            </Button>
+            {canAct ? (
+              <>
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={declineSuggestion} disabled={accepted}>
+                  <X data-icon="inline-start" />
+                  Decline
+                </Button>
+                <Button variant="outline" size="sm" className="h-8 flex-1 text-xs" onClick={() => setEditingQty(true)} disabled={accepted}>
+                  <PencilLine data-icon="inline-start" />
+                  Adjust Quantity
+                </Button>
+                <Button size="sm" className="h-8 flex-1 text-xs" disabled={accepted} onClick={acceptSuggestion}>
+                  {accepted ? <CheckCircle2 data-icon="inline-start" /> : <Truck data-icon="inline-start" />}
+                  {accepted ? "Draft created" : "Create Draft Order"}
+                </Button>
+              </>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">Read-only — accepting or declining a restock suggestion is a pharmacist/procurement action.</p>
+            )}
           </CardFooter>
         </Card>
         )}
+      </div>
       </div>
     </div>
   );

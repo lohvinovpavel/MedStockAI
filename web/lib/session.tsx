@@ -17,9 +17,41 @@ export type Me = {
 // it's the one page ops needs when login itself is the thing that's broken.
 const PUBLIC_PATHS = ["/auth", "/version"];
 
+// Build-time opt-in only — NEXT_PUBLIC_ vars are baked into the client
+// bundle, so this can never be flipped on at runtime (a header, a query
+// param) against a real deployment. Set it in web/.env.local when running
+// against no backend/DB at all; leave it unset everywhere else. See
+// .env.local.example.
+export const LOCAL_AUTH_ENABLED = process.env.NEXT_PUBLIC_ALLOW_LOCAL_AUTH === "true";
+const LOCAL_USER_KEY = "medstock-local-user";
+
+function readLocalUser(): Me | null {
+  if (!LOCAL_AUTH_ENABLED || typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(LOCAL_USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Me;
+  } catch {
+    return null;
+  }
+}
+
+// Only a same-app path is a safe redirect target — anything starting "//" or
+// with a scheme is an open-redirect (e.g. //evil.com parses as protocol-
+// relative). Shared by /auth (legacy) and /login (dashboard) so this guard
+// exists in exactly one place rather than two copies drifting apart.
+export function sanitizeNextPath(next: string | null): string {
+  if (next && next.startsWith("/") && !next.startsWith("//")) return next;
+  return "/";
+}
+
 type SessionContextValue = {
   user: Me | null | undefined; // undefined = still checking on first load
   login: (email: string, password: string) => Promise<void>;
+  // No-DB local dev only (see LOCAL_AUTH_ENABLED) — sets a client-side-only
+  // session with no password and no backend call. A no-op when the flag is
+  // off, so callers don't need to check it themselves.
+  loginLocal: (role: string, email: string, fullName: string) => void;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -35,17 +67,28 @@ export function useSession() {
 export function SessionProvider({
   children,
   redirectToAuth = true,
+  authPath = "/auth",
 }: {
   children: React.ReactNode;
-  // Legacy scaffold sends logged-out users to /auth. The mock dashboard
-  // must not — demo-login users have no cookie and still need Analogues.
   redirectToAuth?: boolean;
+  // Where a logged-out user is bounced. The legacy scaffold uses its bare
+  // /auth form; the dashboard points this at /login instead, which is the
+  // one styled sign-in page and shares the same backend cookie.
+  authPath?: string;
 }) {
   const [user, setUser] = useState<Me | null | undefined>(undefined);
   const pathname = usePathname();
   const router = useRouter();
 
   const refresh = useCallback(async () => {
+    // A previously-established local session wins without a network round
+    // trip — when there is no backend/DB, hitting /me is a doomed call on
+    // every page load, not a real check.
+    const local = readLocalUser();
+    if (local) {
+      setUser(local);
+      return;
+    }
     try {
       setUser(await apiFetch("auth", "/me"));
     } catch {
@@ -70,10 +113,10 @@ export function SessionProvider({
   useEffect(() => {
     if (!redirectToAuth) return;
     if (user !== null) return;
-    if (PUBLIC_PATHS.includes(pathname)) return; // guards /auth against redirecting to itself
+    if (pathname === authPath || PUBLIC_PATHS.includes(pathname)) return; // guards the auth page against redirecting to itself
     const qs = typeof window !== "undefined" ? window.location.search : "";
-    router.replace(`/auth?next=${encodeURIComponent(`${pathname}${qs}`)}`);
-  }, [user, pathname, router, redirectToAuth]);
+    router.replace(`${authPath}?next=${encodeURIComponent(`${pathname}${qs}`)}`);
+  }, [user, pathname, router, redirectToAuth, authPath]);
 
   async function login(email: string, password: string) {
     await apiFetch("auth", "/login", {
@@ -85,7 +128,32 @@ export function SessionProvider({
     await refresh();
   }
 
+  function loginLocal(role: string, email: string, fullName: string) {
+    if (!LOCAL_AUTH_ENABLED) return;
+    const localUser: Me = {
+      user_id: `local-${role}`,
+      email,
+      full_name: fullName,
+      role,
+      hospital_id: "local-demo",
+      // Shown wherever hospital_name renders, so a local-only session never
+      // reads like a real signed-in facility.
+      hospital_name: "Local Dev (no backend)",
+    };
+    window.localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(localUser));
+    setUser(localUser);
+  }
+
   async function logout() {
+    const wasLocal = readLocalUser() !== null;
+    window.localStorage.removeItem(LOCAL_USER_KEY);
+    if (wasLocal) {
+      // Never backed by a real cookie — calling the real /logout here would
+      // just be a guaranteed-failing request against a backend that isn't
+      // there.
+      setUser(null);
+      return;
+    }
     try {
       await apiFetch("auth", "/logout", { method: "POST" });
     } finally {
@@ -95,10 +163,10 @@ export function SessionProvider({
     }
   }
 
-  const gated = redirectToAuth && user === undefined && !PUBLIC_PATHS.includes(pathname);
+  const gated = redirectToAuth && user === undefined && pathname !== authPath && !PUBLIC_PATHS.includes(pathname);
 
   return (
-    <SessionContext.Provider value={{ user, login, logout, refresh }}>
+    <SessionContext.Provider value={{ user, login, loginLocal, logout, refresh }}>
       {gated ? null : children}
     </SessionContext.Provider>
   );

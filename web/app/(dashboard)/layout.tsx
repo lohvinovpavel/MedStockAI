@@ -6,6 +6,7 @@ import { FacilityProvider } from "@/lib/facility-context";
 import { InventoryProvider } from "@/lib/inventory-context";
 import { OrdersProvider } from "@/lib/orders-context";
 import { SessionProvider } from "@/lib/session";
+import { useRouteGuard } from "@/lib/rbac";
 import { MobileTopBar, SideNav } from "@/components/dashboard/SideNav";
 import { CopilotDrawer } from "@/components/dashboard/CopilotDrawer";
 import { systemStatus } from "@/lib/mock-data";
@@ -38,18 +39,30 @@ function LiveTelemetry() {
   );
 }
 
-// Persistent dashboard shell: left nav + main content + AI Copilot drawer +
-// status/audit footer. No header at `lg` and above — search lives on the
-// Inventory page and the Copilot drawer has its own open/collapse control.
+// Blocks a page's content while useRouteGuard is mid-redirect, so a role
+// denied a route never gets a frame of it before the bounce lands. The
+// shell (nav, footer) stays up — only the page slot goes blank.
+function RoleGate({ children }: { children: React.ReactNode }) {
+  const denied = useRouteGuard();
+  return denied ? null : <>{children}</>;
+}
+
+// Persistent dashboard shell: left nav + main content + AI MedStock
+// Assistant drawer + status/audit footer. No header at `lg` and above —
+// search lives on the Inventory page and the assistant drawer has its own
+// open/collapse control.
 // Below `lg`, SideNav and CopilotDrawer collapse to nothing inline (there's
 // no room for two fixed side columns on a phone/tablet), so MobileTopBar
 // supplies the only way to reach either — a hamburger Sheet for nav, a
 // button that opens the copilot as a Sheet. Mock-data driven — see
-// lib/mock-data.ts. Session is available (Analogues / Prescribe need it)
-// but does not gate or bounce to /auth — demo-login users have no cookie.
+// lib/mock-data.ts — but the route itself is real-backend gated: an
+// unauthenticated visitor is bounced to /login (same services/auth cookie
+// the legacy scaffold's /auth uses), and a signed-in visitor whose role
+// can't see this route (lib/rbac.ts) is bounced to their own home page,
+// before any page here renders.
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider redirectToAuth={false}>
+    <SessionProvider authPath="/login">
       <FacilityProvider>
       <InventoryProvider>
       <OrdersProvider>
@@ -58,7 +71,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <MobileTopBar />
             <div className="flex min-h-0 flex-1">
               <SideNav />
-              <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+              <main className="min-w-0 flex-1 overflow-y-auto"><RoleGate>{children}</RoleGate></main>
               <CopilotDrawer />
             </div>
             <footer className="flex h-7 shrink-0 flex-wrap items-center gap-2 overflow-x-auto border-t bg-neutral-950 px-3 font-mono text-[10px] tracking-wide text-neutral-500">
