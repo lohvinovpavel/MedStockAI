@@ -75,11 +75,15 @@ type Forecast = {
   reason: string | null;
 };
 
-const chartConfig: ChartConfig = {
+const usageChartConfig: ChartConfig = {
   actual: { label: "Actual usage", color: "var(--chart-2)" },
   forecast: { label: "Forecast p50", color: "var(--chart-1)" },
   band: { label: "p10–p90 band", color: "var(--chart-1)" },
-  stock: { label: "Projected stock", color: "var(--chart-3)" },
+};
+
+const stockChartConfig: ChartConfig = {
+  stock: { label: "Projected stock (p50)", color: "var(--chart-3)" },
+  stockBand: { label: "if demand runs low–high", color: "var(--chart-3)" },
 };
 
 // Surge tiers driving the badge tone — 100% is the stored run's baseline,
@@ -187,16 +191,30 @@ export default function ForecastsPage() {
   const chartData = useMemo(() => {
     if (!forecast) return [];
     // Stock burn-down: current on-hand minus cumulative forecast usage —
-    // the decreasing curve that hits zero at the red depletion marker. The
-    // usage lines answer "how fast is it going", this one answers "how much
-    // is left". Clipped at zero: shelves don't go negative.
+    // the decreasing curve that hits zero at the red depletion marker. Its
+    // band comes from the usage quantiles: p10 usage drains slowest (upper
+    // edge), p90 fastest (lower edge). Clipped at zero: shelves don't go
+    // negative. Historical stock-per-day is not recorded anywhere (only a
+    // live snapshot exists until B4 receiving events land), so the stock
+    // series honestly starts at today's on-hand, not in the past.
     const onHand = forecast.depletion?.quantity ?? null;
-    let remaining = onHand;
+    let rem50 = onHand;
+    let remSlow = onHand; // p10 usage — stock lasts longer
+    let remFast = onHand; // p90 usage — stock drains sooner
     const rows = [
-      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined, stock: null as number | null })),
+      ...forecast.history.map((p) => ({ date: p.date.slice(5), actual: p.quantity as number | null, forecast: null as number | null, band: undefined as [number, number] | undefined, stock: null as number | null, stockBand: undefined as [number, number] | undefined })),
       ...forecast.forecast.map((p) => {
-        if (remaining != null) remaining = Math.max(0, remaining - p.p50);
-        return { date: p.date.slice(5), actual: null, forecast: p.p50, band: [p.p10, p.p90] as [number, number], stock: remaining };
+        if (rem50 != null) rem50 = Math.max(0, rem50 - p.p50);
+        if (remSlow != null) remSlow = Math.max(0, remSlow - p.p10);
+        if (remFast != null) remFast = Math.max(0, remFast - p.p90);
+        return {
+          date: p.date.slice(5),
+          actual: null,
+          forecast: p.p50,
+          band: [p.p10, p.p90] as [number, number],
+          stock: rem50,
+          stockBand: remFast != null && remSlow != null ? ([remFast, remSlow] as [number, number]) : undefined,
+        };
       }),
     ];
     // Bridge point: give the forecast series (and its band, and the
@@ -206,7 +224,13 @@ export default function ForecastsPage() {
     const boundary = forecast.history.length - 1;
     if (boundary >= 0 && forecast.forecast.length > 0) {
       const lastActual = forecast.history[boundary].quantity;
-      rows[boundary] = { ...rows[boundary], forecast: lastActual, band: [lastActual, lastActual], stock: onHand };
+      rows[boundary] = {
+        ...rows[boundary],
+        forecast: lastActual,
+        band: [lastActual, lastActual],
+        stock: onHand,
+        stockBand: onHand != null ? [onHand, onHand] : undefined,
+      };
     }
     return rows;
   }, [forecast]);
@@ -340,31 +364,53 @@ export default function ForecastsPage() {
                   </p>
                 </div>
               ) : (
-                <ChartContainer config={chartConfig} className="aspect-auto h-72 w-full">
-                  <ComposedChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
-                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} interval={6} />
-                    <YAxis tickLine={false} axisLine={false} width={36} fontSize={10} />
-                    {/* The burn-down lives on its own axis: stock on hand is an
-                        order of magnitude above daily usage, and on the usage
-                        axis it would flatten every other line. */}
-                    <YAxis yAxisId="stock" orientation="right" tickLine={false} axisLine={false} width={40} fontSize={10} />
-                    <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
-                    <Area dataKey="band" stroke="none" fill="var(--color-forecast)" fillOpacity={0.15} isAnimationActive={false} connectNulls />
-                    <Line dataKey="actual" stroke="var(--color-actual)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
-                    <Line dataKey="forecast" stroke="var(--color-forecast)" strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
-                    <Line yAxisId="stock" dataKey="stock" stroke="var(--color-stock)" strokeWidth={2} strokeDasharray="2 2" dot={false} isAnimationActive={false} connectNulls={false} />
-                    {todayLabel && (
-                      <ReferenceLine x={todayLabel} stroke="var(--muted-foreground)" strokeDasharray="2 2" strokeWidth={1}
-                        label={{ value: "Data through", position: "insideBottomLeft", fill: "var(--muted-foreground)", fontSize: 10 }} />
-                    )}
-                    {depletionLabel && (
-                      <ReferenceLine x={depletionLabel} stroke="var(--color-destructive, #ef4444)" strokeDasharray="4 3" strokeWidth={1.5}
-                        label={{ value: `Stockout · ${forecast.depletion!.days}d`, position: "insideTopLeft", fill: "#ef4444", fontSize: 10 }} />
-                    )}
-                    <ChartLegend content={<ChartLegendContent />} />
-                  </ComposedChart>
-                </ChartContainer>
+                <div className="flex flex-col gap-1">
+                  {/* Two date-aligned plots: usage answers "how fast is it
+                      going", stock answers "how much is left". Same x-range,
+                      so the data-through boundary and the depletion marker
+                      line up vertically between them. */}
+                  <p className="px-2 text-[11px] font-medium text-muted-foreground">Usage per day</p>
+                  <ChartContainer config={usageChartConfig} className="aspect-auto h-48 w-full">
+                    <ComposedChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }} syncId="forecast">
+                      <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                      <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} interval={6} />
+                      <YAxis tickLine={false} axisLine={false} width={36} fontSize={10} />
+                      <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                      <Area dataKey="band" stroke="none" fill="var(--color-forecast)" fillOpacity={0.15} isAnimationActive={false} connectNulls />
+                      <Line dataKey="actual" stroke="var(--color-actual)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
+                      <Line dataKey="forecast" stroke="var(--color-forecast)" strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} connectNulls={false} />
+                      {todayLabel && (
+                        <ReferenceLine x={todayLabel} stroke="var(--muted-foreground)" strokeDasharray="2 2" strokeWidth={1}
+                          label={{ value: "Data through", position: "insideBottomLeft", fill: "var(--muted-foreground)", fontSize: 10 }} />
+                      )}
+                      {depletionLabel && (
+                        <ReferenceLine x={depletionLabel} stroke="var(--color-destructive, #ef4444)" strokeDasharray="4 3" strokeWidth={1} />
+                      )}
+                      <ChartLegend content={<ChartLegendContent />} />
+                    </ComposedChart>
+                  </ChartContainer>
+                  <p className="px-2 pt-2 text-[11px] font-medium text-muted-foreground">
+                    Stock on hand — projected from today&apos;s snapshot (per-day stock history isn&apos;t recorded yet)
+                  </p>
+                  <ChartContainer config={stockChartConfig} className="aspect-auto h-40 w-full">
+                    <ComposedChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }} syncId="forecast">
+                      <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                      <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={10} interval={6} />
+                      <YAxis tickLine={false} axisLine={false} width={36} fontSize={10} />
+                      <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                      <Area dataKey="stockBand" stroke="none" fill="var(--color-stock)" fillOpacity={0.15} isAnimationActive={false} connectNulls />
+                      <Line dataKey="stock" stroke="var(--color-stock)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls={false} />
+                      {todayLabel && (
+                        <ReferenceLine x={todayLabel} stroke="var(--muted-foreground)" strokeDasharray="2 2" strokeWidth={1} />
+                      )}
+                      {depletionLabel && (
+                        <ReferenceLine x={depletionLabel} stroke="var(--color-destructive, #ef4444)" strokeDasharray="4 3" strokeWidth={1.5}
+                          label={{ value: `Stockout · ${forecast.depletion!.days}d`, position: "insideTopLeft", fill: "#ef4444", fontSize: 10 }} />
+                      )}
+                      <ChartLegend content={<ChartLegendContent />} />
+                    </ComposedChart>
+                  </ChartContainer>
+                </div>
               )}
             </CardContent>
           </Card>
