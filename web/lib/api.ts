@@ -67,11 +67,18 @@ export async function apiFetch(service: ServiceName, path: string, init?: Reques
  * `{event: string, data: unknown}` so a caller can narrow on `.event` and
  * get the right `.data` shape for free.
  */
+export type PatientCandidate = { id: string; full_name: string; date_of_birth: string };
+
 export type CopilotEvent =
   | { event: "delta"; data: { text: string } }
   | { event: "tool_start"; data: { name: string; args: Record<string, unknown> } }
   | { event: "tool_end"; data: { name: string; ok: boolean; error?: string } }
   | { event: "degraded"; data: { reason: string } }
+  // A name-based patient lookup (services/analogue/app/copilot.py) matched
+  // more than one patient. Candidates carry PHI (name + DOB) precisely
+  // because they never went through Gemini -- this event bypasses the model
+  // entirely so the user picks straight from what the DB returned.
+  | { event: "patient_disambiguation"; data: { tool: string; query: string; candidates: PatientCandidate[] } }
   | { event: "done"; data: { request_id: string } };
 
 export type CopilotMessage = { role: "user" | "model"; text: string };

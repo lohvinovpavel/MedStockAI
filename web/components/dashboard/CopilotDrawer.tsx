@@ -18,7 +18,7 @@ import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { forecastFor, inventoryFor, isoPlusDays, parLevel, suppliers } from "@/lib/mock-data";
-import { apiFetch, streamCopilotChat, type CopilotMessage } from "@/lib/api";
+import { apiFetch, streamCopilotChat, type CopilotMessage, type PatientCandidate } from "@/lib/api";
 import {
   CERT_LABELS,
   CERT_TONE,
@@ -72,6 +72,10 @@ type Message = {
   // read as if the assistant found nothing to say.
   degraded?: boolean;
   tools?: ToolActivity[];
+  // A name the user typed matched more than one patient — rendered as a
+  // picker (name, DOB, ID) instead of/alongside the message text. Cleared
+  // once a candidate is picked so the card doesn't linger as a dead control.
+  patientPicker?: { query: string; candidates: PatientCandidate[] };
 };
 
 let nextId = 1;
@@ -615,6 +619,15 @@ export function CopilotDrawer() {
           }));
         } else if (evt.event === "degraded") {
           applyToReply((msg) => ({ ...msg, text: evt.data.reason, degraded: true }));
+        } else if (evt.event === "patient_disambiguation") {
+          const { query, candidates } = evt.data;
+          applyToReply((msg) => ({
+            ...msg,
+            text:
+              msg.text ||
+              `I found ${candidates.length} patients matching "${query}" — which one did you mean?`,
+            patientPicker: { query, candidates },
+          }));
         }
         // "done" carries only a request_id — nothing left to apply to the message.
       }
@@ -631,6 +644,22 @@ export function CopilotDrawer() {
         setPending(false);
       }
     }
+  }
+
+  // The candidate list came straight from the backend's disambiguation event,
+  // never through Gemini -- picking one must keep it that way. The resend
+  // carries only the UUID, exactly what a physician would have pasted
+  // directly before this feature existed, so the model can retry the same
+  // tool call already in its history with a resolved id instead of a name.
+  function pickPatient(messageId: string, candidate: PatientCandidate) {
+    if (pending) return;
+    const priorMessages = messages.map((msg) =>
+      msg.id === messageId ? { ...msg, patientPicker: undefined } : msg,
+    );
+    const text = `Use patient_id ${candidate.id} for my previous request.`;
+    setMessages([...priorMessages, { id: id(), role: "user", text }]);
+    setPending(true);
+    void streamReply(text, priorMessages);
   }
 
   function send() {
@@ -752,6 +781,24 @@ export function CopilotDrawer() {
                     <Copy className="size-3" />
                     Copy
                   </Button>
+                </div>
+              )}
+              {m.patientPicker && (
+                <div className="flex w-[92%] flex-col gap-1">
+                  {m.patientPicker.candidates.map((c) => (
+                    <Button
+                      key={c.id}
+                      variant="outline"
+                      size="sm"
+                      className="h-auto justify-between gap-2 px-2.5 py-1.5 text-left text-xs"
+                      onClick={() => pickPatient(m.id, c)}
+                    >
+                      <span className="font-medium">{c.full_name}</span>
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        DOB {c.date_of_birth} · {c.id.slice(0, 8)}
+                      </span>
+                    </Button>
+                  ))}
                 </div>
               )}
             </div>

@@ -11,8 +11,6 @@ Phase 4 rules out for
 Add it here, for real, once that logic exists somewhere.
 """
 
-import uuid
-
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -27,7 +25,7 @@ from ...forecasting import at_risk_skus as _at_risk_skus
 from ...forecasting import latest_run as _latest_run
 from ...models import CertificationFinding, DrugCertification, Patient, StockSnapshot
 from ...patient import age_band_from_dob
-from ...patient_assess import NOT_FOUND, UNAVAILABLE
+from ...patient_assess import NOT_FOUND, UNAVAILABLE, resolve_patient_ref
 from ...patient_assess import assess_for_drug as _assess_for_drug
 from ...patient_assess import explain_assessment as _explain_assessment
 from ...review_queue import PROFILE_STATUSES, accept_rate
@@ -316,7 +314,14 @@ def explore_ndc(args: ExploreNdcArgs, principal: Principal) -> dict:
 
 
 class PatientRegimenArgs(BaseModel):
-    patient_id: str = Field(description="UUID of the patient")
+    patient_id: str = Field(
+        description=(
+            "The patient's UUID if you already have it, otherwise their full name "
+            "exactly as the user typed it (e.g. 'John Smith'). A name that matches "
+            "more than one patient ends this turn with a disambiguation prompt for "
+            "the user -- do not guess which one they meant."
+        )
+    )
 
 
 @tool(
@@ -331,10 +336,11 @@ class PatientRegimenArgs(BaseModel):
     args=PatientRegimenArgs,
 )
 def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
-    try:
-        patient_uuid = uuid.UUID(args.patient_id)
-    except ValueError:
-        return {"error": "patient_id must be a UUID"}
+    # PatientAmbiguous propagates uncaught -- the copilot route turns it into
+    # a disambiguation event before any name/DOB can reach Gemini.
+    patient_uuid = resolve_patient_ref(principal, args.patient_id)
+    if patient_uuid is None:
+        return {"error": "patient not found"}
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_uuid)
@@ -353,7 +359,14 @@ def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
 
 
 class AssessPatientArgs(BaseModel):
-    patient_id: str = Field(description="UUID of the patient")
+    patient_id: str = Field(
+        description=(
+            "The patient's UUID if you already have it, otherwise their full name "
+            "exactly as the user typed it (e.g. 'John Smith'). A name that matches "
+            "more than one patient ends this turn with a disambiguation prompt for "
+            "the user -- do not guess which one they meant."
+        )
+    )
     rxcui: str = Field(description="RxCUI of the drug being considered")
 
 

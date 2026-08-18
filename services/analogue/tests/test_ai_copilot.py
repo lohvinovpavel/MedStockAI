@@ -718,3 +718,82 @@ def test_system_prompt_names_role_gated_tools_the_model_may_not_call(monkeypatch
         "assess_patient_for_drug",
         "explain_assessment",
     }
+
+
+def test_ambiguous_patient_name_ends_the_turn_with_a_disambiguation_event(monkeypatch, audit_calls):
+    """A name matching more than one patient must never reach a second Gemini
+    round -- the candidate list (name + DOB) goes straight to the frontend,
+    never into a function_response."""
+    from medstock_shared.patient_assess import PatientAmbiguous
+
+    fake = _FakeClient(
+        turns=[
+            [_FakeChunk(function_calls=[SimpleNamespace(name="get_patient_regimen", args={"patient_id": "John Smith"})])],
+        ]
+    )
+    monkeypatch.setattr("app.copilot.client", lambda: fake)
+
+    candidates = [
+        {"id": "11111111-1111-1111-1111-111111111111", "full_name": "John Smith", "date_of_birth": "1970-01-01"},
+        {"id": "22222222-2222-2222-2222-222222222222", "full_name": "John Smith", "date_of_birth": "1985-06-12"},
+    ]
+
+    async def fake_execute(name, args, principal):
+        raise PatientAmbiguous(candidates)
+
+    monkeypatch.setattr("app.copilot.execute", fake_execute)
+
+    res = _client(Principal("user-2", "hospital-1", "physician")).post(
+        "/copilot/chat", json={"messages": [{"role": "user", "text": "check John Smith"}]}
+    )
+    events = _events(res.text)
+    assert [e for e, _ in events] == ["tool_start", "tool_end", "patient_disambiguation", "done"]
+    assert events[1][1] == {"name": "get_patient_regimen", "ok": False, "error": "ambiguous patient name"}
+    assert events[2][1] == {"tool": "get_patient_regimen", "query": "John Smith", "candidates": candidates}
+    assert len(fake.calls) == 1  # never continued to a second round
+
+    assert audit_calls[0]["outcome"] == "disambiguation"
+    assert audit_calls[0]["tools_called"] == [
+        {"name": "get_patient_regimen", "ok": False, "error": "ambiguous patient name"}
+    ]
+
+
+def test_resolve_patient_ref_passes_a_uuid_through_without_a_name_search(monkeypatch):
+    from medstock_shared.patient_assess import resolve_patient_ref
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("should not search by name for a real UUID")
+
+    monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", fail_if_called)
+    result = resolve_patient_ref(PHARMACIST, "11111111-1111-1111-1111-111111111111")
+    assert str(result) == "11111111-1111-1111-1111-111111111111"
+
+
+def test_resolve_patient_ref_raises_patient_ambiguous_for_a_shared_name(monkeypatch):
+    from medstock_shared.patient_assess import PatientAmbiguous, resolve_patient_ref
+
+    rows = [
+        {"id": "11111111-1111-1111-1111-111111111111", "full_name": "John Smith", "date_of_birth": "1970-01-01"},
+        {"id": "22222222-2222-2222-2222-222222222222", "full_name": "John Smith", "date_of_birth": "1985-06-12"},
+    ]
+    monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", lambda p, n: rows)
+
+    with pytest.raises(PatientAmbiguous) as exc_info:
+        resolve_patient_ref(PHARMACIST, "John Smith")
+    assert exc_info.value.candidates == rows
+
+
+def test_resolve_patient_ref_returns_none_for_no_match(monkeypatch):
+    from medstock_shared.patient_assess import resolve_patient_ref
+
+    monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", lambda p, n: [])
+    assert resolve_patient_ref(PHARMACIST, "Nobody Here") is None
+
+
+def test_resolve_patient_ref_resolves_silently_for_one_match(monkeypatch):
+    from medstock_shared.patient_assess import resolve_patient_ref
+
+    rows = [{"id": "11111111-1111-1111-1111-111111111111", "full_name": "Jane Doe", "date_of_birth": "1970-01-01"}]
+    monkeypatch.setattr("medstock_shared.patient_assess.find_patients_by_name", lambda p, n: rows)
+    result = resolve_patient_ref(PHARMACIST, "Jane Doe")
+    assert str(result) == "11111111-1111-1111-1111-111111111111"

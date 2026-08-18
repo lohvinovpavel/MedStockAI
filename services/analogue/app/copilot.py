@@ -38,6 +38,7 @@ from medstock_shared.ai import client, shared_breaker, write_audit
 from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
+from medstock_shared.patient_assess import PatientAmbiguous
 from pydantic import BaseModel
 
 copilot = APIRouter()
@@ -244,6 +245,21 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
                 result = {"error": str(exc)}
                 tools_called.append({"name": name, "ok": False, "error": str(exc)})
                 yield _sse("tool_end", {"name": name, "ok": False, "error": str(exc)})
+            except PatientAmbiguous as exc:
+                # A name matched more than one patient. The candidate list is
+                # PHI (name + DOB) -- it goes straight to the frontend's own
+                # picker, never into a function_response Gemini would read, and
+                # the turn ends here rather than continuing the round loop.
+                yield _sse("tool_end", {"name": name, "ok": False, "error": "ambiguous patient name"})
+                yield _sse("patient_disambiguation", {
+                    "tool": name,
+                    "query": str(args.get("patient_id") or ""),
+                    "candidates": exc.candidates,
+                })
+                tools_called.append({"name": name, "ok": False, "error": "ambiguous patient name"})
+                _write_copilot_audit(principal, request_id, "disambiguation", started, tools_called)
+                yield _sse("done", {"request_id": request_id})
+                return
             response_parts.append(types.Part.from_function_response(name=name, response=result))
         contents.append(types.Content(role="user", parts=response_parts))
 

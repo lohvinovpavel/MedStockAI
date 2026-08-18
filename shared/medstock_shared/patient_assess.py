@@ -123,6 +123,67 @@ def adr_signals_for(rxcuis: list[str]) -> list[AdrSignalRow]:
     ]
 
 
+# A physician doesn't carry patient UUIDs around -- they know a name. Capped
+# the same way every other list-shaped tool result is (sweep_shelf_certificates,
+# list_storage_excursions, ...): this feeds a disambiguation picker, not a
+# search results page.
+_NAME_MATCH_LIMIT = 8
+
+
+def find_patients_by_name(principal: Principal, name: str) -> list[dict]:
+    """Hospital-scoped, case-insensitive substring match on full_name.
+
+    Returns id/full_name/date_of_birth -- PHI, same as the Patient row itself.
+    Callers must keep this out of any Gemini-bound tool result (see
+    `resolve_patient_ref`, which raises rather than returning it) and hand it
+    only to the frontend's own disambiguation UI.
+    """
+    name = name.strip()
+    if not name:
+        return []
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        rows = session.execute(
+            select(Patient.id, Patient.full_name, Patient.date_of_birth)
+            .where(
+                Patient.hospital_id == principal.hospital_id,
+                Patient.full_name.ilike(f"%{name}%"),
+            )
+            .order_by(Patient.full_name)
+            .limit(_NAME_MATCH_LIMIT)
+        ).all()
+    return [
+        {"id": str(pid), "full_name": full_name, "date_of_birth": dob.isoformat()}
+        for pid, full_name, dob in rows
+    ]
+
+
+class PatientAmbiguous(Exception):
+    """Raised by `resolve_patient_ref` when a name matches more than one
+    patient. Carries the candidate list so the copilot route can short-circuit
+    the turn straight to a disambiguation UI event instead of letting a
+    name+DOB list reach Gemini as a tool result."""
+
+    def __init__(self, candidates: list[dict]):
+        super().__init__(f"{len(candidates)} patients match")
+        self.candidates = candidates
+
+
+def resolve_patient_ref(principal: Principal, ref: str) -> uuid.UUID | None:
+    """A tool arg that may already be a UUID (from a prior tool result, or an
+    old habit) or a name the user just typed. Returns None when nothing
+    matches; raises PatientAmbiguous when more than one patient does."""
+    try:
+        return uuid.UUID(str(ref))
+    except ValueError:
+        pass
+    matches = find_patients_by_name(principal, ref)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise PatientAmbiguous(matches)
+    return uuid.UUID(matches[0]["id"])
+
+
 def record_assessment(principal: Principal, vector: PatientVector, results: list[dict]) -> str:
     """Write the decision trail row, and return the request id.
 
@@ -178,11 +239,16 @@ def _finding_dict(f) -> dict:
 def assess_for_drug(principal: Principal, patient_id: str, rxcui: str) -> dict:
     """One patient, one candidate drug: fetch, assess, log. Same inputs and
     same audit trail `POST /cart-check` produces for one cart line -- this is
-    the DOC-1 promotion, used by the copilot's `assess_patient_for_drug`."""
-    try:
-        patient_uuid = uuid.UUID(str(patient_id))
-    except ValueError:
-        return {"error": "patient_id must be a UUID"}
+    the DOC-1 promotion, used by the copilot's `assess_patient_for_drug`.
+
+    `patient_id` may be a UUID or a name -- see `resolve_patient_ref`.
+    PatientAmbiguous propagates to the caller uncaught; the copilot route is
+    the one place that knows how to turn it into a disambiguation prompt
+    without leaking names/DOBs into Gemini's context.
+    """
+    patient_uuid = resolve_patient_ref(principal, patient_id)
+    if patient_uuid is None:
+        return {"error": "patient not found"}
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_uuid)
