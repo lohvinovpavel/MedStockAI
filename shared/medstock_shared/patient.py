@@ -315,6 +315,13 @@ def _factor_matches(vector: PatientVector, factor: dict) -> str | None:
     characteristics matched — "eGFR 30-44, age 75-89" is reviewable, "3 factors"
     is not.
     """
+    if not isinstance(factor, dict):
+        # risk_factors is model-extracted JSONB. Validation rejects malformed
+        # factors on the way in, but rows predate the validator and a hand-edited
+        # one is a support action away -- and this runs inside an assessment a
+        # physician is waiting on. A factor we cannot read is not a match; it is
+        # not grounds for a 500.
+        return None
     feature, op, value = factor.get("feature"), factor.get("op"), factor.get("value")
     actual = getattr(vector, feature, None)
     if actual in (None, "unknown", ()):
@@ -582,20 +589,66 @@ def age_band_from_dob(dob: date, today: date | None = None) -> str:
     return "90+"
 
 
+# KDIGO G-stage boundaries, which is also the vocabulary PROGNOSIS_FEATURES
+# offers the label extractor. Kept as (floor, band) so the mapping reads the way
+# the guideline states it, and so a boundary change is one number.
+EGFR_BAND_FLOORS: tuple[tuple[float, str], ...] = (
+    (90.0, ">=90"),
+    (60.0, "60-89"),
+    (45.0, "45-59"),
+    (30.0, "30-44"),
+    (15.0, "15-29"),
+)
+
+
+def egfr_band_from_value(value: float | None) -> str:
+    """Map a measured eGFR to the ruleset's band vocabulary.
+
+    Stored as the lab's number and banded here rather than banded on the way in:
+    the boundaries are a ruleset concept, and a profile re-scored after they move
+    should reflect the measurement, not the band that was current when it was
+    filed. Same reasoning as `age_band_from_dob` deriving from a date of birth
+    rather than storing an age.
+    """
+    if value is None:
+        return "unknown"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if numeric < 0:
+        return "unknown"
+    for floor, band in EGFR_BAND_FLOORS:
+        if numeric >= floor:
+            return band
+    return "<15"
+
+
 def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> PatientVector:
     """Strip PHI from a Patient ORM row into the de-identified rules vector.
 
     Demo exception: the DB row may hold name/DOB; the vector never does.
+
+    Everything below the identifiers is read straight through, and that is the
+    point: for as long as the record had no columns for sex, eGFR, hepatic
+    status or prior reactions, this could only default them to "unknown", and
+    three findings worth 95 of the 220 weight points -- PRIOR_ADR_SAME_CLASS,
+    RENAL_DOSE_EXCEEDED, HEPATIC_IMPAIRED -- could not fire for anybody.
     """
     allergies = tuple(str(a) for a in (getattr(row, "allergy_codes", None) or ()))
     conditions = tuple(str(c) for c in (getattr(row, "condition_codes", None) or ()))
     phenotypes = tuple(str(p) for p in (getattr(row, "pgx_phenotypes", None) or ()))
+    prior_adr = tuple(str(r) for r in (getattr(row, "prior_adr_rxcuis", None) or ()))
     dob = getattr(row, "date_of_birth", None)
     return PatientVector(
         age_band=age_band_from_dob(dob) if isinstance(dob, date) else "unknown",
+        sex=str(getattr(row, "sex", None) or "unknown"),
+        egfr_band=egfr_band_from_value(getattr(row, "egfr_value", None)),
+        hepatic=str(getattr(row, "hepatic", None) or "unknown"),
         allergy_codes=allergies,
         condition_codes=conditions,
         active_rxcuis=tuple(str(r) for r in active_rxcuis),
+        prior_adr_rxcuis=prior_adr,
         # A phenotype is not an identifier: it is a band-like clinical fact, the
         # same class of thing as the eGFR band beside it.
         pgx_phenotypes=phenotypes,
