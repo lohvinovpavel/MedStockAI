@@ -10,6 +10,7 @@ import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { auditLogFor, formatAuditTimestamp, inventoryFor, type AuditActorType } from "@/lib/mock-data";
 import { CertificationBadge, useCertificationStatuses } from "@/components/CertificationBadge";
+import { DecisionTrail } from "@/components/dashboard/DecisionTrail";
 import { cn } from "@/lib/utils";
 
 const ACTOR_STYLE: Record<AuditActorType, { icon: typeof Bot; className: string }> = {
@@ -105,13 +106,19 @@ export default function AuditPage() {
         </CardContent>
       </Card>
 
+      {/* The real audit trail, from assessment_log. The SKU timeline below is
+          still demo data (lib/mock-data.ts) — keeping them visibly separate
+          matters more than making the page look uniform, because one of them
+          is evidence and the other is illustration. */}
+      <DecisionTrail />
+
       <Card className="gap-3 py-4">
         <CardHeader className="px-4">
           <CardTitle className="flex items-center gap-1.5 text-sm">
             <ScrollText className="size-4 text-muted-foreground" />
             Event history
           </CardTitle>
-          <CardDescription className="text-xs">Newest first · clinician, AI pipeline, and regulator events.</CardDescription>
+          <CardDescription className="text-xs">Newest first · clinician, AI pipeline, and regulator events. <span className="text-muted-foreground/70">Demo data.</span></CardDescription>
         </CardHeader>
         <CardContent className="px-4">
           {entries.length === 0 ? (

@@ -137,3 +137,97 @@ export function approvalStance(role: string | undefined): ApprovalStance {
   if (role === undefined) return "unconfirmed";
   return role === "pharmacist" ? "allowed" : "denied";
 }
+
+/** One row of the decision trail — `GET /assessments`. */
+export type AssessmentRow = {
+  request_id: string;
+  actor_id: string;
+  created_at: string | null;
+  ruleset_version: string;
+  drugs: string[];
+  verdict: string | null;
+};
+
+/** One finding's share of a score — `GET /explain/{request_id}`. */
+export type Contribution = {
+  code: string;
+  weight: number | null;
+  stage: number | null;
+  source: string | null;
+  share: number | null;
+};
+
+export type Explanation = {
+  request_id: string;
+  assessed_by: string;
+  assessed_at: string | null;
+  ruleset_version: string;
+  current_ruleset_version: string;
+  explained_with_original_ruleset: boolean;
+  caveat: string | null;
+  assessments: {
+    rxcui: string;
+    verdict: string;
+    score: number | null;
+    blocked: boolean;
+    band: { from_score: number; verdict: string; next_verdict: string | null; points_to_next: number | null } | null;
+    contributions: Contribution[];
+  }[];
+};
+
+/**
+ * The decision trail behind the audit page.
+ *
+ * Shares `QueueState` with the review queue so the four ways a list can be
+ * absent — loading, not signed in, wrong role, service down — stay one
+ * vocabulary rather than two that drift.
+ */
+export function useAssessments() {
+  const [rows, setRows] = useState<AssessmentRow[] | null>(null);
+  const [state, setState] = useState<QueueState>("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("patients", "/assessments?limit=25")
+      .then((body) => {
+        if (cancelled) return;
+        setRows((body?.items ?? []) as AssessmentRow[]);
+        setState("ok");
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setState(stateFor(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { rows, state };
+}
+
+/** Fetched only when a row is opened — nobody reads every explanation. */
+export function useExplanation(requestId: string | null) {
+  const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestId) {
+      setExplanation(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    apiFetch("patients", `/explain/${encodeURIComponent(requestId)}`)
+      .then((body) => {
+        if (!cancelled) setExplanation(body as Explanation);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [requestId]);
+
+  return { explanation, error };
+}

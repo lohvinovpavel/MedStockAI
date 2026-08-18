@@ -547,6 +547,25 @@ def post_assess(
     }
 
 
+# Worst first — a batch is as serious as its most serious line.
+_VERDICT_RANK = ("blocked", "red", "amber", "green")
+
+
+def _worst_verdict(result: dict) -> str | None:
+    """The gravest verdict in one assessment batch.
+
+    A blocked line has no score, so it cannot be ranked by number; ranking by
+    name keeps "one of these four drugs is contraindicated" from being filed
+    under the green of the other three.
+    """
+    seen = {
+        str(a.get("verdict") or "").lower()
+        for a in (result.get("assessments") or [])
+        if a.get("verdict")
+    }
+    return next((v for v in _VERDICT_RANK if v in seen), None)
+
+
 def _band_for(score: int | None) -> dict | None:
     """Which band turned this score into this verdict, and what the next one is.
 
@@ -563,6 +582,52 @@ def _band_for(score: int | None) -> dict | None:
         "next_verdict": str(above[0][1]) if above else None,
         "points_to_next": (above[0][0] - score) if above else None,
     }
+
+
+@patients.get("/assessments")
+def list_assessments(
+    limit: int = 25,
+    principal: Principal = Depends(require("profile:explain")),
+) -> dict:
+    """The decision trail, newest first — every assessment this hospital made.
+
+    `/explain/{request_id}` could always explain a decision, but only if you
+    already knew its id, which nothing told you. That made the audit trail
+    §1.3 describes real in the database and unreachable from anywhere else.
+    This is the index that closes it.
+
+    Scoped to the caller's hospital, and it carries **no patient identifier** —
+    the same property the table is built on. What a reader gets is who asked,
+    when, what came back, and a request id to ask why.
+    """
+    limit = max(1, min(int(limit), 200))
+    try:
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            rows = session.scalars(
+                select(AssessmentLog)
+                .where(AssessmentLog.hospital_id == principal.hospital_id)
+                .order_by(AssessmentLog.created_at.desc())
+                .limit(limit)
+            ).all()
+            items = [
+                {
+                    "request_id": r.request_id,
+                    "actor_id": r.actor_id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "ruleset_version": r.ruleset_version,
+                    # A summary, not the decision: enough to pick a row to open.
+                    "drugs": [
+                        a.get("rxcui") for a in (dict(r.result or {}).get("assessments") or [])
+                    ],
+                    # The worst verdict in the batch is what a reader scans for.
+                    "verdict": _worst_verdict(dict(r.result or {})),
+                }
+                for r in rows
+            ]
+    except (ProgrammingError, SQLAlchemyError) as exc:
+        raise HTTPException(status_code=503, detail="assessment log unavailable") from exc
+
+    return {"items": items, "limit": limit, "current_ruleset_version": RULESET_VERSION}
 
 
 @patients.get("/explain/{request_id}")
