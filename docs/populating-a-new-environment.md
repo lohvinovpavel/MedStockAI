@@ -27,7 +27,7 @@ Run the feeds once, by hand, after migrating.
 | `adr_signal` (Tier 1) | `ingest-faers` | Sundays 07:00 | — |
 | `drug_risk_profile` (PP-3) | `ingest-prognosis` | Sundays 06:00 | **`GEMINI_API_KEY`** |
 | `assessment_log` | written by `/assess` and `/cart-check` | on use | — |
-| `patient` (demo) | `seed-patients-job.yaml` | every dev deploy | — |
+| `patient` (demo) | `seed-patients-job.yaml` | opt-in per deploy | — |
 
 `ingest-faers` depends on the formulary — it costs one openFDA call per drug, so
 it needs a drug list rather than "everything". Seed stock before it or it has
@@ -43,16 +43,31 @@ CPIC, accessdata.fda.gov and a news index.
 
 ## 2. Run them once, in this order
 
+**On the shared dev cluster, prefer the workflow.** `deploy-dev.yml`'s manual
+dispatch has opt-in inputs — `seed_dev_users`, `seed_demo`, `seed_stock`,
+`seed_patients`, `seed_feeds` — chained with `needs:`/`if:` in that order, so
+checking several at once runs them in the right sequence instead of racing
+(a race between `seed` and `seed_patients` is what produced three failed
+`seed-patients` runs before this was fixed). Checking none of them just
+deploys. The commands below are what each input does under the hood — reach
+for them by hand for a from-scratch cluster, local troubleshooting, or a
+non-dev environment this workflow doesn't target.
+
 ```bash
 kubectl -n medstock apply -f deploy/k8s/migrate-job.yaml
 kubectl -n medstock wait --for=condition=complete job/migrate --timeout=300s
 
+# Full demo dataset -- facilities, suppliers, 3yr consumption, forecast,
+# wave5 orders/review decisions. Needs ENVIRONMENT=demo (docs/demo-data.md
+# §2); the Job sets it. Skippable if this environment already has it.
+kubectl -n medstock apply -f deploy/k8s/seed-demo-job.yaml
+kubectl -n medstock wait --for=condition=complete job/seed-demo --timeout=600s
+
 kubectl -n medstock apply -f deploy/k8s/seed-stock-job.yaml
 kubectl -n medstock wait --for=condition=complete job/seed-stock --timeout=300s
 
-# Demo patients for the prescribe cart. Invented people — see §6.
-# deploy-dev.yml already runs this on every deploy; by hand it needs the auth
-# seed to have run first, because it resolves the tenant by hospital name.
+# Demo patients for the prescribe cart. Invented people — see §6. Needs the
+# auth seed to have run first, because it resolves the tenant by hospital name.
 kubectl -n medstock apply -f deploy/k8s/seed-patients-job.yaml
 kubectl -n medstock wait --for=condition=complete job/seed-patients --timeout=300s
 
@@ -61,9 +76,11 @@ for feed in certification cpic faers import-alerts warning-letters news prognosi
 done
 ```
 
-Order matters in one place only: `seed-stock` before `certification`, because
-the certification pass certifies what is on the shelf and a shelf that is not
-there yet certifies nothing. The rest are independent.
+Order matters in two places: `seed-demo` before `seed-stock` (stock depth per
+site follows `FACILITY_SHELF_PROFILE`, computed from what `seed-demo`
+plants), and `seed-stock` before `certification`, because the certification
+pass certifies what is on the shelf and a shelf that is not there yet
+certifies nothing. The rest are independent.
 
 ---
 

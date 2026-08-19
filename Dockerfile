@@ -14,6 +14,12 @@ COPY migrations ./migrations
 # so the scripts have to be in the image. Same reasoning as migrations above:
 # any image can run them, none runs them on startup.
 COPY scripts ./scripts
+# seed_demo (deploy/k8s/seed-demo-job.yaml, ingest image) reads these
+# committed artifacts at services/ingest/app/demo_layout.py's data_dir() --
+# same one-off-Job reasoning as scripts/migrations just above. ~2.3MB, every
+# image, cheaper than a ConfigMap (etcd's ~1MiB object limit is smaller than
+# consumption.csv.gz alone).
+COPY data ./data
 COPY services/${SERVICE} ./services/${SERVICE}
 
 RUN uv sync --package medstock-${SERVICE} --no-dev

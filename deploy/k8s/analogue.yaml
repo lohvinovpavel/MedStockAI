@@ -29,6 +29,12 @@ spec:
         - name: GEMINI_API_KEY
           valueFrom:
             secretKeyRef: { name: medstock-ai, key: gemini-api-key }
+        # docs/ai_workflows_migration_plan.md Phase 2 -- routes /copilot/chat
+        # through the LangGraph port. Plain value, not a secret/configmap: a
+        # rollback is `kubectl set env deploy/analogue COPILOT_GRAPH_ENABLED=false`,
+        # no redeploy needed either way.
+        - name: COPILOT_GRAPH_ENABLED
+          value: "false"
         resources:
           requests: { cpu: 50m, memory: 128Mi }
           limits:   { memory: 512Mi }

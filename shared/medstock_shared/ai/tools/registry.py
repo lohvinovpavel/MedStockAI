@@ -73,6 +73,13 @@ def declarations_for(principal: Principal) -> list[dict]:
     return [spec.to_declaration() for spec in _REGISTRY.values() if spec.permission in granted]
 
 
+def all_specs() -> list[ToolSpec]:
+    """Every registered tool, permission-unfiltered -- for callers that build
+    their own per-role filtered view (e.g. the LangChain wrapper's
+    `tools_for()` in the analogue service's graph module)."""
+    return list(_REGISTRY.values())
+
+
 def denied_tools_for(principal: Principal) -> list[dict]:
     """The complement of declarations_for(): name + description for tools this
     role may not call. Not declared to Gemini as callable -- folded into the

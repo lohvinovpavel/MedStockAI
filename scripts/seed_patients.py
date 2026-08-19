@@ -38,7 +38,7 @@ sys.path.insert(0, str(_ROOT / "shared"))
 from medstock_shared.db import SessionLocal
 from medstock_shared.demo_tenant import HOSPITAL_NAME as DEFAULT_HOSPITAL_NAME
 from medstock_shared.models import Hospital, Patient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 # `patient.hospital_id` is a uuid FK to hospital.id. This script used to
 # default to the literal 00000000-0000-0000-0000-000000000001, which matched
@@ -359,6 +359,14 @@ def main() -> int:
     backfilled = 0
     try:
         hospital_id = resolve_hospital_id(session, args.hospital_id, args.hospital_name)
+        session.execute(
+            text(
+                "SELECT set_config('app.hospital_id', :h, true), "
+                "set_config('app.actor_id', '', true), "
+                "set_config('app.actor_system', 'seed_patients', true)"
+            ),
+            {"h": str(hospital_id)},
+        )
         # One query for the whole hospital rather than one per patient. At eight
         # rows the difference is invisible; at a thousand it is the difference
         # between a script that returns and one that looks hung.

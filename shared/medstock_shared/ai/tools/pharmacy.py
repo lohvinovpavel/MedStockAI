@@ -31,6 +31,7 @@ from ...models import (
     ForecastPoint,
     LocationCondition,
     Patient,
+    ReviewDecision,
     StockSnapshot,
     StorageLocation,
 )
@@ -896,7 +897,10 @@ _QUEUE_PEEK = 10
         "are awaiting approval, already ruled on, and the accept rate, plus "
         "the most serious few items pending review. Use for questions like "
         "'what is waiting on a pharmacist' or 'is anything urgent in the "
-        "queue' rather than opening the queue card by card."
+        "queue' rather than opening the queue card by card. This is the "
+        "label-extraction sign-off queue, NOT restock recommendations -- for "
+        "a review_decision_id to draft a purchase order, use "
+        "list_pending_restock_recommendations instead."
     ),
     args=ReviewQueueArgs,
 )
@@ -917,6 +921,63 @@ def list_review_queue(args: ReviewQueueArgs, principal: Principal) -> dict:
     }
 
 
+class ListPendingRecommendationsArgs(BaseModel):
+    facility_id: int | None = Field(
+        None, description="Restrict to one facility; omit to list across every operated facility"
+    )
+
+
+_PENDING_RECS_LIMIT = 20
+
+
+@tool(
+    permission="order:read",
+    description=(
+        "List pending restock recommendations -- each one carries the review_decision_id "
+        "draft_order/propose_order requires. Call this whenever the user asks to order, "
+        "restock, or reorder a drug and you do not already have a review_decision_id from "
+        "them. Distinct from list_review_queue, which is the label-extraction sign-off queue, "
+        "not restock recommendations."
+    ),
+    args=ListPendingRecommendationsArgs,
+)
+def list_pending_restock_recommendations(args: ListPendingRecommendationsArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        stmt = (
+            select(ReviewDecision, Facility.name)
+            .join(Facility, Facility.id == ReviewDecision.facility_id)
+            .where(
+                ReviewDecision.hospital_id == principal.hospital_uuid,
+                ReviewDecision.entity_type == "restock_recommendation",
+                ReviewDecision.decision == "pending",
+            )
+            .order_by(ReviewDecision.created_at)
+        )
+        if args.facility_id is not None:
+            stmt = stmt.where(ReviewDecision.facility_id == args.facility_id)
+        rows = session.execute(stmt).all()
+
+    items = [
+        {
+            "review_decision_id": decision.id,
+            "facility_id": decision.facility_id,
+            "facility_name": facility_name,
+            "ndc": (decision.payload or {}).get("ndc"),
+            "drug_name": (decision.payload or {}).get("name"),
+            "quantity": (decision.payload or {}).get("quantity"),
+            "supplier_id": (decision.payload or {}).get("supplier_id"),
+            "supplier_name": (decision.payload or {}).get("supplier_name"),
+            "created_at": decision.created_at.isoformat() if decision.created_at else None,
+        }
+        for decision, facility_name in rows[:_PENDING_RECS_LIMIT]
+    ]
+    return {
+        "pending_total": len(rows),
+        "items": items,
+        "truncated": len(rows) > _PENDING_RECS_LIMIT,
+    }
+
+
 class DraftOrderArgs(BaseModel):
     facility_id: int = Field(description="Operated facility that will receive the stock")
     supplier_id: int = Field(description="Supplier catalog id")
@@ -925,8 +986,8 @@ class DraftOrderArgs(BaseModel):
     review_decision_id: int = Field(
         description=(
             "Pending restock recommendation id this draft approves. You MUST obtain this "
-            "from list_review_queue or from the user in this conversation. Never guess it -- "
-            "a wrong id links the order to an approval for a different drug."
+            "from list_pending_restock_recommendations or from the user in this conversation. "
+            "Never guess it -- a wrong id links the order to an approval for a different drug."
         )
     )
 
@@ -935,8 +996,8 @@ class DraftOrderArgs(BaseModel):
     permission="order:write",
     description=(
         "Prepare a draft purchase order proposal for human confirmation. Requires a review_decision_id "
-        "from POST /inventory/recommendations. A physician token will 403. "
-        "Creates a proposal card for the user with Confirm/Cancel buttons. "
+        "-- call list_pending_restock_recommendations first if you don't already have one. A physician "
+        "token will 403. Creates a proposal card for the user with Confirm/Cancel buttons. "
         "The order is only written when the user explicitly clicks Confirm."
     ),
     args=DraftOrderArgs,

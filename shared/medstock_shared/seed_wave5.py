@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.orm import Session
 
 from .demo_shelf import DASHBOARD_SHELF, DEMO_ORDERS, DEMO_SUPPLIERS
@@ -21,8 +21,33 @@ from .pricing import money
 
 def apply_orders(session: Session, hospital_id: uuid.UUID, fac_ids: dict[str, int]) -> int:
     refs = [row["ref"] for row in DEMO_ORDERS]
+    demo_ndcs = {
+        item["ndc"] for item in DASHBOARD_SHELF
+        if item["id"] in {o["shelf_id"] for o in DEMO_ORDERS if o["source"] == "ai_suggestion"}
+    }
+    # Found first, scoped to this tenant, and matched against `existing_ids`
+    # below by review_decision_id -- not just by demo ref. A stale decision
+    # can still be cited by a purchase order this rerun wouldn't otherwise
+    # touch (a hand-created order against the same NDC, say), and deleting
+    # the decision out from under that order is a FK violation, not a no-op.
+    stale_decision_ids = list(
+        session.scalars(
+            select(ReviewDecision.id).where(
+                ReviewDecision.hospital_id == hospital_id,
+                ReviewDecision.entity_type == "restock_recommendation",
+                ReviewDecision.entity_ref.in_(demo_ndcs),
+            )
+        )
+    )
+    po_conditions = [PurchaseOrder.ref.in_(refs)]
+    if stale_decision_ids:
+        po_conditions.append(PurchaseOrder.review_decision_id.in_(stale_decision_ids))
     existing_ids = list(
-        session.scalars(select(PurchaseOrder.id).where(PurchaseOrder.ref.in_(refs)))
+        session.scalars(
+            select(PurchaseOrder.id).where(
+                PurchaseOrder.hospital_id == hospital_id, or_(*po_conditions)
+            )
+        )
     )
     if existing_ids:
         session.execute(
@@ -31,14 +56,8 @@ def apply_orders(session: Session, hospital_id: uuid.UUID, fac_ids: dict[str, in
             )
         )
         session.execute(delete(PurchaseOrder).where(PurchaseOrder.id.in_(existing_ids)))
-        session.execute(
-            delete(ReviewDecision).where(
-                ReviewDecision.entity_type == "restock_recommendation",
-                ReviewDecision.entity_ref.in_(
-                    {item["ndc"] for item in DASHBOARD_SHELF if item["id"] in {o["shelf_id"] for o in DEMO_ORDERS if o["source"] == "ai_suggestion"}}
-                ),
-            )
-        )
+    if stale_decision_ids:
+        session.execute(delete(ReviewDecision).where(ReviewDecision.id.in_(stale_decision_ids)))
 
     by_shelf = {item["id"]: item for item in DASHBOARD_SHELF}
     cost_by = {

@@ -34,6 +34,10 @@ on:
         description: "Also (re)create the 4 demo users in St Mary's General — safe to re-run, skips existing ones"
         type: boolean
         default: false
+      seed_demo:
+        description: "Also seed the full demo dataset (facilities, suppliers, 3yr consumption, forecast, wave5 orders) — safe to re-run (upsert / scoped delete-reload). Runs before seed_stock."
+        type: boolean
+        default: false
       seed_patients:
         description: "Also seed demo patients (8 curated + generated) — safe to re-run, skips existing ones"
         type: boolean
@@ -43,7 +47,11 @@ on:
         type: string
         default: ""
       seed_stock:
-        description: "Also seed demo stock onto the dashboard shelf, then certify it immediately — safe to re-run (upsert)"
+        description: "Also seed demo stock onto the dashboard shelf, then certify it immediately — safe to re-run (upsert). Runs after seed_demo."
+        type: boolean
+        default: false
+      seed_feeds:
+        description: "Also run the weekly reference-data feeds (cpic, faers, import-alerts, warning-letters, news, prognosis) once now instead of waiting for their cron slot — safe to re-run. Runs after seed_stock."
         type: boolean
         default: false
 
@@ -232,9 +240,14 @@ jobs:
   # docs/phi-readiness.md and cannot hold a real patient — the rows are
   # invented, fixed pools and a seeded RNG), but that's a reason it's *safe*
   # to check the box, not a reason to skip asking.
+  #
+  # Ordered after seed-stock (docs/populating-a-new-environment.md §5's
+  # canonical order) via `needs`, but `!failure() && !cancelled()` means an
+  # *unchecked* (skipped, not failed) seed-stock doesn't block this from
+  # running on its own — only a seed-stock that actually failed does.
   seed-patients:
-    needs: [deploy]
-    if: ${{ inputs.seed_patients }}
+    needs: [deploy, seed, seed-stock]
+    if: ${{ !failure() && !cancelled() && inputs.seed_patients }}
     runs-on: ubuntu-latest
     environment: dev
     permissions: { contents: read, id-token: write }
@@ -303,16 +316,56 @@ jobs:
           kubectl -n medstock logs job/seed
           kubectl -n medstock delete job seed
 
-  # Opt-in, same reasoning as `seed` — a rollout should not quietly write
+  # Opt-in, same reasoning as `seed`. Facilities, suppliers, 3yr consumption
+  # history, the seeded forecast run, and the wave5 demo orders/review
+  # decisions -- deploy/k8s/seed-demo-job.yaml. Ordered after `seed` (the
+  # hospital it resolves-or-creates should already carry the 4 demo users),
+  # before `seed-stock` (docs/populating-a-new-environment.md #5's canonical
+  # order). `!failure() && !cancelled()`, not the default `success()`: an
+  # unchecked (skipped) `seed` must not block this from running standalone.
+  seed-demo:
+    needs: [deploy, seed]
+    if: ${{ !failure() && !cancelled() && inputs.seed_demo }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      - name: Seed demo dataset
+        run: |
+          kubectl -n medstock delete job seed-demo --ignore-not-found
+          sed "s|ghcr.io/medstockai/ingest:latest|${{ env.REGISTRY }}/ingest:${{ env.DEPLOY_SHA }}|" deploy/k8s/seed-demo-job.yaml | kubectl -n medstock apply -f -
+          kubectl -n medstock wait --for=condition=complete job/seed-demo --timeout=600s
+          kubectl -n medstock logs job/seed-demo
+          kubectl -n medstock delete job seed-demo
+
+  # Opt-in, same reasoning as `seed` -- a rollout should not quietly write
   # rows. Until this has run once in an environment, ingest-certification
   # certifies shelf_ndcs() against an empty stock_snapshot and every badge on
   # the dashboard reads "unknown" with nothing reporting an error (see
   # deploy/k8s/seed-stock-job.yaml). certify-now re-runs that CronJob's
   # image immediately so the freshly seeded shelf doesn't sit grey until the
   # next 05:00 schedule.
+  #
+  # Ordered after seed-demo; `!failure() && !cancelled()` lets this run on
+  # its own when seed_demo wasn't checked this dispatch (skipped, not
+  # failed) -- same pattern as seed-demo and seed-patients.
   seed-stock:
-    needs: [deploy]
-    if: ${{ inputs.seed_stock }}
+    needs: [deploy, seed-demo]
+    if: ${{ !failure() && !cancelled() && inputs.seed_stock }}
     runs-on: ubuntu-latest
     environment: dev
     permissions: { contents: read, id-token: write }
@@ -346,3 +399,48 @@ jobs:
           kubectl -n medstock wait --for=condition=complete job/certify-now --timeout=300s
           kubectl -n medstock logs job/certify-now
           kubectl -n medstock delete job certify-now
+
+  # Opt-in, one-time catch-up for the weekly reference-data feeds
+  # (docs/populating-a-new-environment.md #2) -- a freshly seeded environment
+  # otherwise shows an empty Prognosis Review, no PGx/ADR findings and no
+  # import-alert or warning-letter badges until each feed's own weekly cron
+  # slot comes round, which for the Sunday/Monday jobs can be six days away.
+  # ingest-certification is deliberately excluded: seed-stock's own
+  # certify-now step above already re-runs it against the freshly seeded
+  # shelf, so running it a second time here would be redundant, not wrong.
+  #
+  # Ordered after seed-stock (certification, and so faers's formulary-driven
+  # openFDA calls, need stock seeded first per that doc); `!failure() &&
+  # !cancelled()` lets this run standalone when seed_stock wasn't checked
+  # this dispatch.
+  seed-feeds:
+    needs: [deploy, seed-stock]
+    if: ${{ !failure() && !cancelled() && inputs.seed_feeds }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      # One feed at a time, not backgrounded: a stuck feed should fail this
+      # step loudly with its own log attached, not get lost among six.
+      - name: Run reference-data feeds once
+        run: |
+          for feed in cpic faers import-alerts warning-letters news prognosis; do
+            echo "::group::ingest-$feed"
+            kubectl -n medstock delete job "now-$feed" --ignore-not-found
+            kubectl -n medstock create job "now-$feed" --from="cronjob/ingest-$feed"
+            kubectl -n medstock wait --for=condition=complete "job/now-$feed" --timeout=900s
+            kubectl -n medstock logs "job/now-$feed"
+            kubectl -n medstock delete job "now-$feed"
+            echo "::endgroup::"
+          done

@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # Single source for the Gemini model id. Override with env GEMINI_MODEL.
     gemini_model: str = "gemini-3.5-flash-lite"
     llm_timeout_seconds: float = 20.0
+    # analogue only -- routes /copilot/chat through the LangGraph port
+    # (docs/ai_workflows_migration_plan.md Phase 2) instead of the legacy
+    # hand-rolled loop. One process-wide switch, not per-hospital: the
+    # migration plan's §9 upgrade path is per-hospital once there's more than
+    # one deployment to stage against; a dev/staging box has exactly one.
+    copilot_graph_enabled: bool = False
 
 
 settings = Settings()

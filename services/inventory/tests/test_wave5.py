@@ -24,12 +24,14 @@ from medstock_shared.models import (
     Supplier,
     SupplierCatalog,
 )
-from sqlalchemy import delete, select
+from medstock_shared.seed_wave5 import apply_orders
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 HOSPITAL_A = uuid.UUID("00000000-0000-0000-0000-00000000a5a1")
 HOSPITAL_B = uuid.UUID("00000000-0000-0000-0000-00000000a5b2")
+HOSPITAL_C = uuid.UUID("00000000-0000-0000-0000-00000000a5c1")
 ACTOR = uuid.UUID("00000000-0000-0000-0000-00000000a5c3")
 NDC = "00338011220"
 
@@ -141,6 +143,84 @@ def _place(seeded, *, status="placed", source="manual", quantity=20, headers=Non
         },
         headers=headers or {},
     )
+
+
+def test_apply_orders_rerun_survives_a_foreign_order_on_the_same_decision():
+    """Regression test for the FK violation seed_demo hit in production
+    (fk_purchase_order_review_decision, ForeignKeyViolation): apply_orders'
+    rerun cleanup used to find stale review_decision rows by NDC only, and
+    delete them without checking whether some OTHER purchase order -- one
+    not among DEMO_ORDERS' own refs, e.g. a hand-placed or copilot-confirmed
+    order against the same NDC -- still cited them. Also regresses the
+    cleanup queries running unscoped by hospital_id at all, which on this
+    shared, RLS-less dev DB let one tenant's rerun clean up another
+    tenant's rows sharing the same ref text (ref is unique per-hospital,
+    not globally)."""
+    _wipe(HOSPITAL_C)
+    with Session(engine) as s:
+        s.merge(Hospital(id=HOSPITAL_C, name="WAVE5 HOSPITAL C"))
+        s.flush()
+        central = Facility(
+            hospital_id=HOSPITAL_C, code="central", name="Central",
+            type="Hospital", lat=50.45, lon=30.523, operated=True,
+        )
+        s.add(central)
+        s.flush()
+        supplier = Supplier(
+            hospital_id=HOSPITAL_C, name="PharmaSource Global Ltd.",
+            lead_time_days=5, reliability_pct=Decimal("98.20"),
+            shipping_flat=Decimal("120.00"), currency="USD", active=True,
+        )
+        s.add(supplier)
+        s.commit()
+        fac_ids = {"central": central.id}
+
+    # apply_orders' own caller (seed_demo.py's run()) uses a plain Session,
+    # not session_scope -- it needs owner-level privilege to reset
+    # purchase_order_ref_seq, which the restricted app_role session_scope
+    # sets up does not have. Match that here, setting only the RLS GUC.
+    def _run_apply_orders() -> None:
+        with Session(engine) as s:
+            s.execute(
+                text(
+                    "SELECT set_config('app.hospital_id', :h, true), "
+                    "set_config('app.actor_id', '', true), "
+                    "set_config('app.actor_system', 'test_w5', true)"
+                ),
+                {"h": str(HOSPITAL_C)},
+            )
+            apply_orders(s, HOSPITAL_C, fac_ids)
+            s.commit()
+
+    _run_apply_orders()
+
+    with session_scope(str(HOSPITAL_C), str(ACTOR), "test_w5") as s:
+        decision = s.scalar(
+            select(ReviewDecision).where(
+                ReviewDecision.hospital_id == HOSPITAL_C,
+                ReviewDecision.entity_type == "restock_recommendation",
+            )
+        )
+        assert decision is not None, "PO-2026-0145 (ai_suggestion) should have planted one"
+        supplier_id = decision.payload["supplier_id"]
+        # A purchase order apply_orders does not own or track by ref, citing
+        # the same review decision -- what a copilot draft_order confirm
+        # against the same NDC would leave behind. session_scope, not a bare
+        # Session, matching how a real order-confirm write happens.
+        s.add(PurchaseOrder(
+            ref="PO-TEST-FOREIGN-1", hospital_id=HOSPITAL_C, facility_id=fac_ids["central"],
+            supplier_id=supplier_id, status="draft", source="manual",
+            review_decision_id=decision.id, shipping=Decimal(0),
+        ))
+
+    # Must not raise -- this is the exact FK violation seen in production.
+    _run_apply_orders()
+
+    with Session(engine) as s:
+        assert s.scalar(select(PurchaseOrder).where(PurchaseOrder.ref == "PO-TEST-FOREIGN-1")) is None
+        assert s.scalar(select(PurchaseOrder).where(PurchaseOrder.ref == "PO-2026-0145")) is not None
+
+    _wipe(HOSPITAL_C)
 
 
 def test_physician_cannot_write_orders(seeded):
