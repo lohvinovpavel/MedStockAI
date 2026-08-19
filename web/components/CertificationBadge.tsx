@@ -185,7 +185,7 @@ export function useRuleset() {
  * A failure resolves to an empty map rather than throwing: every row falls back
  * to `unavailable`, renders grey, and the stock table stays on screen.
  */
-export function useCertificationStatuses(ndcs: string[]) {
+export function useCertificationStatuses(ndcs: string[], reloadKey: number = 0) {
   const key = Array.from(new Set(ndcs.filter(Boolean))).sort().join(",");
   const [results, setResults] = useState<Record<string, CertResult>>({});
 
@@ -194,24 +194,47 @@ export function useCertificationStatuses(ndcs: string[]) {
       setResults({});
       return;
     }
-    const wanted = key.split(",").slice(0, MAX_BATCH);
-    const query = wanted.map((n) => `ndc=${encodeURIComponent(n)}`).join("&");
+    // Paged, not truncated. This used to `.slice(0, MAX_BATCH)`, which silently
+    // dropped every NDC past the first hundred -- and `key` is sorted, so it was
+    // always the same alphabetical tail that vanished. Those rows then fell
+    // through to `unavailable` and rendered grey forever, indistinguishable from
+    // a drug the FDA holds no record for, however many certifications the
+    // database actually had. A shelf of 111 showed 11 permanently unknown.
+    //
+    // The 100 is the server's own cap on /status ("One page of stock, max 100"),
+    // so the fix is to send more than one page rather than to raise it.
+    const wanted = key.split(",");
+    const pages: string[][] = [];
+    for (let i = 0; i < wanted.length; i += MAX_BATCH) {
+      pages.push(wanted.slice(i, i + MAX_BATCH));
+    }
     let cancelled = false;
 
-    apiFetch("compliance", `/status?${query}`)
-      .then((body) => {
+    Promise.all(
+      pages.map((page) =>
+        apiFetch(
+          "compliance",
+          `/status?${page.map((n) => `ndc=${encodeURIComponent(n)}`).join("&")}`,
+        // One dead page must not blank the others: a partial shelf with real
+        // colours beats a whole shelf of grey.
+        ).catch(() => null),
+      ),
+    )
+      .then((bodies) => {
         if (cancelled) return;
         const next: Record<string, CertResult> = {};
-        for (const row of (body?.results ?? []) as (CertResult & { ndc: string })[]) {
-          next[row.ndc] = {
-            status: row.status,
-            attention: row.attention,
-            reasons: row.reasons,
-            transient: row.transient,
-            persistent: row.persistent,
-            categories: row.categories,
-            codes: row.codes,
-          };
+        for (const body of bodies) {
+          for (const row of (body?.results ?? []) as (CertResult & { ndc: string })[]) {
+            next[row.ndc] = {
+              status: row.status,
+              attention: row.attention,
+              reasons: row.reasons,
+              transient: row.transient,
+              persistent: row.persistent,
+              categories: row.categories,
+              codes: row.codes,
+            };
+          }
         }
         setResults(next);
       })
@@ -223,7 +246,10 @@ export function useCertificationStatuses(ndcs: string[]) {
     return () => {
       cancelled = true;
     };
-  }, [key]);
+    // reloadKey, not a returned reload(): three callers treat this hook's
+    // return as a plain record, and a bulk re-check needs the badges to
+    // refresh without changing that shape at every call site.
+  }, [key, reloadKey]);
 
   return results;
 }
@@ -325,4 +351,59 @@ export async function recheckCertification(ndc: string): Promise<void> {
   // dialog would redisplay the stale verdict as though it were fresh.
   const failure = (body?.errors ?? {})[ndc];
   if (failure) throw new Error(String(failure));
+}
+
+/**
+ * `MAX_EXPLORE` in services/compliance/app/main.py. Duplicated rather than
+ * fetched: the server rejects an over-long batch with a 400, so the only thing
+ * a wrong value here changes is whether the user sees that 400 or a clean split.
+ */
+const EXPLORE_BATCH = 10;
+
+/**
+ * Re-check many drugs in one action — COMP-2 across a whole shelf.
+ *
+ * Exists because the per-drug button works: a delisted or never-fetched NDC
+ * usually resolves the moment /explore asks upstream directly, and doing that
+ * one dialog at a time is not a workflow anyone should be asked to perform on a
+ * hundred drugs.
+ *
+ * Sequential, not parallel, and that is the point rather than an oversight.
+ * Each NDC costs two upstream calls against a shared daily openFDA budget, so
+ * this deliberately trickles: overlapping the batches would empty the budget
+ * faster without finishing meaningfully sooner, and the endpoint is documented
+ * as being for "a handful of NDCs at once".
+ *
+ * Resolves rather than throws on partial failure. A batch where nine drugs
+ * resolved and one upstream lookup died is mostly a success, and throwing would
+ * discard the nine — the same reasoning the endpoint itself uses for returning
+ * `errors` alongside `results`.
+ */
+export async function recheckCertifications(
+  ndcs: string[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ ok: number; errors: Record<string, string> }> {
+  const wanted = Array.from(new Set(ndcs.filter(Boolean)));
+  const errors: Record<string, string> = {};
+  let ok = 0;
+
+  for (let i = 0; i < wanted.length; i += EXPLORE_BATCH) {
+    const chunk = wanted.slice(i, i + EXPLORE_BATCH);
+    try {
+      const body = await apiFetch("compliance", "/explore", {
+        method: "POST",
+        body: JSON.stringify({ ndc: chunk }),
+      });
+      const chunkErrors = (body?.errors ?? {}) as Record<string, string>;
+      Object.assign(errors, chunkErrors);
+      ok += chunk.length - Object.keys(chunkErrors).length;
+    } catch (e) {
+      // A whole-batch failure (403, 400, network) is attributed to every NDC in
+      // it, so the count at the end still adds up to what was asked for.
+      const message = e instanceof Error ? e.message : "request failed";
+      for (const n of chunk) errors[n] = message;
+    }
+    onProgress?.(Math.min(i + EXPLORE_BATCH, wanted.length), wanted.length);
+  }
+  return { ok, errors };
 }
