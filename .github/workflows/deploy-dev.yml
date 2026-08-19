@@ -356,9 +356,9 @@ jobs:
   # rows. Until this has run once in an environment, ingest-certification
   # certifies shelf_ndcs() against an empty stock_snapshot and every badge on
   # the dashboard reads "unknown" with nothing reporting an error (see
-  # deploy/k8s/seed-stock-job.yaml). certify-now re-runs that CronJob's
-  # image immediately so the freshly seeded shelf doesn't sit grey until the
-  # next 05:00 schedule.
+  # deploy/k8s/seed-stock-job.yaml). The `certify` job below is what stops the
+  # freshly seeded shelf sitting grey until the next 05:00 schedule; it is
+  # ordered after this one for exactly that reason.
   #
   # Ordered after seed-demo; `!failure() && !cancelled()` lets this run on
   # its own when seed_demo wasn't checked this dispatch (skipped, not
@@ -392,11 +392,68 @@ jobs:
           kubectl -n medstock logs job/seed-stock
           kubectl -n medstock delete job seed-stock
 
-      - name: Certify the freshly seeded shelf
+  # Certification is NOT opt-in, unlike everything else below — it reads the
+  # FDA NDC Directory into drug_certification and does not write demo rows, so
+  # the reason the seed jobs ask first does not apply to it.
+  #
+  # It used to be a step inside seed-stock, which meant it only ran when
+  # someone checked `seed_dev_stock`. Every other deploy left the traffic
+  # light showing whatever the 05:00 cron last wrote: a drug recalled since
+  # then still read green, and a newly stocked drug read "unknown" with
+  # nothing reporting an error. On a compliance surface, stale and confidently
+  # green is worse than absent — so it now runs on every rollout.
+  #
+  # Ordered last of the data jobs, and both dependencies matter:
+  #  - seed-stock, because certification certifies shelf_ndcs() and an empty
+  #    stock_snapshot certifies nothing.
+  #  - seed-feeds, because ingest-import-alerts writes the import_alert rows
+  #    this pass reads. The cron schedules encode the same order (import
+  #    alerts Mondays 04:00, certification 05:00); certifying before the
+  #    alerts land would produce a green badge for a firm that is on a Red
+  #    List, which is the exact failure this surface exists to prevent.
+  # The condition is `needs.deploy.result == 'success'`, NOT the seed jobs'
+  # `!failure() && !cancelled()`. That idiom is also true when a dependency
+  # was *skipped*, which is what those jobs want — but they are additionally
+  # gated on an `inputs.*` checkbox that is only ever set on a dispatch. This
+  # job has no such checkbox, so the same expression would fire it on pushes
+  # the `gate` job deliberately turned away, certifying against a rollout that
+  # never happened. Keyed on deploy succeeding, it runs when there is
+  # something to certify and stays quiet otherwise, while still tolerating
+  # seed-stock and seed-feeds being skipped.
+  certify:
+    needs: [deploy, seed-stock, seed-feeds]
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      # --from=cronjob pins nothing to DEPLOY_SHA: the CronJob's own image is
+      # whatever the rollout above just applied, which is the point — this
+      # certifies with the code being deployed, not with a tag resolved here.
+      - name: Refresh drug certification
         run: |
           kubectl -n medstock delete job certify-now --ignore-not-found
           kubectl -n medstock create job certify-now --from=cronjob/ingest-certification
-          kubectl -n medstock wait --for=condition=complete job/certify-now --timeout=300s
+          if ! kubectl -n medstock wait --for=condition=complete job/certify-now --timeout=600s; then
+            echo "::group::certify-now did not complete"
+            kubectl -n medstock describe job certify-now || true
+            kubectl -n medstock logs job/certify-now --tail=200 || true
+            echo "::endgroup::"
+            kubectl -n medstock delete job certify-now --ignore-not-found
+            echo "::error::Certification did not finish. The traffic light is now serving whatever the last successful pass wrote — treat badge state as stale until this is fixed."
+            exit 1
+          fi
           kubectl -n medstock logs job/certify-now
           kubectl -n medstock delete job certify-now
 
@@ -405,9 +462,10 @@ jobs:
   # otherwise shows an empty Prognosis Review, no PGx/ADR findings and no
   # import-alert or warning-letter badges until each feed's own weekly cron
   # slot comes round, which for the Sunday/Monday jobs can be six days away.
-  # ingest-certification is deliberately excluded: seed-stock's own
-  # certify-now step above already re-runs it against the freshly seeded
-  # shelf, so running it a second time here would be redundant, not wrong.
+  # ingest-certification is deliberately excluded: the `certify` job runs it
+  # on every deploy, and is ordered after this one precisely so it certifies
+  # against the import-alert rows this job writes. Running it here as well
+  # would certify twice, the first time against stale alerts.
   #
   # Ordered after seed-stock (certification, and so faers's formulary-driven
   # openFDA calls, need stock seeded first per that doc); `!failure() &&
