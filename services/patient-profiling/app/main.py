@@ -384,7 +384,7 @@ def list_assessments(
         with session_scope(principal.hospital_id, principal.user_id) as session:
             rows = session.scalars(
                 select(AssessmentLog)
-                .where(AssessmentLog.hospital_id == principal.hospital_id)
+                .where(AssessmentLog.hospital_id == principal.hospital_uuid)
                 .order_by(AssessmentLog.created_at.desc())
                 .limit(limit)
             ).all()
@@ -685,7 +685,7 @@ def get_patient(
 ) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_id)
-        if row is None or row.hospital_id != principal.hospital_id:
+        if row is None or row.hospital_id != principal.hospital_uuid:
             raise HTTPException(status_code=404, detail="patient not found")
         return _patient_dict(row)
 
@@ -698,7 +698,7 @@ def update_patient(
 ) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_id)
-        if row is None or row.hospital_id != principal.hospital_id:
+        if row is None or row.hospital_id != principal.hospital_uuid:
             raise HTTPException(status_code=404, detail="patient not found")
         if body.full_name is not None:
             row.full_name = body.full_name.strip()
@@ -731,7 +731,7 @@ def cart_check(
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, body.patient_id)
-        if row is None or row.hospital_id != principal.hospital_id:
+        if row is None or row.hospital_id != principal.hospital_uuid:
             raise HTTPException(status_code=404, detail="patient not found")
         vector = patient_row_to_vector(row)
         patient_payload = _patient_dict(row)

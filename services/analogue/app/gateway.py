@@ -42,7 +42,10 @@ def _actor(principal: Principal) -> uuid.UUID:
 
 
 def _hospital(principal: Principal) -> uuid.UUID:
-    return uuid.UUID(principal.hospital_id)
+    h = principal.hospital_uuid
+    if h is None:
+        raise HTTPException(status_code=400, detail="invalid hospital_id")
+    return h
 
 
 def _owned(session, conversation_id: uuid.UUID, actor: uuid.UUID) -> CopilotConversation:
@@ -207,6 +210,7 @@ async def _persist_turn(
 
     async def stream():
         parts: list[str] = []
+        cards_received: list[tuple[str, dict]] = []
         request_id = ""
         async for frame in _run_turn(history, principal):
             yield frame
@@ -216,6 +220,15 @@ async def _persist_turn(
                     parts.append(payload.get("text") or "")
                 except (IndexError, json.JSONDecodeError):
                     pass
+            elif frame.startswith("event: tool_card"):
+                try:
+                    payload = json.loads(frame.split("data: ", 1)[1].split("\n", 1)[0])
+                    tool_name = payload.get("name") or "tool"
+                    card_data = payload.get("card")
+                    if card_data:
+                        cards_received.append((tool_name, card_data))
+                except (IndexError, json.JSONDecodeError):
+                    pass
             elif frame.startswith("event: done"):
                 try:
                     payload = json.loads(frame.split("data: ", 1)[1].split("\n", 1)[0])
@@ -223,6 +236,18 @@ async def _persist_turn(
                 except (IndexError, json.JSONDecodeError):
                     pass
         with session_scope(principal.hospital_id, principal.user_id) as session:
+            for tool_name, card_data in cards_received:
+                session.add(
+                    CopilotMessage(
+                        conversation_id=conversation_id,
+                        hospital_id=hospital,
+                        role="tool",
+                        tool_name=tool_name,
+                        card=card_data,
+                        text=None,
+                        ai_dedupe_key=request_id or None,
+                    )
+                )
             session.add(
                 CopilotMessage(
                     conversation_id=conversation_id,
@@ -246,3 +271,79 @@ async def post_message(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="invalid conversation_id") from exc
     return await _persist_turn(conversation_id, principal, body.text, body.focus)
+
+
+class ConfirmProposalBody(BaseModel):
+    proposal_id: str
+    facility_id: int
+    supplier_id: int
+    ndc: str
+    quantity: int
+    review_decision_id: int
+
+
+@gateway.post("/orders/confirm", status_code=201)
+def confirm_order_proposal(
+    body: ConfirmProposalBody,
+    principal: Principal = Depends(require("order:write")),
+) -> dict:
+    from medstock_shared.ai.cards import consume_proposal
+    from medstock_shared.certification import signal_for_ndc
+    from medstock_shared.models import ReviewDecision
+    from medstock_shared.ordering import create_purchase_order
+
+    proposal = consume_proposal(body.proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired proposal")
+
+    if proposal.get("hospital_id") and proposal.get("hospital_id") != str(principal.hospital_id):
+        raise HTTPException(status_code=403, detail="Proposal hospital mismatch")
+    if proposal.get("facility_id") != body.facility_id:
+        raise HTTPException(status_code=400, detail="Proposal facility mismatch")
+    if proposal.get("supplier_id") != body.supplier_id:
+        raise HTTPException(status_code=400, detail="Proposal supplier mismatch")
+    if proposal.get("ndc") != body.ndc:
+        raise HTTPException(status_code=400, detail="Proposal NDC mismatch")
+    if proposal.get("quantity") != body.quantity:
+        raise HTTPException(status_code=400, detail="Proposal quantity mismatch")
+    if proposal.get("review_decision_id") != body.review_decision_id:
+        raise HTTPException(status_code=400, detail="Proposal review decision mismatch")
+    if proposal.get("blocked"):
+        raise HTTPException(status_code=400, detail=f"Proposal is blocked: {proposal.get('block_reason')}")
+
+    # Check server-side gates unconditionally
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        decision = session.get(ReviewDecision, body.review_decision_id)
+        if decision is None or decision.hospital_id != principal.hospital_uuid:
+            raise HTTPException(status_code=400, detail="Invalid review decision")
+        approved_ndc = (decision.payload or {}).get("ndc")
+        if approved_ndc != body.ndc:
+            raise HTTPException(status_code=400, detail="Review decision NDC mismatch")
+
+        sig = signal_for_ndc(session, body.ndc)
+        if sig.status == "red":
+            raise HTTPException(
+                status_code=400,
+                detail="Compliance block: an NDC with red status cannot be ordered",
+            )
+
+        order = create_purchase_order(
+            session,
+            hospital_id=principal.hospital_uuid,
+            actor_id=_actor(principal),
+            facility_id=body.facility_id,
+            supplier_id=body.supplier_id,
+            status="draft",
+            source="ai_suggestion",
+            lines=[{"ndc": body.ndc, "quantity": body.quantity}],
+            review_decision_id=body.review_decision_id,
+        )
+        return {
+            "id": order.id,
+            "ref": order.ref,
+            "status": order.status,
+            "proposal_id": body.proposal_id,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "note": "Draft purchase order created — not sent to supplier.",
+        }
+

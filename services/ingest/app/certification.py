@@ -231,12 +231,17 @@ def shortages_by_ndc() -> dict[str, list[Shortage]]:
     one pack size can be in shortage while another is not.
     """
     index: dict[str, list[Shortage]] = {}
-    for row in _pages(SHORTAGE_URL, {}, max_pages=5):
         ndc = row.get("package_ndc")
         if not ndc:
             continue
+        try:
+            k = ndc11(str(ndc))
+        except ValueError:
+            k = str(ndc).replace("-", "").strip()
+        if not k:
+            continue
         categories = row.get("therapeutic_category") or []
-        index.setdefault(ndc11(str(ndc)), []).append(
+        index.setdefault(k, []).append(
             Shortage(
                 status=row.get("status"),
                 generic_name=str(row.get("generic_name") or ""),
@@ -299,7 +304,15 @@ def _product_to_rows(
     # packaging at all, so such a product is still recorded rather than dropped.
     packages = _package_ndcs(product)
     source = packages or [n for n in [product.get("product_ndc") or product.get("ndc")] if n]
-    keys = sorted({ndc11(str(n)) for n in source})
+    keys_set = set()
+    for n in source:
+        try:
+            keys_set.add(ndc11(str(n)))
+        except ValueError:
+            clean = str(n).replace("-", "").strip()
+            if clean:
+                keys_set.add(clean)
+    keys = sorted(keys_set)
     if not keys:
         return []
 

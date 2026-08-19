@@ -157,10 +157,11 @@ def test_tool_call_round_trip_executes_and_continues_to_a_final_answer(
         "/copilot/chat", json={"messages": [{"role": "user", "text": "shortage on 212033"}]}
     )
     events = _events(res.text)
-    assert [e for e, _ in events] == ["tool_start", "tool_end", "delta", "done"]
-    assert events[0][1] == {"name": "search_analogues_rxnorm", "args": {"rxcui": "212033"}}
-    assert events[1][1] == {"name": "search_analogues_rxnorm", "ok": True}
-    assert events[2][1]["text"] == "Try 105798, it's well stocked."
+    non_card_events = [e for e in events if e[0] != "tool_card"]
+    assert [e for e, _ in non_card_events] == ["tool_start", "tool_end", "delta", "done"]
+    assert non_card_events[0][1] == {"name": "search_analogues_rxnorm", "args": {"rxcui": "212033"}}
+    assert non_card_events[1][1] == {"name": "search_analogues_rxnorm", "ok": True}
+    assert non_card_events[2][1]["text"] == "Try 105798, it's well stocked."
 
     assert captured_args["name"] == "search_analogues_rxnorm"
     assert captured_args["principal"] == PHARMACIST
@@ -189,7 +190,7 @@ def test_thought_signature_survives_the_tool_round_trip(monkeypatch, audit_calls
 
     res = _client().post("/copilot/chat", json={"messages": [{"role": "user", "text": "check it"}]})
     assert res.status_code == 200
-    assert [e for e, _ in _events(res.text)] == ["tool_start", "tool_end", "delta", "done"]
+    assert [e for e, _ in _events(res.text) if e != "tool_card"] == ["tool_start", "tool_end", "delta", "done"]
 
     second_round_contents = fake.calls[1]
     model_turn = next(c for c in second_round_contents if c.role == "model")

@@ -31,6 +31,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # Bump when any threshold or rule below changes. Stored on every row so a colour
 # computed months ago can still say which rules produced it.
@@ -336,12 +340,21 @@ def ndc11(value: str) -> str:
     Padding forward is unambiguous. Going back is not — see
     `product_ndc_candidates`.
     """
-    parts = str(value).strip().split("-")
+    parts = [p for p in str(value).strip().split("-") if p]
     if len(parts) == 3:
         return f"{parts[0].zfill(5)}{parts[1].zfill(4)}{parts[2].zfill(2)}"
     if len(parts) == 2:
-        return f"{parts[0].zfill(5)}{parts[1].zfill(4)}"
-    return str(value).strip()
+        raise ValueError(
+            f"NDC {value!r} has no package segment; an 11-digit NDC needs labeler-product-package"
+        )
+    val = str(value).strip()
+    if not val:
+        raise ValueError("Empty NDC")
+    if len(val) == 9 and val.isdigit():
+        raise ValueError(
+            f"NDC {value!r} has no package segment; an 11-digit NDC needs 11 digits (labeler-product-package)"
+        )
+    return val
 
 
 def product_ndc_candidates(value: str) -> list[str]:
@@ -662,3 +675,137 @@ def ruleset() -> dict:
             ),
         ],
     }
+
+
+@dataclass(frozen=True)
+class CertSignal:
+    status: str
+    codes: list[str] = field(default_factory=list)
+
+
+def signal_for_ndc(session: Session, ndc: str) -> CertSignal:
+    """Fetch current compliance status and active finding codes for an NDC."""
+    from sqlalchemy import select
+    from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+    from .models import CertificationFinding, DrugCertification
+
+    try:
+        key = ndc11(str(ndc))
+    except ValueError:
+        key = str(ndc).strip()
+
+    record = session.get(DrugCertification, key)
+    if record is None and key != str(ndc).strip():
+        record = session.get(DrugCertification, str(ndc).strip())
+    if record is None:
+        return CertSignal(status="unknown", codes=[])
+
+    try:
+        findings = session.scalars(
+            select(CertificationFinding.code).where(
+                CertificationFinding.ndc.in_([key, str(ndc).strip()])
+            )
+        ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        session.rollback()
+        findings = []
+
+    return CertSignal(status=str(record.status), codes=sorted(set(findings)))
+
+
+def recalls_for(session: Session, ndc: str) -> list[Recall]:
+    """Active recall findings recorded for this NDC."""
+    from sqlalchemy import select
+    from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+    from .models import CertificationFinding
+
+    try:
+        key = ndc11(str(ndc))
+    except ValueError:
+        key = str(ndc).strip()
+
+    try:
+        rows = session.scalars(
+            select(CertificationFinding).where(
+                CertificationFinding.ndc.in_([key, str(ndc).strip()]),
+                CertificationFinding.code.in_(["RECALL_CLASS_I", "RECALL_CLASS_II", "RECALL_CLASS_III"]),
+            )
+        ).all()
+    except (ProgrammingError, SQLAlchemyError):
+        session.rollback()
+        return []
+
+    class_map = {
+        "RECALL_CLASS_I": "Class I",
+        "RECALL_CLASS_II": "Class II",
+        "RECALL_CLASS_III": "Class III",
+    }
+    return [
+        Recall(
+            classification=class_map.get(r.code, "Class II"),
+            status="Ongoing",
+            recall_number=r.source_ref or "",
+            reason=r.message or "",
+            raw=r.raw or {},
+        )
+        for r in rows
+    ]
+
+
+def shortages_for(session: Session, ndc: str) -> list[Shortage]:
+    """Active FDA drug shortages recorded for this NDC."""
+    from sqlalchemy import select
+    from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+    from .models import CertificationFinding, ShortageEvent
+
+    try:
+        key = ndc11(str(ndc))
+    except ValueError:
+        key = str(ndc).strip()
+
+    out: list[Shortage] = []
+    try:
+        events = session.scalars(
+            select(ShortageEvent).where(ShortageEvent.ndc.in_([key, str(ndc).strip()]))
+        ).all()
+        for r in events:
+            raw = r.raw or {}
+            categories = raw.get("therapeutic_category") or []
+            out.append(
+                Shortage(
+                    status=r.status or raw.get("status") or "Current",
+                    generic_name=str(raw.get("generic_name") or ""),
+                    therapeutic_category=", ".join(str(c) for c in categories)
+                    if isinstance(categories, list)
+                    else str(categories),
+                    update_date=str(raw.get("update_date") or ""),
+                    raw=raw,
+                )
+            )
+    except (ProgrammingError, SQLAlchemyError):
+        session.rollback()
+
+    if not out:
+        try:
+            findings = session.scalars(
+                select(CertificationFinding).where(
+                    CertificationFinding.ndc.in_([key, str(ndc).strip()]),
+                    CertificationFinding.code.in_(["SHORTAGE_CURRENT", "SHORTAGE_DISCONTINUING"]),
+                )
+            ).all()
+            for f in findings:
+                status = "To Be Discontinued" if f.code == "SHORTAGE_DISCONTINUING" else "Current"
+                out.append(
+                    Shortage(
+                        status=status,
+                        generic_name="",
+                        therapeutic_category="",
+                        update_date=f.source_ref or "",
+                        raw=f.raw or {},
+                    )
+                )
+        except (ProgrammingError, SQLAlchemyError):
+            session.rollback()
+
+    return out
+

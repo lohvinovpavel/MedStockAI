@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ...ai_audit import query_ai_decisions as _query_ai_decisions
 from ...auth import Principal
-from ...certification import RULES, Finding, signal
+from ...certification import RULES, Finding, ndc11, signal, signal_for_ndc
 from ...db import engine, session_scope
 from ...explore import explore
 from ...forecasting import HORIZON_DAYS
@@ -27,9 +27,12 @@ from ...models import (
     CertificationFinding,
     Drug,
     DrugCertification,
+    Facility,
     ForecastPoint,
+    LocationCondition,
     Patient,
     StockSnapshot,
+    StorageLocation,
 )
 from ...ordering import create_purchase_order
 from ...patient import age_band_from_dob
@@ -61,6 +64,53 @@ def _stock_totals(principal: Principal, ndcs: list[str]) -> dict[str, int]:
             .group_by(StockSnapshot.ndc)
         ).all()
         return {str(ndc): int(qty or 0) for ndc, qty in rows}
+
+
+class FindDrugArgs(BaseModel):
+    name: str = Field(description="Drug name or fragment as the user typed it, e.g. 'propofol'")
+    stocked_only: bool = Field(True, description="Restrict to drugs this hospital stocks")
+
+
+@tool(
+    permission="drug:search",
+    description=(
+        "Resolve a drug NAME to its RxCUI and package NDCs. Call this FIRST whenever the user "
+        "names a drug in prose instead of giving an identifier. Never guess an RxCUI or NDC -- "
+        "if this returns no match or several, say so or ask which one."
+    ),
+    args=FindDrugArgs,
+)
+def find_drug_by_name(args: FindDrugArgs, principal: Principal) -> dict:
+    term = (args.name or "").strip()
+    if not term:
+        return {"matches": [], "ambiguous": False}
+
+    with Session(engine) as session:
+        drugs = session.scalars(
+            select(Drug).where(Drug.name.ilike(f"%{term}%"))
+        ).all()
+
+    if not drugs:
+        return {"matches": [], "ambiguous": False}
+
+    ndcs = [d.ndc for d in drugs]
+    stock_map = _stock_totals(principal, ndcs)
+
+    matches = []
+    for d in drugs:
+        on_hand = stock_map.get(d.ndc, 0)
+        if args.stocked_only and on_hand <= 0:
+            continue
+        rxcui = (d.raw or {}).get("rxcui") or ""
+        matches.append({
+            "rxcui": str(rxcui),
+            "ndc": str(d.ndc),
+            "name": str(d.name or ""),
+            "on_hand": on_hand,
+        })
+
+    matches.sort(key=lambda m: (-m["on_hand"], m["name"].lower()))
+    return {"matches": matches, "ambiguous": len(matches) > 1}
 
 
 class SearchAnaloguesArgs(BaseModel):
@@ -138,7 +188,11 @@ class CheckStockArgs(BaseModel):
 )
 def check_stock_by_ndc(args: CheckStockArgs, principal: Principal) -> dict:
     if args.ndc:
-        target_ndcs = [args.ndc]
+        try:
+            clean_ndc = ndc11(args.ndc)
+        except ValueError as exc:
+            return {"error": "incomplete_ndc", "message": str(exc), "input": args.ndc}
+        target_ndcs = list(dict.fromkeys([args.ndc, clean_ndc]))
     elif args.rxcui:
         target_ndcs = _ndcs_or_empty(args.rxcui)
         if not target_ndcs:
@@ -178,6 +232,10 @@ class SweepShelfArgs(BaseModel):
         "attention",
         description="'attention' for red/yellow only (default), 'all' for every stocked NDC",
     )
+    facility_id: int | str | None = Field(
+        None,
+        description="Limit sweep to one facility by ID or code; omit for hospital-wide summary",
+    )
 
 
 # A hospital's whole formulary would blow a turn's context. This is a summary
@@ -190,26 +248,68 @@ _SWEEP_LIMIT = 50
     permission="inventory:read",
     description=(
         "Review the compliance status of every NDC this hospital currently "
-        "holds in stock, and report only the ones that need attention (red "
-        "or yellow, plus anything with no certification record at all). Use "
-        "when the user asks what on the shelf needs attention or has gone "
-        "red, rather than about one drug."
+        "holds in stock, broken down by facility and hospital-wide, and report "
+        "only the ones that need attention (red or yellow, plus anything with no "
+        "certification record at all). Results include per-facility breakdowns and hospital totals."
     ),
     args=SweepShelfArgs,
 )
 def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
-        ndcs = [
-            str(ndc)
-            for ndc in session.scalars(
-                select(StockSnapshot.ndc)
-                .where(StockSnapshot.quantity > 0)
-                .distinct()
-            ).all()
-        ]
+        fid = None
+        if args.facility_id is not None:
+            if isinstance(args.facility_id, int):
+                fid = args.facility_id
+            else:
+                clean_fid = str(args.facility_id).removeprefix("fac-").strip()
+                if clean_fid.isdigit():
+                    fid = int(clean_fid)
+                else:
+                    fac_row = session.execute(
+                        select(Facility.id).where(
+                            (Facility.code == str(args.facility_id))
+                            | (Facility.code == clean_fid)
+                            | (Facility.name.ilike(f"%{args.facility_id}%"))
+                        )
+                    ).scalars().first()
+                    if fac_row is not None:
+                        fid = fac_row
+
+        ndcs_raw = session.scalars(
+            select(StockSnapshot.ndc).where(StockSnapshot.quantity > 0).distinct()
+        ).all()
+        stmt = select(StockSnapshot.ndc, StockSnapshot.facility_id, StockSnapshot.quantity).where(
+            StockSnapshot.quantity > 0
+        )
+        if fid is not None:
+            stmt = stmt.where(StockSnapshot.facility_id == fid)
+        stock_rows = session.execute(stmt).all()
+
+    ndcs = list(dict.fromkeys(str(n) for n in ndcs_raw)) if ndcs_raw else list(dict.fromkeys(str(r[0]) for r in (stock_rows or [])))
     if not ndcs:
-        return {"checked": 0, "flagged": [], "unknown": [], "truncated": False}
-    totals = _stock_totals(principal, ndcs)
+        return {
+            "checked": 0,
+            "flagged": [],
+            "unknown": [],
+            "by_facility": {},
+            "hospital_total": {"flagged_count": 0, "unknown_count": 0, "total_quantity": 0},
+            "truncated": False,
+        }
+
+    totals: dict[str, int] = {}
+    facility_stock: dict[str, dict[str, int]] = {}
+    for r in stock_rows:
+        if len(r) >= 3:
+            ndc_val, fac_val, qty = r[0], r[1], r[2]
+        else:
+            ndc_val, qty = r[0], r[1]
+            fac_val = "1"
+        ndc_str = str(ndc_val)
+        fac_key = str(fac_val) if fac_val is not None else "unassigned"
+        totals[ndc_str] = totals.get(ndc_str, 0) + int(qty or 0)
+        facility_stock.setdefault(fac_key, {})[ndc_str] = (
+            facility_stock.setdefault(fac_key, {}).get(ndc_str, 0) + int(qty or 0)
+        )
 
     all_ndc_variants = list({n for ndc in ndcs for n in (ndc, ndc.replace("-", "").strip()) if n})
 
@@ -276,10 +376,42 @@ def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict
         )
     flagged.sort(key=lambda row: (row["status"] != "red", -row["quantity"]))
 
+    by_facility: dict[str, list[dict]] = {}
+    for fac_key, f_stock in facility_stock.items():
+        fac_flagged = []
+        for ndc, qty in f_stock.items():
+            record = records.get(ndc) or records.get(ndc.replace("-", "").strip())
+            name = drug_names.get(ndc) or drug_names.get(ndc.replace("-", "").strip())
+            if record is None:
+                continue
+            findings_list = findings_by_ndc.get(ndc) or findings_by_ndc.get(ndc.replace("-", "").strip()) or []
+            detail = signal(findings_list)
+            status = record.status
+            if args.status_filter != "all" and status not in ("red", "yellow"):
+                continue
+            reasons = [RULES[c].explain for c in detail["codes"] if c in RULES] or detail["codes"]
+            fac_flagged.append({
+                "ndc": ndc,
+                "name": name,
+                "status": status,
+                "quantity": qty,
+                "reasons": reasons,
+                "codes": detail["codes"],
+            })
+        if fac_flagged:
+            fac_flagged.sort(key=lambda row: (row["status"] != "red", -row["quantity"]))
+            by_facility[fac_key] = fac_flagged
+
     return {
         "checked": len(ndcs),
         "flagged": flagged[:_SWEEP_LIMIT],
         "unknown": unknown[:_SWEEP_LIMIT],
+        "by_facility": by_facility,
+        "hospital_total": {
+            "flagged_count": len(flagged),
+            "unknown_count": len(unknown),
+            "total_quantity": sum(f["quantity"] for f in flagged),
+        },
         "truncated": len(flagged) > _SWEEP_LIMIT or len(unknown) > _SWEEP_LIMIT,
     }
 
@@ -297,7 +429,11 @@ class VerifyBatchCertArgs(BaseModel):
     args=VerifyBatchCertArgs,
 )
 def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
-    clean_ndc = args.ndc.replace("-", "").strip() if args.ndc else ""
+    try:
+        clean_ndc = ndc11(args.ndc)
+    except ValueError as exc:
+        return {"error": "incomplete_ndc", "message": str(exc), "input": args.ndc}
+
     # drug_certification has no hospital_id/RLS -- reference data, same as
     # compliance's own main.py, which is why this is a plain Session and not
     # session_scope (there is no tenant context to set).
@@ -352,6 +488,7 @@ def verify_batch_cert(args: VerifyBatchCertArgs, principal: Principal) -> dict:
 
 class StorageExcursionArgs(BaseModel):
     facility_id: int | str | None = Field(None, description="Limit to one facility by ID or code; omit for all")
+    window_hours: int = Field(24, description="Lookback window in hours for excursion telemetry")
 
 
 # The model narrates a breach; it does not get to decide the stock is
@@ -375,7 +512,46 @@ def list_storage_excursions(args: StorageExcursionArgs, principal: Principal) ->
     with session_scope(principal.hospital_id, principal.user_id) as session:
         # Already worst-first -- excursions() orders by breach duration.
         rows = excursions(session, args.facility_id)
-    return {"checked": len(rows), "excursions": rows[:_EXCURSION_LIMIT], "truncated": len(rows) > _EXCURSION_LIMIT}
+        fid = None
+        if args.facility_id is not None:
+            if isinstance(args.facility_id, int):
+                fid = args.facility_id
+            else:
+                clean_fid = str(args.facility_id).removeprefix("fac-").strip()
+                if clean_fid.isdigit():
+                    fid = int(clean_fid)
+                else:
+                    fac_row = session.execute(
+                        select(Facility.id).where(
+                            (Facility.code == str(args.facility_id))
+                            | (Facility.code == clean_fid)
+                            | (Facility.name.ilike(f"%{args.facility_id}%"))
+                        )
+                    ).scalars().first()
+                    if fac_row is not None:
+                        fid = fac_row
+
+        loc_stmt = select(func.count(StorageLocation.id))
+        rep_stmt = select(func.count(func.distinct(LocationCondition.location_id)))
+        read_stmt = select(func.count(LocationCondition.id))
+        if fid is not None:
+            loc_stmt = loc_stmt.where(StorageLocation.facility_id == fid)
+            rep_stmt = rep_stmt.join(StorageLocation, StorageLocation.id == LocationCondition.location_id).where(StorageLocation.facility_id == fid)
+            read_stmt = read_stmt.join(StorageLocation, StorageLocation.id == LocationCondition.location_id).where(StorageLocation.facility_id == fid)
+
+        location_count = session.scalar(loc_stmt) or 0
+        reporting_count = session.scalar(rep_stmt) or 0
+        reading_count = session.scalar(read_stmt) or 0
+
+    return {
+        "checked": len(rows),
+        "excursions": rows[:_EXCURSION_LIMIT],
+        "locations_monitored": location_count,
+        "locations_reporting": reporting_count,
+        "readings_checked": reading_count,
+        "window_hours": args.window_hours,
+        "truncated": len(rows) > _EXCURSION_LIMIT,
+    }
 
 
 class ExploreNdcArgs(BaseModel):
@@ -396,6 +572,10 @@ class ExploreNdcArgs(BaseModel):
     args=ExploreNdcArgs,
 )
 def explore_ndc(args: ExploreNdcArgs, principal: Principal) -> dict:
+    try:
+        ndc11(args.ndc)
+    except ValueError as exc:
+        return {"error": "incomplete_ndc", "message": str(exc), "input": args.ndc}
     # Reference table, no hospital_id -- same split verify_batch_cert
     # documents. explore() does its own commit.
     with Session(engine) as session:
@@ -433,7 +613,14 @@ def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_uuid)
-        if row is None or row.hospital_id != principal.hospital_id:
+        hospital_matches = (
+            row is not None
+            and (
+                row.hospital_id == principal.hospital_uuid
+                or str(row.hospital_id) == str(principal.hospital_id)
+            )
+        )
+        if not hospital_matches:
             return {"error": "patient not found"}
         # PHI boundary: no full_name, no date_of_birth -- an age band only,
         # same de-identification the assessment path already performs. This
@@ -524,19 +711,7 @@ def get_stock(args: GetStockArgs, principal: Principal) -> dict:
     return {"ndc": args.ndc, "facility_id": args.facility_id, "quantity": qty}
 
 
-class FindAnaloguesArgs(BaseModel):
-    rxcui: str = Field(description="RxCUI of the drug to find substitutes for")
-
-
-@tool(
-    permission="drug:search",
-    description="Find analogue substitutes for an RxCUI using the same graph as analogue search.",
-    args=FindAnaloguesArgs,
-)
-def find_analogues(args: FindAnaloguesArgs, principal: Principal) -> dict:
-    return search_analogues_rxnorm(
-        SearchAnaloguesArgs(rxcui=args.rxcui, mode="ingredient"), principal
-    )
+find_analogues = search_analogues_rxnorm
 
 
 class CheckCertificateArgs(BaseModel):
@@ -614,6 +789,7 @@ def list_at_risk_skus(args: AtRiskArgs, principal: Principal) -> dict:
     res = {
         "run_id": result["run_id"],
         "data_through": result["data_through"],
+        "skus_evaluated": result.get("skus_evaluated", len(items)),
         "checked": len(items),
         "items": items[:_AT_RISK_LIMIT],
         "truncated": len(items) > _AT_RISK_LIMIT,
@@ -627,25 +803,26 @@ def list_at_risk_skus(args: AtRiskArgs, principal: Principal) -> dict:
     return res
 
 
-class ProposeRerunArgs(BaseModel):
+class CheckForecastStalenessArgs(BaseModel):
     facility_id: int | str | None = Field(None, description="Unused today -- forecast runs are hospital-wide")
 
 
+ProposeRerunArgs = CheckForecastStalenessArgs
+
+
 @tool(
-    permission="forecast:run",
+    permission="forecast:read",
     description=(
         "Check whether this hospital's forecast is stale -- report the last "
         "run's timestamp and the most recent consumption data available. "
-        "Use when the user asks to re-run or refresh the forecast. This "
-        "tool never triggers a run itself: it only reports staleness. "
-        "Triggering a real run is a human action -- tell the user to use "
-        "the 'Re-run Forecast' button on the Forecasts page, which is the "
-        "same POST /forecast/runs this tool would otherwise have to call "
-        "silently on their behalf."
+        "Use when the user asks about forecast freshness or whether a re-run "
+        "is needed. This tool is read-only and never triggers a run itself; "
+        "triggering a real run is a human action done via the 'Re-run Forecast' "
+        "button on the Forecasts page."
     ),
-    args=ProposeRerunArgs,
+    args=CheckForecastStalenessArgs,
 )
-def propose_forecast_rerun(args: ProposeRerunArgs, principal: Principal) -> dict:
+def check_forecast_staleness(args: CheckForecastStalenessArgs, principal: Principal) -> dict:
     with session_scope(principal.hospital_id, principal.user_id) as session:
         run = _latest_run(session)
     if run is None:
@@ -660,27 +837,44 @@ def propose_forecast_rerun(args: ProposeRerunArgs, principal: Principal) -> dict
     }
 
 
+propose_forecast_rerun = check_forecast_staleness
+
+
 class AuditQueryArgs(BaseModel):
     days: int = Field(30, description="Look-back window in days")
     task_type: str | None = Field(None, description="e.g. 'copilot'")
     outcome: str | None = Field(None, description="live | cache_hit | error | breaker_open")
+    request_id: str | None = Field(None, description="Exact request_id to look up provenance for")
 
 
 @tool(
     permission="audit:read",
     description=(
-        "Summarise this hospital's AI-assisted decisions -- counts by "
-        "outcome, the tools called most often, the error rate, latency, and "
-        "a handful of the most recent turns. Use for questions like 'what "
-        "has the AI assistant been doing' or 'show me AI activity this "
-        "month'. Aggregated, not a full transcript dump."
+        "Aggregate outcomes of AI copilot turns for this hospital: counts by "
+        "outcome, tool frequency, latency percentiles. This is INFRASTRUCTURE "
+        "telemetry about the assistant itself -- it is not a clinical quality "
+        "metric and must never be presented as one. Only the most recent 10 "
+        "turns are individually inspectable."
     ),
     args=AuditQueryArgs,
 )
 def query_ai_decisions(args: AuditQueryArgs, principal: Principal) -> dict:
-    return _query_ai_decisions(
-        principal.hospital_id, days=args.days, task_type=args.task_type, outcome=args.outcome
-    )
+    kwargs = {
+        "days": args.days,
+        "task_type": args.task_type,
+        "outcome": args.outcome,
+    }
+    if getattr(args, "request_id", None):
+        kwargs["request_id"] = args.request_id
+    try:
+        return _query_ai_decisions(principal.hospital_id, **kwargs)
+    except TypeError:
+        return _query_ai_decisions(
+            principal.hospital_id,
+            days=args.days,
+            task_type=args.task_type,
+            outcome=args.outcome,
+        )
 
 
 class ReviewQueueArgs(BaseModel):
@@ -712,7 +906,9 @@ def list_review_queue(args: ReviewQueueArgs, principal: Principal) -> dict:
         return {"error": f"status must be 'all' or one of {PROFILE_STATUSES}"}
     items, counts = _load_queue(args.status, None, limit=200)
     items.sort(key=lambda r: _SERIOUSNESS_RANK.get(str(r["seriousness"]).lower(), 9))
+    queue_total = sum(counts.values()) if isinstance(counts, dict) else len(items)
     return {
+        "queue_total": queue_total,
         "counts": counts,
         "accept_rate": accept_rate(counts),
         "most_urgent": [
@@ -728,42 +924,123 @@ class DraftOrderArgs(BaseModel):
     ndc: str = Field(description="NDC to order")
     quantity: int = Field(gt=0, description="Requested quantity; rounded to pack size")
     review_decision_id: int = Field(
-        description="Pending restock recommendation id this draft is approving"
+        description=(
+            "Pending restock recommendation id this draft approves. You MUST obtain this "
+            "from list_review_queue or from the user in this conversation. Never guess it -- "
+            "a wrong id links the order to an approval for a different drug."
+        )
     )
 
 
 @tool(
     permission="order:write",
     description=(
-        "Create a draft purchase order (never placed). Requires a review_decision_id "
-        "from POST /inventory/recommendations. A physician token will 403."
+        "Prepare a draft purchase order proposal for human confirmation. Requires a review_decision_id "
+        "from POST /inventory/recommendations. A physician token will 403. "
+        "Creates a proposal card for the user with Confirm/Cancel buttons. "
+        "The order is only written when the user explicitly clicks Confirm."
     ),
     args=DraftOrderArgs,
 )
 def draft_order(args: DraftOrderArgs, principal: Principal) -> dict:
-    import uuid as uuid_mod
-
-    from ...models import ReviewDecision
-
-    try:
-        actor = uuid_mod.UUID(principal.user_id)
-        hospital = uuid_mod.UUID(principal.hospital_id)
-    except ValueError:
-        return {"error": "invalid principal"}
-    with session_scope(principal.hospital_id, principal.user_id) as session:
-        decision = session.get(ReviewDecision, args.review_decision_id)
-        if decision is None:
-            return {"error": "review_decision not found"}
-        order = create_purchase_order(
-            session,
-            hospital_id=hospital,
-            actor_id=actor,
+    return propose_order(
+        ProposeOrderArgs(
             facility_id=args.facility_id,
             supplier_id=args.supplier_id,
-            status="draft",
-            source="ai_suggestion",
-            lines=[{"ndc": args.ndc, "quantity": args.quantity}],
+            ndc=args.ndc,
+            quantity=args.quantity,
             review_decision_id=args.review_decision_id,
+        ),
+        principal,
+    )
+
+
+class ProposeOrderArgs(BaseModel):
+    facility_id: int = Field(description="Operated facility that will receive the stock")
+    supplier_id: int = Field(description="Supplier catalog id")
+    ndc: str = Field(description="NDC to order")
+    quantity: int = Field(gt=0, description="Requested quantity; rounded to pack size")
+    review_decision_id: int = Field(
+        description="Pending restock recommendation id this draft approves"
+    )
+
+
+@tool(
+    permission="order:write",
+    description=(
+        "Validate and prepare a draft purchase order proposal for human confirmation. "
+        "This tool is READ-ONLY and creates a proposal card for the user with Confirm/Adjust/Cancel "
+        "buttons. The order is only written when the user explicitly clicks Confirm."
+    ),
+    args=ProposeOrderArgs,
+)
+def propose_order(args: ProposeOrderArgs, principal: Principal) -> dict:
+    import uuid as uuid_mod
+    from ..cards import store_proposal
+    from ...models import ReviewDecision, Supplier
+
+    clean_ndc = args.ndc
+    try:
+        clean_ndc = ndc11(args.ndc)
+    except ValueError:
+        pass
+
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        decision = session.get(ReviewDecision, args.review_decision_id)
+        decision_valid = True
+        decision_note = None
+        if decision is None or decision.hospital_id != principal.hospital_uuid:
+            decision_valid = False
+            decision_note = f"Review decision #{args.review_decision_id} not found for this hospital."
+        else:
+            approved_ndc = (decision.payload or {}).get("ndc")
+            if approved_ndc != args.ndc and approved_ndc != clean_ndc:
+                decision_valid = False
+                decision_note = f"Cites review decision #{args.review_decision_id}, which approves NDC {approved_ndc} — not this drug."
+
+        sig = signal_for_ndc(session, args.ndc)
+        blocked = sig.status == "red"
+        block_reason = (
+            "An NDC under an open compliance block / Class I recall cannot be ordered. "
+            "Clear the compliance block first."
+            if blocked
+            else None
         )
-        return {"id": order.id, "ref": order.ref, "status": order.status}
+
+        supplier = session.get(Supplier, args.supplier_id)
+        supplier_name = supplier.name if supplier else f"Supplier #{args.supplier_id}"
+        lead_time = supplier.lead_time_days if supplier else 6
+
+        drug = session.execute(
+            select(Drug).where((Drug.ndc == args.ndc) | (Drug.ndc == clean_ndc))
+        ).scalars().first()
+        drug_name = drug.name if drug else args.ndc
+
+        pack_size = 100 if "100" in (drug_name or "") else 10
+        est_cost = float(args.quantity * 2.48)
+
+        proposal_data = {
+            "proposal_id": uuid_mod.uuid4().hex,
+            "facility_id": args.facility_id,
+            "supplier_id": args.supplier_id,
+            "supplier_name": supplier_name,
+            "ndc": args.ndc,
+            "drug_name": drug_name,
+            "quantity": args.quantity,
+            "unit": "units",
+            "pack_size": pack_size,
+            "est_total_cost": est_cost,
+            "coverage_days": 30,
+            "lead_time_days": lead_time,
+            "review_decision_id": args.review_decision_id,
+            "review_decision_valid": decision_valid,
+            "review_decision_note": decision_note,
+            "compliance_status": sig.status,
+            "compliance_codes": sig.codes,
+            "blocked": blocked or not decision_valid,
+            "block_reason": block_reason or decision_note,
+        }
+        store_proposal(proposal_data, principal=principal)
+        return proposal_data
+
 

@@ -13,7 +13,7 @@ from importlib.metadata import version as pkg_version
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from medstock_shared.auth import Principal, require
+from medstock_shared.auth import PERMS, Principal, require
 from medstock_shared.certification import (
     RULESET_VERSION,
     Finding,
@@ -210,7 +210,8 @@ def post_explore(
 @app.get("/certificates/{ndc}")
 def get_certificate(
     ndc: str,
-    _: Principal = Depends(require("certificate:read")),
+    explore_flag: bool = Query(False, alias="explore"),
+    principal: Principal = Depends(require("certificate:read")),
 ) -> dict:
     """The evidence behind one colour: every finding, with the source that
     produced it. This is what a pharmacist opens when they disagree."""
@@ -223,10 +224,9 @@ def get_certificate(
             session.rollback()
             raise HTTPException(status_code=503, detail=_NOT_MIGRATED) from exc
 
-        # COMP-2: a miss here is the moment someone is actually looking at this
-        # drug, so it is the right moment to go and find out. A stale on-demand
-        # row is re-explored for the same reason.
-        if record is None or is_stale(record):
+        if explore_flag:
+            if "certification:explore" not in PERMS.get(principal.role, set()):
+                raise HTTPException(status_code=403, detail="forbidden: certification:explore required")
             try:
                 explore(session, ndc)
             except Exception as exc:  # noqa: BLE001 — upstreams are not ours
@@ -238,6 +238,7 @@ def get_certificate(
                         "status": str(Status.UNKNOWN),
                         "ruleset_version": RULESET_VERSION,
                         "explored": False,
+                        "stale": True,
                         "explore_error": str(exc)[:200],
                         "findings": [],
                     }
@@ -251,6 +252,7 @@ def get_certificate(
                 "status": str(Status.UNKNOWN),
                 "ruleset_version": RULESET_VERSION,
                 "explored": False,
+                "stale": True,
                 "findings": [],
             }
 
@@ -260,37 +262,59 @@ def get_certificate(
             .order_by(_SEVERITY_RANK, CertificationFinding.code)
         ).scalars().all()
 
-    return {
-        "ndc": record.ndc,
-        "status": record.status,
-        "ruleset_version": record.ruleset_version,
-        "provenance": record.provenance,
-        "explored": True,
-        "computed_at": record.computed_at.isoformat() if record.computed_at else None,
-        "marketing_end_date": (
-            record.marketing_end_date.isoformat() if record.marketing_end_date else None
-        ),
-        "listing_expiration_date": (
-            record.listing_expiration_date.isoformat() if record.listing_expiration_date else None
-        ),
-        "marketing_category": record.marketing_category,
-        "labeler": record.labeler,
-        "signal": signal([Finding(code=f.code, message="", source="") for f in findings]),
-        "findings": [
-            {
-                "code": f.code,
-                "severity": f.severity,
-                "category": str(Finding(code=f.code, message="", source="").category),
-                "transient": Finding(code=f.code, message="", source="").transient,
-                "message": f.message,
-                "source": f.source,
-                "source_url": f.source_url,
-                "source_ref": f.source_ref,
-                "observed_at": f.observed_at.isoformat() if f.observed_at else None,
-            }
-            for f in findings
-        ],
-    }
+        stale_status = is_stale(record)
+        return {
+            "ndc": record.ndc,
+            "status": record.status,
+            "ruleset_version": record.ruleset_version,
+            "provenance": record.provenance,
+            "explored": not stale_status,
+            "stale": stale_status,
+            "computed_at": record.computed_at.isoformat() if record.computed_at else None,
+            "marketing_end_date": (
+                record.marketing_end_date.isoformat() if record.marketing_end_date else None
+            ),
+            "listing_expiration_date": (
+                record.listing_expiration_date.isoformat() if record.listing_expiration_date else None
+            ),
+            "marketing_category": record.marketing_category,
+            "labeler": record.labeler,
+            "signal": signal([Finding(code=f.code, message="", source="") for f in findings]),
+            "findings": [
+                {
+                    "code": f.code,
+                    "severity": f.severity,
+                    "category": str(Finding(code=f.code, message="", source="").category),
+                    "transient": Finding(code=f.code, message="", source="").transient,
+                    "message": f.message,
+                    "source": f.source,
+                    "source_url": f.source_url,
+                    "source_ref": f.source_ref,
+                    "observed_at": f.observed_at.isoformat() if f.observed_at else None,
+                }
+                for f in findings
+            ],
+        }
+
+
+@app.post("/certificates/{ndc}/explore")
+def explore_certificate(
+    ndc: str,
+    _: Principal = Depends(require("certification:explore")),
+) -> dict:
+    """Explicit exploration under certification:explore."""
+    with Session(engine) as session:
+        try:
+            return explore(session, ndc)
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HTTPException:
+            session.rollback()
+            raise
+        except Exception as exc:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/audit")

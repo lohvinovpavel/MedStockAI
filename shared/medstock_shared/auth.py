@@ -4,6 +4,7 @@ hospital_id and role are claims. A service that had to ask Auth on every request
 would make Auth a single point of failure for the whole system.
 """
 
+import uuid
 from dataclasses import dataclass
 
 import jwt
@@ -20,6 +21,19 @@ class Principal:
     user_id: str
     hospital_id: str
     role: str
+
+    @property
+    def hospital_uuid(self) -> uuid.UUID | None:
+        """Typed form of hospital_id, for comparison against ORM UUID columns.
+
+        Every model column is UUID(as_uuid=True); the JWT claim is a str.
+        Comparing them directly is silently always-unequal — see F-01.
+        Returns None if hospital_id is not a valid UUID to ensure closed-fail comparisons.
+        """
+        try:
+            return uuid.UUID(str(self.hospital_id))
+        except (ValueError, TypeError, AttributeError):
+            return None
 
 
 def credentials_token(request: Request) -> str | None:
@@ -137,8 +151,6 @@ PERMS: dict[str, set[str]] = {
         "audit:read",
         "inventory:read",
         "drug:search",
-        "patient:read",
-        "patient:write",
         "facility:read",
         "profile:review",
         "certificate:read",

@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from google.genai import types
 from medstock_shared.ai import client, shared_breaker, write_audit
+from medstock_shared.ai.cards import card_for
 from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
 from medstock_shared.auth import Principal, require
 from medstock_shared.config import settings
@@ -70,7 +71,21 @@ def _system_instruction_base(role: str) -> str:
         "usable result, say so plainly rather than guessing. Calling a "
         "read-only or assessment tool is not the same as authorizing, "
         "prescribing, or committing anything -- use the tools you are given "
-        "whenever they answer the question."
+        "whenever they answer the question.\n\n"
+        "Never propose ordering, reordering or sourcing a drug without stating its current certification "
+        "status. If a tool reports a compliance block, say so plainly and do not offer a workaround.\n\n"
+        "If the user names a drug without an identifier, call find_drug_by_name before any tool that "
+        "takes an rxcui or ndc. If you do not have an identifier from a tool result, say so — do not "
+        "supply one from your own knowledge.\n\n"
+        "A tool that returns an empty list may mean 'nothing to report' or 'nothing was measured'. Check "
+        "the coverage fields in the result. If nothing was measured, say that — never present an absence "
+        "of data as a clean or safe result, and never give an operational go-ahead on that basis.\n\n"
+        "If the user asks for a metric this system does not track, say plainly that it is not tracked "
+        "before offering anything else. Never label a figure with a metric name the user supplied unless "
+        "it is that exact metric. Name every figure by what the tool calls it — query_ai_decisions "
+        "reports AI tool-call outcomes, not clinical or medication error rates.\n\n"
+        "If you cannot satisfy part of the request with the tools available, say which part and why, in "
+        "the same reply as the part you could answer."
     )
 
 
@@ -109,6 +124,9 @@ def _system_instruction_for(principal: Principal) -> str:
         f"{base}\n\n"
         "The following capabilities exist in this system but this user's role "
         f"does not have permission to use them:\n{listing}\n\n"
+        "Only the tools listed above are unavailable to this user. Every other tool you can call is "
+        "permitted — if a tool call succeeds, use its result. Never tell the user they lack permission "
+        "for a tool you were able to call.\n\n"
         "If the user's request needs one of these, tell them plainly they don't "
         "have permission for that -- do not attempt it, invent an answer, or "
         "pretend the capability doesn't exist."
@@ -140,6 +158,7 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
     request_id = uuid.uuid4().hex
     started = time.monotonic()
     tools_called: list[dict] = []
+    successful_tools: set[str] = set()
 
     if not _ai_available():
         yield _sse("degraded", {
@@ -236,7 +255,11 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
             try:
                 result = await execute(name, args, principal)
                 tools_called.append({"name": name, "ok": True})
+                successful_tools.add(name)
                 yield _sse("tool_end", {"name": name, "ok": True})
+                card_data = card_for(name, result, principal, request_id, args=args)
+                if card_data is not None:
+                    yield _sse("tool_card", {"name": name, "card": card_data})
             except ToolDenied as exc:
                 # A forged or stale tool call from the model -- turned into a
                 # function_response error, never a crash or a silent grant.
@@ -267,6 +290,7 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
 
 
 @copilot.post("/copilot/chat")
+@copilot.post("/chat")
 async def copilot_chat(
     body: ChatRequest,
     principal: Principal = Depends(require("copilot:chat")),

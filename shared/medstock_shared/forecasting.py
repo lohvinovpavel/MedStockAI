@@ -250,6 +250,7 @@ def at_risk_skus(
         "facility_id": facility_id,
         "within_days": within_days,
         "surge_pct": surge_pct,
+        "skus_evaluated": len(stock),
         "run_id": run[0] if run else None,
         "generated_at": run[2].isoformat() if run else None,
         "data_through": None,
