@@ -13,9 +13,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, XAxis, YAxis } from "recharts";
-import { AlertTriangle, RefreshCw, TrendingUp } from "lucide-react";
+import { AlertTriangle, RefreshCw, Repeat2, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -556,6 +557,11 @@ export default function ForecastsPage() {
                   National shortage reported
                 </StatusBadge>
               )}
+              <Button asChild variant="outline" size="sm" className="w-fit">
+                <Link href={`/analogue?q=${encodeURIComponent(selected.name ?? selected.ndc)}`}>
+                  <Repeat2 /> Find analogues
+                </Link>
+              </Button>
               <Separator />
               <p className="text-[11px] text-muted-foreground">
                 Forecast generated {forecast.generated_at ? new Date(forecast.generated_at).toLocaleString() : "—"} from data through{" "}
