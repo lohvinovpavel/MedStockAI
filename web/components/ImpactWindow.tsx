@@ -51,14 +51,12 @@ const VERDICT_RANK: Record<string, number> = {
 
 export function ImpactWindow({
   patientName,
-  sex,
   regimenOrgans,
   regimenUnmapped = [],
   lines,
   disabled,
 }: {
   patientName: string;
-  sex?: string | null;
   regimenOrgans: OrganImpact[];
   regimenUnmapped?: string[];
   lines: RegimenLine[];
@@ -159,7 +157,6 @@ export function ImpactWindow({
         <AnatomyImpact
           organs={shown}
           unmapped={shownUnmapped}
-          sex={sex}
           height={expanded ? 720 : 460}
         />
 

@@ -20,8 +20,8 @@
  *
  * Verified by drawing markers over the render and looking.
  *
- * Coordinates are in each file's own viewBox units. The two templates differ in
- * size, which is why this is per-sex rather than one shared map.
+ * Coordinates are in the file's own viewBox units, so the overlay can share its
+ * coordinate space directly.
  */
 
 export type Point = readonly [number, number];
@@ -61,63 +61,50 @@ export const ORGAN_RADIUS: Readonly<Record<string, number>> = {
   skin: 0, // whole-body; drawn as a wash rather than a spot
 };
 
-export const TEMPLATES: Readonly<Record<"M" | "F", AnatomyTemplate>> = {
-  M: {
-    src: "/anatomy/male_template_with_organs.svg",
-    viewBox: [1363, 2440],
-    label: "male",
-    anchors: {
-      brain: [671, 225],
-      oesophagus: [644, 375],
-      thyroid: [657, 337],
-      lungs: [655, 550],
-      heart: [693, 604],
-      spleen: [903, 758],
-      stomach: [698, 861],
-      liver: [609, 862],
-      pancreas: [669, 896],
-      gallbladder: [582, 919],
-      blood: [936, 950],
-      kidneys: [566, 971],
-      intestines: [556, 1091],
-      bladder: [650, 1216],
-    },
-  },
-  F: {
-    src: "/anatomy/female_template_with_organs.svg",
-    viewBox: [1453.8667, 2320],
-    label: "female",
-    anchors: {
-      brain: [716, 186],
-      oesophagus: [687, 345],
-      thyroid: [701, 313],
-      lungs: [699, 532],
-      heart: [737, 589],
-      spleen: [963, 754],
-      stomach: [745, 864],
-      liver: [649, 865],
-      pancreas: [714, 901],
-      gallbladder: [621, 926],
-      blood: [998, 959],
-      kidneys: [604, 982],
-      intestines: [593, 1109],
-      bladder: [693, 1243],
-    },
+/**
+ * One figure for every patient.
+ *
+ * There were two, picked by recorded sex, and that was the wrong design for
+ * what this drawing does. The marks are viscera — liver, kidneys, stomach —
+ * and none of them sits differently for a man than a woman at this scale. The
+ * only thing the sex switch changed was the silhouette around them, so it
+ * bought no anatomical accuracy while costing plenty: a patient whose sex was
+ * unrecorded got a caption apologising for a body it had guessed, a patient
+ * whose sex did not fit two letters got the same, and each template needed its
+ * own anchor set, so any change to the mapping had to be made and verified
+ * twice.
+ *
+ * Kept the female-derived artwork because it is the better drawing of the two
+ * — cleaner organ separation and a more legible abdomen — and it is used here
+ * as a neutral anatomical frame, not as a depiction of the patient. The file
+ * keeps its upstream name so it stays traceable to PROVENANCE.md; the UI never
+ * shows that name or calls the figure gendered.
+ */
+export const FIGURE: AnatomyTemplate = {
+  src: "/anatomy/female_template_with_organs.svg",
+  viewBox: [1453.8667, 2320],
+  label: "anatomical figure",
+  anchors: {
+    brain: [716, 186],
+    oesophagus: [687, 345],
+    thyroid: [701, 313],
+    lungs: [699, 532],
+    heart: [737, 589],
+    spleen: [963, 754],
+    stomach: [745, 864],
+    liver: [649, 865],
+    pancreas: [714, 901],
+    gallbladder: [621, 926],
+    blood: [998, 959],
+    kidneys: [604, 982],
+    intestines: [593, 1109],
+    bladder: [693, 1243],
   },
 };
 
-/** Which template to draw. An unrecorded sex falls back to the male frame and
- *  says so in the caption rather than silently asserting one — the figure is
- *  anatomical context, and pretending to know is worse than admitting we do
- *  not. */
-export function templateFor(sex?: string | null): {
-  template: AnatomyTemplate;
-  known: boolean;
-} {
-  const key = (sex ?? "").trim().toUpperCase().slice(0, 1);
-  if (key === "F") return { template: TEMPLATES.F, known: true };
-  if (key === "M") return { template: TEMPLATES.M, known: true };
-  return { template: TEMPLATES.M, known: false };
+/** The figure to draw. Takes no argument: there is one, for everybody. */
+export function anatomyFigure(): AnatomyTemplate {
+  return FIGURE;
 }
 
 /** Provenance, surfaced in the UI. A hospital product should be able to answer

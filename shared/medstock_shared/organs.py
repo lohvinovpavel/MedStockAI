@@ -71,6 +71,13 @@ FINDING_ORGANS: dict[str, tuple[str, ...]] = {
     # The pair is in the message, not in a structured field, so there is nothing
     # here to map from. Unmapped and reported, rather than guessed.
     "CONDITION_WORSENED": (),
+    # A coverage gap, not a harm. The organ is not in doubt -- RENAL_UNKNOWN is
+    # about kidneys and HEPATIC_UNKNOWN about the liver -- so the figure marks
+    # it, and the INFO severity is what makes it read as "not assessed" rather
+    # than "impacted". Leaving them unmapped drew nothing at all, which told a
+    # prescriber the organ was fine when the truth was that nobody had checked.
+    "RENAL_UNKNOWN": ("kidneys",),
+    "HEPATIC_UNKNOWN": ("liver",),
     "NARROW_THERAPEUTIC_INDEX": (),
     # Age-inappropriate prescribing in the Beers sense is mostly anticholinergic
     # and sedative burden -- falls and confusion.

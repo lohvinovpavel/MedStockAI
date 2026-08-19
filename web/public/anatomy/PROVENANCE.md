@@ -1,6 +1,14 @@
 # Anatomical figures
 
-`male_template_with_organs.svg`, `female_template_with_organs.svg`
+`female_template_with_organs.svg` — the single figure the UI draws for every
+patient.
+
+The male template from the same set was removed: the marks are viscera, which
+sit the same either way at this scale, so the sex switch changed only the
+silhouette while costing a second anchor map and a caption apologising for a
+guessed body whenever sex was unrecorded. This file keeps its upstream name so
+it stays traceable to the source below; the UI presents it as a neutral
+anatomical frame and never names it.
 
 | | |
 |---|---|

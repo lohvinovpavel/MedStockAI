@@ -205,6 +205,50 @@ function saveCart(state: CartState) {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+/**
+ * Per-patient drafts, so switching patients does not carry a regimen across.
+ *
+ * The cart used to be a single object with a `patientId` field, and selecting a
+ * different patient swapped only that field. The lines stayed. Whoever was
+ * picked second inherited the first patient's prescription, silently, and the
+ * assessment beneath it re-ran against the new patient's profile -- so the
+ * screen showed a plausible, fully-scored regimen that nobody had written for
+ * that person. On a prescribing surface that is the worst kind of bug: it does
+ * not look like an error, it looks like a decision.
+ *
+ * Drafts live beside the active cart rather than inside it so an interrupted
+ * session comes back to what was being typed. sessionStorage, matching the
+ * cart: a draft prescription is not something to leave on a shared clinical
+ * workstation after the tab closes.
+ */
+const DRAFTS_KEY = "medstock-prescribe-drafts";
+
+function loadDrafts(): Record<string, CartItem[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(DRAFTS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDraft(patientId: string, items: CartItem[]) {
+  if (typeof window === "undefined") return;
+  const drafts = loadDrafts();
+  // An empty cart is a deletion, not a draft worth keeping: leaving `[]` behind
+  // would grow the store with one key per patient ever opened.
+  if (items.length === 0) delete drafts[patientId];
+  else drafts[patientId] = items;
+  sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+}
+
+function draftFor(patientId: string | null): CartItem[] {
+  if (!patientId) return [];
+  const items = loadDrafts()[patientId];
+  return Array.isArray(items) ? items : [];
+}
+
 function codesToInput(codes: string[]) {
   return codes.join(", ");
 }
@@ -251,9 +295,6 @@ export function PrescriptionCart() {
   const [analogueUsedAi, setAnalogueUsedAi] = useState(false);
   const [analogueRationaleUnavailable, setAnalogueRationaleUnavailable] =
     useState(false);
-  // The figure the analogue view draws. Null until an assessment returns it,
-  // and the component says so rather than assuming a sex.
-  const [patientSex, setPatientSex] = useState<string | null>(null);
   // The whole regimen on one body, as opposed to each line separately. Comes
   // from /cart-check rather than being summed here: the union is a clinical
   // claim, and a front-end that derived it could drift from what was logged.
@@ -277,6 +318,38 @@ export function PrescriptionCart() {
     if (!hydrated) return;
     saveCart(cart);
   }, [cart, hydrated]);
+
+  /**
+   * Move to another patient: bank the current regimen, open theirs.
+   *
+   * The clearing below is the substance of it. Every piece of state named here
+   * is an *assessment of a particular person* — verdicts, organ burden,
+   * substitute rankings — and none of it is recomputed until the pharmacist
+   * presses Check. Leaving any of it on screen means the new patient's card
+   * displays the previous patient's clinical conclusions, which is precisely
+   * the confusion this screen exists to prevent. Erring toward a blank card is
+   * safe; erring toward a stale one is not.
+   */
+  function switchPatient(picked: Patient | null) {
+    setCart((prev) => {
+      if (prev.patientId) saveDraft(prev.patientId, prev.items);
+      return { patientId: picked?.id ?? null, items: draftFor(picked?.id ?? null) };
+    });
+    setSelectedPatient(picked);
+
+    setCheckResults([]);
+    setCheckError(null);
+    setRegimenOrgans([]);
+    setRegimenUnmapped([]);
+    setAnalogues([]);
+    setAnalogueError(null);
+    setAnalogueUsedAi(false);
+    setAnalogueRationaleUnavailable(false);
+    setAnalogueVerdicts(new Map());
+    setAnalogueCheckFailed(false);
+    setOpenWarningFor(null);
+    setPrescription(null);
+  }
 
   const { setFocus } = useCopilot();
 
@@ -370,7 +443,6 @@ export function PrescriptionCart() {
           setCheckResults(data.results ?? []);
           setRegimenOrgans(data.regimen_organs ?? []);
           setRegimenUnmapped(data.regimen_organs_unmapped ?? []);
-          if (data.sex) setPatientSex(String(data.sex));
         }
       } catch (err) {
         if (!cancelled) {
@@ -570,7 +642,6 @@ export function PrescriptionCart() {
         }),
       });
       for (const row of checked?.results ?? []) verdicts.set(row.rxcui, row);
-      if (checked?.sex) setPatientSex(String(checked.sex));
     } catch {
       setAnalogueCheckFailed(true);
     }
@@ -675,8 +746,7 @@ export function PrescriptionCart() {
                   onSelect={(picked) => {
                     // The picker returns the row it listed, which is the whole
                     // patient — no second fetch to show allergies below.
-                    setSelectedPatient(picked);
-                    setCart((prev) => ({ ...prev, patientId: picked?.id ?? null }));
+                    switchPatient(picked);
                   }}
                 />
               </div>
@@ -711,7 +781,6 @@ export function PrescriptionCart() {
                 <AnatomyImpact
                   organs={regimenOrgans}
                   unmapped={regimenUnmapped}
-                  sex={patientSex}
                   height={150}
                   dense
                 />
@@ -722,7 +791,6 @@ export function PrescriptionCart() {
             {selectedPatient && (
               <ImpactWindow
                 patientName={selectedPatient.full_name}
-                sex={patientSex}
                 regimenOrgans={regimenOrgans}
                 regimenUnmapped={regimenUnmapped}
                 lines={checkResults}
@@ -1062,7 +1130,6 @@ export function PrescriptionCart() {
                                     <AnatomyImpact
                                       organs={checked.organs}
                                       unmapped={checked.organs_unmapped ?? []}
-                                      sex={patientSex}
                                       height={260}
                                     />
                                   </div>
