@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import gzip
 import os
+import random
 import sys
 import uuid
 from collections import defaultdict
@@ -22,7 +23,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from medstock_shared import engine
-from medstock_shared.demo_shelf import DASHBOARD_SHELF, demo_shortage_rows, shelf_stock_rows
+from medstock_shared.demo_shelf import (
+    DASHBOARD_SHELF,
+    FACILITY_SHELF_PROFILE,
+    demo_shortage_rows,
+    shelf_stock_rows,
+)
 from medstock_shared.forecasting import MODEL_VERSION
 from medstock_shared.models import (
     ConsumptionDaily,
@@ -48,6 +54,7 @@ from .demo_layout import (
     resolve_or_create_hospital,
     upsert_registry,
 )
+from .gen_demo import REORDER_COVER_S
 
 BATCH = 5000
 
@@ -313,7 +320,17 @@ def _overlay_dashboard_shelf(
     gen_demo's 100-drug panel doesn't include the dashboard shelf (different
     NDCs, chosen for COMP-1). Without this overlay the warehouse picker either
     omits those SKUs or shows them with no consumption/conditions join.
-    Consumption shape is cloned from a same-class donor already in the artifact.
+
+    Consumption *shape* is cloned from a same-class donor already in the
+    artifact, but rescaled so the item's central-site trailing mean matches
+    par_target / REORDER_COVER_S — the (s,S) inversion gen_demo itself uses.
+    Stock history is then walked backwards from the committed snapshot using
+    exactly that rescaled usage, so the chart obeys
+    qty[t-1] - qty[t] == usage[t] on every day except delivery days (where
+    stock jumps up to the par-scaled order-up-to level). Cloning the donor
+    verbatim used to leave usage at donor magnitude (metformin, ~120/day)
+    against a shelf snapshot in the dozens — the two lines told
+    contradictory stories.
     """
     donor_by_class: dict[str, dict] = {}
     for drug in drugs:
@@ -358,6 +375,21 @@ def _overlay_dashboard_shelf(
     id_by_fac = {fid: code for code, fid in fac_ids.items()}
     item_by_ndc = {d["ndc"]: d for d in DASHBOARD_SHELF}
 
+    # Per-item usage ratio, anchored on the donor's central trailing mean so
+    # the central series lands at par_target / REORDER_COVER_S per day and the
+    # other sites keep the donor's own facility proportions.
+    ratio_by_ndc: dict[str, float] = {}
+    for item in DASHBOARD_SHELF:
+        donor = donor_by_class.get(item["storage_class"])
+        if donor is None:
+            continue
+        central_tail = [
+            int(c["qty"]) for c in cons_by_ndc[donor["ndc"]] if c["facility"] == "central"
+        ][-28:]
+        donor_mean = sum(central_tail) / len(central_tail) if central_tail else 0.0
+        target_daily = int(item["par_target"]) / REORDER_COVER_S
+        ratio_by_ndc[item["ndc"]] = (target_daily / donor_mean) if donor_mean > 0 else 1.0
+
     extra_cons: list[dict] = []
     extra_hist: list[dict] = []
     for row in extra_stock:
@@ -368,9 +400,12 @@ def _overlay_dashboard_shelf(
         rxcui = item["rxcui"]
         fac_code = id_by_fac[row["facility_id"]]
         qty = int(row["quantity"])
-        for cons in cons_by_ndc[donor["ndc"]]:
-            if cons["facility"] != fac_code:
-                continue
+        ratio = ratio_by_ndc[row["ndc"]]
+        donor_cons = [c for c in cons_by_ndc[donor["ndc"]] if c["facility"] == fac_code]
+        usage_by_date = {
+            c["date"]: max(0, round(int(c["qty"]) * ratio)) for c in donor_cons
+        }
+        for cons in donor_cons:
             extra_cons.append(
                 {
                     "hospital_id": hospital_id,
@@ -378,21 +413,34 @@ def _overlay_dashboard_shelf(
                     "ndc": row["ndc"],
                     "rxcui": rxcui,
                     "date": cons["date"],
-                    "qty_consumed": int(cons["qty"]),
+                    "qty_consumed": usage_by_date[cons["date"]],
                     "stockout": cons["stockout"] == "1",
                 }
             )
         donor_hist = [r for r in hist_by_ndc[donor["ndc"]] if r["facility"] == fac_code]
-        donor_last = int(donor_hist[-1]["qty"]) if donor_hist else 0
-        factor = (qty / donor_last) if donor_last else 1.0
-        for i, hist in enumerate(donor_hist):
+        hist_dates = [r["date"] for r in donor_hist]
+        # Backwards walk from the snapshot, adding back each day's usage —
+        # the same construction as gen_demo.gen_stock_history, with the par
+        # levels (facility-scaled) as the (s,S) caps. Deterministic drop on
+        # delivery days so reseeding is stable.
+        sf = float(FACILITY_SHELF_PROFILE[fac_code]["stock_factor"])
+        reorder_at = max(round(int(item["par_reorder"]) * sf), 1)
+        order_up_to = max(round(int(item["par_target"]) * sf), qty + reorder_at)
+        rng = random.Random(f"demo-shelf-hist|{row['ndc']}|{fac_code}")
+        walk = [qty]
+        for day in reversed(hist_dates[1:]):
+            prev = walk[-1] + usage_by_date.get(day, 0)
+            if prev > order_up_to:  # a delivery landed that morning
+                prev = max(round(reorder_at * rng.uniform(0.3, 0.95)), 0)
+            walk.append(prev)
+        for day, on_hand in zip(hist_dates, reversed(walk)):
             extra_hist.append(
                 {
                     "hospital_id": hospital_id,
                     "facility_id": row["facility_id"],
                     "ndc": row["ndc"],
-                    "date": hist["date"],
-                    "qty_on_hand": qty if i == len(donor_hist) - 1 else max(0, round(int(hist["qty"]) * factor)),
+                    "date": day,
+                    "qty_on_hand": on_hand,
                 }
             )
 
