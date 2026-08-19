@@ -25,10 +25,12 @@ from medstock_shared.patient import (
     PatientVector,
     assess,
     avoided_ingredient_warnings,
+    class_from_ingredients,
     class_of,
     patient_row_to_vector,
     plan_demand,
     profile_avoided_ingredients,
+    register_drug_class,
 )
 from medstock_shared.patient_assess import (
     NOT_FOUND,
@@ -779,6 +781,24 @@ def cart_check(
     # show one body carrying everything rather than N bodies to compare.
     regimen_findings: list = []
     regimen_classes: set[str] = set()
+    # Ingredients first, for the whole cart. They are needed for the avoid-warning
+    # check anyway, and resolving class from them has to happen before assess()
+    # runs or the class-gated stages are skipped on a drug we could have classed.
+    ingredients_by_rxcui: dict[str, list] = {}
+    for item in body.items:
+        rx = item.rxcui.strip()
+        try:
+            ingredients_by_rxcui[rx] = ingredients_for_rxcui(rx)
+        except RxNormError:
+            ingredients_by_rxcui[rx] = []
+        if class_of(rx) is None and ingredients_by_rxcui[rx]:
+            register_drug_class(
+                rx,
+                class_from_ingredients(
+                    str(i.get("name") or "") for i in ingredients_by_rxcui[rx]
+                ),
+            )
+
     for item in body.items:
         rxcui = item.rxcui.strip()
         assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
@@ -787,10 +807,8 @@ def cart_check(
 
         exclude_ingredient: str | None = None
         exclude_ingredient_name: str | None = None
-        try:
-            ingredients = ingredients_for_rxcui(rxcui)
-        except RxNormError:
-            ingredients = []
+        ingredients = ingredients_by_rxcui.get(rxcui, [])
+        if not ingredients:
             warnings.append(
                 {
                     "code": "RXNORM_UNAVAILABLE",

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -663,12 +663,142 @@ def pgx_findings(
     return findings
 
 
+# Ingredient stem -> class. The same table that classified the demo formulary,
+# kept here so it can be applied to any drug RxNorm can name rather than only to
+# the hundred we happened to seed.
+#
+# Stems, not exact names, because RxNorm returns "metformin hydrochloride" and
+# "metformin" for the same drug, and salt forms multiply endlessly. Ordered
+# longest-first within a class is unnecessary; the patterns are disjoint.
+INGREDIENT_CLASS_STEMS: tuple[tuple[str, str], ...] = (
+    ("metformin", "biguanide"),
+    ("ibuprofen", "nsaid"), ("naproxen", "nsaid"), ("diclofenac", "nsaid"),
+    ("ketorolac", "nsaid"), ("celecoxib", "nsaid"), ("meloxicam", "nsaid"),
+    ("aspirin", "nsaid"), ("indomethacin", "nsaid"),
+    ("atorvastatin", "statin"), ("simvastatin", "statin"),
+    ("rosuvastatin", "statin"), ("pravastatin", "statin"),
+    ("lisinopril", "ace_inhibitor"), ("enalapril", "ace_inhibitor"),
+    ("ramipril", "ace_inhibitor"), ("captopril", "ace_inhibitor"),
+    ("perindopril", "ace_inhibitor"),
+    ("losartan", "arb"), ("valsartan", "arb"), ("irbesartan", "arb"),
+    ("candesartan", "arb"), ("olmesartan", "arb"),
+    ("metoprolol", "beta_blocker"), ("atenolol", "beta_blocker"),
+    ("bisoprolol", "beta_blocker"), ("carvedilol", "beta_blocker"),
+    ("propranolol", "beta_blocker"), ("nebivolol", "beta_blocker"),
+    ("amlodipine", "calcium_blocker"), ("nifedipine", "calcium_blocker"),
+    ("diltiazem", "calcium_blocker"), ("verapamil", "calcium_blocker"),
+    ("furosemide", "loop_diuretic"), ("bumetanide", "loop_diuretic"),
+    ("torsemide", "loop_diuretic"),
+    ("hydrochlorothiazide", "thiazide"), ("chlorthalidone", "thiazide"),
+    ("indapamide", "thiazide"),
+    ("spironolactone", "potassium_sparing"), ("eplerenone", "potassium_sparing"),
+    ("warfarin", "anticoagulant"), ("apixaban", "anticoagulant"),
+    ("rivaroxaban", "anticoagulant"), ("dabigatran", "anticoagulant"),
+    ("edoxaban", "anticoagulant"), ("heparin", "anticoagulant"),
+    ("enoxaparin", "anticoagulant"),
+    ("clopidogrel", "antiplatelet"), ("ticagrelor", "antiplatelet"),
+    ("prasugrel", "antiplatelet"),
+    ("sertraline", "ssri"), ("escitalopram", "ssri"), ("fluoxetine", "ssri"),
+    ("citalopram", "ssri"), ("paroxetine", "ssri"),
+    ("venlafaxine", "snri"), ("duloxetine", "snri"),
+    ("amitriptyline", "tricyclic"), ("nortriptyline", "tricyclic"),
+    ("trazodone", "sedating_antidepressant"),
+    ("quetiapine", "antipsychotic"), ("olanzapine", "antipsychotic"),
+    ("risperidone", "antipsychotic"), ("aripiprazole", "antipsychotic"),
+    ("haloperidol", "antipsychotic"),
+    ("lorazepam", "benzodiazepine"), ("alprazolam", "benzodiazepine"),
+    ("diazepam", "benzodiazepine"), ("clonazepam", "benzodiazepine"),
+    ("temazepam", "benzodiazepine"), ("midazolam", "benzodiazepine"),
+    ("zolpidem", "z_drug"), ("zopiclone", "z_drug"),
+    ("morphine", "opioid"), ("oxycodone", "opioid"), ("hydrocodone", "opioid"),
+    ("fentanyl", "opioid"), ("tramadol", "opioid"), ("codeine", "opioid"),
+    ("hydromorphone", "opioid"), ("buprenorphine", "opioid"),
+    ("gabapentin", "gabapentinoid"), ("pregabalin", "gabapentinoid"),
+    ("omeprazole", "ppi"), ("pantoprazole", "ppi"), ("esomeprazole", "ppi"),
+    ("lansoprazole", "ppi"),
+    ("famotidine", "h2_blocker"), ("ranitidine", "h2_blocker"),
+    ("levothyroxine", "thyroid_hormone"), ("liothyronine", "thyroid_hormone"),
+    ("amoxicillin", "penicillin"), ("ampicillin", "penicillin"),
+    ("penicillin", "penicillin"), ("piperacillin", "penicillin"),
+    ("flucloxacillin", "penicillin"),
+    ("cephalexin", "cephalosporin"), ("cefuroxime", "cephalosporin"),
+    ("ceftriaxone", "cephalosporin"), ("cefazolin", "cephalosporin"),
+    ("ciprofloxacin", "fluoroquinolone"), ("levofloxacin", "fluoroquinolone"),
+    ("moxifloxacin", "fluoroquinolone"),
+    ("azithromycin", "macrolide"), ("clarithromycin", "macrolide"),
+    ("erythromycin", "macrolide"),
+    ("gentamicin", "aminoglycoside"), ("tobramycin", "aminoglycoside"),
+    ("amikacin", "aminoglycoside"),
+    ("vancomycin", "glycopeptide"), ("doxycycline", "tetracycline"),
+    ("nitrofurantoin", "urinary_antibiotic"),
+    ("alendronate", "bisphosphonate"), ("risedronate", "bisphosphonate"),
+    ("zoledronic", "bisphosphonate"),
+    ("prednisone", "corticosteroid"), ("prednisolone", "corticosteroid"),
+    ("dexamethasone", "corticosteroid"), ("hydrocortisone", "corticosteroid"),
+    ("fluticasone", "inhaled_corticosteroid"), ("budesonide", "inhaled_corticosteroid"),
+    ("insulin", "hypoglycaemic"), ("glipizide", "hypoglycaemic"),
+    ("gliclazide", "hypoglycaemic"), ("glyburide", "hypoglycaemic"),
+    ("sitagliptin", "dpp4_inhibitor"), ("linagliptin", "dpp4_inhibitor"),
+    ("semaglutide", "glp1_agonist"), ("tirzepatide", "glp1_agonist"),
+    ("dulaglutide", "glp1_agonist"), ("liraglutide", "glp1_agonist"),
+    ("empagliflozin", "sglt2_inhibitor"), ("dapagliflozin", "sglt2_inhibitor"),
+    ("digoxin", "digoxin"), ("amiodarone", "antiarrhythmic"),
+    ("lithium", "lithium"), ("methotrexate", "antimetabolite"),
+    ("allopurinol", "xanthine_oxidase_inhibitor"),
+    ("ondansetron", "antiemetic"), ("metoclopramide", "prokinetic"),
+    ("tamsulosin", "alpha_blocker"), ("doxazosin", "alpha_blocker"),
+    ("finasteride", "five_alpha_reductase"), ("clonidine", "alpha2_agonist"),
+    ("oxybutynin", "anticholinergic"), ("tolterodine", "anticholinergic"),
+    ("solifenacin", "anticholinergic"), ("diphenhydramine", "anticholinergic"),
+    ("cetirizine", "antihistamine"), ("loratadine", "antihistamine"),
+    ("fexofenadine", "antihistamine"),
+    ("montelukast", "leukotriene_antagonist"),
+    ("albuterol", "saba"), ("salbutamol", "saba"), ("ipratropium", "sama"),
+    ("salmeterol", "laba"), ("formoterol", "laba"),
+    ("paracetamol", "paracetamol"), ("acetaminophen", "paracetamol"),
+    ("oseltamivir", "antiviral"), ("acyclovir", "antiviral"),
+    ("latanoprost", "prostaglandin_analogue"), ("epoetin", "esa"),
+    ("succinylcholine", "neuromuscular_blocker"),
+    ("rocuronium", "neuromuscular_blocker"),
+)
+
+
+def class_from_ingredients(names: Iterable[str]) -> str | None:
+    """Class from an ingredient name, or None if nothing matches.
+
+    The ingredient is what carries the class: metformin hydrochloride is a
+    biguanide because of the word metformin, not because of its RxCUI. Callers
+    already holding ingredients from RxNorm can classify any drug this way,
+    rather than only the ones somebody thought to add to DRUG_CLASS.
+    """
+    for name in names:
+        lowered = str(name or "").lower()
+        for stem, cls in INGREDIENT_CLASS_STEMS:
+            if stem in lowered:
+                return cls
+    return None
+
+
+# Classes resolved at request time from RxNorm ingredients. Separate from
+# DRUG_CLASS so the curated map stays the override: a curated entry is a
+# deliberate decision about how the ruleset should reason, and a derived one
+# must never quietly replace it.
+_RESOLVED_CLASS: dict[str, str] = {}
+
+
+def register_drug_class(rxcui: str, cls: str | None) -> None:
+    """Record a class derived for an rxcui the curated map does not cover."""
+    if cls and str(rxcui) not in DRUG_CLASS:
+        _RESOLVED_CLASS[str(rxcui)] = cls
+
+
 def _class_of(rxcui: str) -> str | None:
-    return DRUG_CLASS.get(str(rxcui))
+    return DRUG_CLASS.get(str(rxcui)) or _RESOLVED_CLASS.get(str(rxcui))
 
 
 def class_of(rxcui: str) -> str | None:
-    """The therapeutic class of a drug, or None if the map does not know it.
+    """The therapeutic class of a drug, or None if neither the curated map nor
+    a resolved ingredient gives one.
 
     Public because the organ diagram needs it: a duplicate-class finding shades
     whichever organ that class stacks on, and the caller has only the rxcui.
