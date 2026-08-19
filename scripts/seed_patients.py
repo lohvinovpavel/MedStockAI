@@ -117,6 +117,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Amara Okonkwo",
+        "sex": "F",
+        "egfr_value": 26,
+        "hepatic": "impaired",
         "date_of_birth": date(1985, 6, 19),
         "blood_group": "O+",
         "allergy_codes": [],
@@ -127,6 +130,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Henry Ashfield",
+        "sex": "M",
+        "egfr_value": 38,
+        "hepatic": "normal",
         "date_of_birth": date(1934, 12, 1),
         "blood_group": "AB+",
         "allergy_codes": ["nsaid"],
@@ -137,6 +143,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Priya Raghavan",
+        "sex": "F",
+        "egfr_value": 88,
+        "hepatic": "normal",
         "date_of_birth": date(1998, 3, 15),
         "blood_group": "B-",
         "allergy_codes": [],
@@ -147,6 +156,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Ruth Delacroix",
+        "sex": "F",
+        "egfr_value": 17,
+        "hepatic": "impaired",
         "date_of_birth": date(1961, 7, 22),
         "blood_group": "A+",
         "allergy_codes": [],
@@ -406,7 +418,22 @@ def _backfill(existing: Patient, spec: dict) -> bool:
     either with an invented one.
     """
     changed = False
+
+    # Sex is reconciled, not merely filled. Every other feature here is
+    # invented, so overwriting one would destroy a real value; sex is DERIVED
+    # from the name on the same row, so a disagreement is not a difference of
+    # opinion -- it is a row that contradicts itself, and it renders as a male
+    # body above a woman's name. An earlier generator drew sex independently of
+    # the name and produced 518 of them, which a gap-only backfill cannot repair
+    # and which no operator will find by hand.
+    want_sex = sex_for_name(existing.full_name)
+    if existing.sex != want_sex:
+        existing.sex = want_sex
+        changed = True
+
     for field in _SCALAR_FEATURES:
+        if field == "sex":
+            continue  # handled above
         if getattr(existing, field, None) in (None, "") and spec.get(field) is not None:
             setattr(existing, field, spec[field])
             changed = True
