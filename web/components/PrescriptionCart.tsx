@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PatientPicker } from "@/components/dashboard/PatientPicker";
+import { ImpactWindow } from "@/components/ImpactWindow";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -67,6 +68,10 @@ type CartLineResult = {
   rxcui: string;
   name: string | null;
   verdict: string;
+  // Where this line lands on the body. Computed server-side from the findings
+  // that fired, so the figure and the audit trail cannot disagree.
+  organs?: OrganImpact[];
+  organs_unmapped?: string[];
   warnings: Warning[];
   exclude_ingredient: string | null;
   exclude_ingredient_name: string | null;
@@ -224,6 +229,11 @@ export function PrescriptionCart() {
   // The figure the analogue view draws. Null until an assessment returns it,
   // and the component says so rather than assuming a sex.
   const [patientSex, setPatientSex] = useState<string | null>(null);
+  // The whole regimen on one body, as opposed to each line separately. Comes
+  // from /cart-check rather than being summed here: the union is a clinical
+  // claim, and a front-end that derived it could drift from what was logged.
+  const [regimenOrgans, setRegimenOrgans] = useState<OrganImpact[]>([]);
+  const [regimenUnmapped, setRegimenUnmapped] = useState<string[]>([]);
   const [analogueVerdicts, setAnalogueVerdicts] = useState<Map<string, AnalogueVerdict>>(
     new Map(),
   );
@@ -331,7 +341,12 @@ export function PrescriptionCart() {
             items: cart.items.map((i) => ({ rxcui: i.rxcui, name: i.name })),
           }),
         });
-        if (!cancelled) setCheckResults(data.results ?? []);
+        if (!cancelled) {
+          setCheckResults(data.results ?? []);
+          setRegimenOrgans(data.regimen_organs ?? []);
+          setRegimenUnmapped(data.regimen_organs_unmapped ?? []);
+          if (data.sex) setPatientSex(String(data.sex));
+        }
       } catch (err) {
         if (!cancelled) {
           setCheckResults([]);
@@ -650,6 +665,20 @@ export function PrescriptionCart() {
                 {selectedPatient.condition_codes.join(", ") || "none"} · Blood:{" "}
                 {selectedPatient.blood_group ?? "—"}
               </p>
+            )}
+            {/* Opened deliberately rather than pinned open: a physician asks
+                "show me the impact", they do not need a body on screen while
+                they type a drug name. Disabled with an empty cart, because a
+                regimen of nothing has no impact to show. */}
+            {selectedPatient && (
+              <ImpactWindow
+                patientName={selectedPatient.full_name}
+                sex={patientSex}
+                regimenOrgans={regimenOrgans}
+                regimenUnmapped={regimenUnmapped}
+                lines={checkResults}
+                disabled={cart.items.length === 0 || checkBusy}
+              />
             )}
 
             {showPatientForm && (

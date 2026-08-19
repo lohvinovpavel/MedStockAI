@@ -771,6 +771,10 @@ def cart_check(
     pgx = pgx_for(cart_rxcuis)
     adr = adr_signals_for(cart_rxcuis)
     results: list[dict] = []
+    # The whole-regimen view. Findings from every line, so the profile figure can
+    # show one body carrying everything rather than N bodies to compare.
+    regimen_findings: list = []
+    regimen_classes: set[str] = set()
     for item in body.items:
         rxcui = item.rxcui.strip()
         assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
@@ -808,6 +812,7 @@ def cart_check(
                         exclude_ingredient_name = ing_name
                         break
 
+        shaded, unshaded = organ_impacts(assessment.findings, class_of(rxcui))
         results.append(
             {
                 "rxcui": rxcui,
@@ -818,8 +823,13 @@ def cart_check(
                 "exclude_ingredient": exclude_ingredient,
                 "exclude_ingredient_name": exclude_ingredient_name,
                 "ingredients": ingredients,
+                "organs": [i.as_dict() for i in shaded],
+                "organs_unmapped": unshaded,
             }
         )
+        regimen_findings.extend(assessment.findings)
+        if class_of(rxcui):
+            regimen_classes.add(class_of(rxcui))
 
     # Logged for the same reason /assess is: this produces a per-patient verdict
     # a physician acts on. The cohort endpoints (/demand, /forecast) are not
@@ -827,10 +837,22 @@ def cart_check(
     # clinical decision about a person, and assessment_log is the clinical trail.
     request_id = record_assessment(principal, vector, results)
 
+    # One body for the whole regimen. A drug class is passed only when the cart
+    # is all one class -- a duplicate-class finding names the class that stacked,
+    # and handing an arbitrary one to the mapping would attribute a stack to a
+    # drug that did not cause it.
+    only_class = next(iter(regimen_classes)) if len(regimen_classes) == 1 else None
+    regimen_shaded, regimen_unmapped = organ_impacts(regimen_findings, only_class)
+
     return {
         "ruleset_version": RULESET_VERSION,
         "request_id": request_id,
         "patient": patient_payload,
+        # For the profile figure. Which anatomical frame to draw, and where the
+        # whole regimen lands, as opposed to each line separately.
+        "sex": vector.sex,
+        "regimen_organs": [i.as_dict() for i in regimen_shaded],
+        "regimen_organs_unmapped": regimen_unmapped,
         "results": results,
         # Mirrors /assess. Zero here is meaningful: it distinguishes "no approved
         # profile covers this cart" from "the prognosis stage never ran", which
