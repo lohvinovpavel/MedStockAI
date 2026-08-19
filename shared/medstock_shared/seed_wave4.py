@@ -7,7 +7,7 @@ Actor GUC / hospital_id must already be set — partner batches fire H1.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import delete, select
@@ -22,7 +22,13 @@ from .demo_shelf import (
 from .models import ConsumptionDaily, StockBatch, StockSnapshot, Supplier, SupplierCatalog
 
 
-def apply_partner_shortage(session: Session, hospital_id: uuid.UUID, fac_ids: dict[str, int]) -> int:
+def apply_partner_shortage(
+    session: Session,
+    hospital_id: uuid.UUID,
+    fac_ids: dict[str, int],
+    *,
+    as_of: date | None = None,
+) -> int:
     rows = partner_shortage_stock_rows(hospital_id, fac_ids)
     if not rows:
         return 0
@@ -72,7 +78,7 @@ def apply_partner_shortage(session: Session, hospital_id: uuid.UUID, fac_ids: di
             },
         )
     )
-    cons = partner_shortage_consumption_rows(hospital_id, fac_ids)
+    cons = partner_shortage_consumption_rows(hospital_id, fac_ids, as_of=as_of)
     if cons:
         for i in range(0, len(cons), 500):
             session.execute(insert(ConsumptionDaily), cons[i : i + 500])

@@ -18,6 +18,7 @@ from medstock_shared.forecasting import (
     MODEL_VERSION,
     History,
     forecast_series,
+    operated_facility_ids,
 )
 from medstock_shared.models import ConsumptionDaily, ForecastPoint
 from sqlalchemy import delete, func, select
@@ -31,13 +32,16 @@ def load_history(
 ) -> tuple[dict[tuple[int, str], History], date | None]:
     """All consumption series for the session's hospital (RLS/session scope
     decides visibility), capped at `as_of`. Returns (series map, data_through)."""
+    # Operated sites only: partner-visibility series (operated = false) are
+    # someone else's demand — fitting them would add their forecast points to
+    # every hospital-aggregate sum.
     stmt = select(
         ConsumptionDaily.facility_id,
         ConsumptionDaily.ndc,
         ConsumptionDaily.date,
         ConsumptionDaily.qty_consumed,
         ConsumptionDaily.stockout,
-    )
+    ).where(ConsumptionDaily.facility_id.in_(operated_facility_ids()))
     if as_of is not None:
         stmt = stmt.where(ConsumptionDaily.date <= as_of)
     series: dict[tuple[int, str], History] = defaultdict(dict)

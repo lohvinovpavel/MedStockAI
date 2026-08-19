@@ -32,6 +32,7 @@ from medstock_shared.forecasting import (
     forecast_by_ndc,
     latest_run,
     on_hand,
+    operated_facility_ids,
     scale,
     shortage_active,
     summarize,
@@ -112,8 +113,13 @@ def forecast(
             return out
 
         run = latest_run(session)
+        # Operated sites only — partner-visibility series (operated = false)
+        # must not make the stored run look outrun and trigger a re-run.
         latest_data = session.execute(
-            select(func.max(ConsumptionDaily.date)).where(ConsumptionDaily.ndc.in_(ndcs))
+            select(func.max(ConsumptionDaily.date)).where(
+                ConsumptionDaily.ndc.in_(ndcs),
+                ConsumptionDaily.facility_id.in_(operated_facility_ids()),
+            )
         ).scalar()
         data_through = run[1] if run else latest_data
         out["data_through"] = data_through.isoformat()
@@ -133,6 +139,10 @@ def forecast(
         )
         if facility_id is not None:
             hist_stmt = hist_stmt.where(ConsumptionDaily.facility_id == facility_id)
+        else:
+            hist_stmt = hist_stmt.where(
+                ConsumptionDaily.facility_id.in_(operated_facility_ids())
+            )
         out["history"] = [
             {"date": d.isoformat(), "quantity": int(q)} for d, q in session.execute(hist_stmt)
         ]
@@ -152,6 +162,8 @@ def forecast(
         )
         if facility_id is not None:
             stock_stmt = stock_stmt.where(StockDaily.facility_id == facility_id)
+        else:
+            stock_stmt = stock_stmt.where(StockDaily.facility_id.in_(operated_facility_ids()))
         out["stock_history"] = [
             {"date": d.isoformat(), "quantity": int(q)} for d, q in session.execute(stock_stmt)
         ]

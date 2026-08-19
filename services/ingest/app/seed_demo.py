@@ -533,7 +533,9 @@ def run() -> dict[str, int]:
         _seed_forecast(s, forecast, fac_ids, hospital_id)
         _seed_stock_history(s, stock_history, fac_ids, hospital_id)
         shelf = _overlay_dashboard_shelf(s, drugs, consumption, stock_history, fac_ids, hospital_id)
-        partners = apply_partner_shortage(s, hospital_id, fac_ids)
+        # Pinned to the artifact clock: a wall-clock partner series would be
+        # the only data newer than END_DATE and trip the auto re-run.
+        partners = apply_partner_shortage(s, hospital_id, fac_ids, as_of=END_DATE)
         shortages = _seed_shortages(s, drugs)
         suppliers = apply_suppliers(s, hospital_id)
         orders = apply_orders(s, hospital_id, fac_ids)
