@@ -22,9 +22,9 @@ import statistics
 from collections import defaultdict
 from datetime import date, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
-from .models import ConsumptionDaily, Drug, ForecastPoint, ShortageEvent, StockSnapshot
+from .models import ConsumptionDaily, Drug, Facility, ForecastPoint, ShortageEvent, StockSnapshot
 
 MODEL_VERSION = "seasonal_naive_quantile-1"
 HORIZON_DAYS = 90
@@ -143,6 +143,18 @@ def shortage_active(status: str | None) -> bool:
     return status is None or status.strip().lower() not in RESOLVED_STATUSES
 
 
+def operated_facility_ids():
+    """Facilities the hospital itself runs (RLS scopes this to the tenant).
+
+    Partner sites (`operated = false`) exist for shortage visibility (G1);
+    their planted stock/consumption is someone else's, so hospital-aggregate
+    reads must not count it as our own usage or shelf. An explicitly named
+    facility_id is always respected instead — that's how G1 asks about a
+    partner on purpose.
+    """
+    return select(Facility.id).where(Facility.operated.is_(True))
+
+
 def latest_run(session) -> tuple[str, date, object] | None:
     """(run_id, data_through, created_at) of the newest run, or None."""
     row = session.execute(
@@ -170,6 +182,8 @@ def trailing_means(
     )
     if facility_id is not None:
         stmt = stmt.where(ConsumptionDaily.facility_id == facility_id)
+    else:
+        stmt = stmt.where(ConsumptionDaily.facility_id.in_(operated_facility_ids()))
     return {ndc: float(mean) for ndc, mean in session.execute(stmt)}
 
 
@@ -193,6 +207,8 @@ def forecast_by_ndc(
     )
     if facility_id is not None:
         stmt = stmt.where(ForecastPoint.facility_id == facility_id)
+    else:
+        stmt = stmt.where(ForecastPoint.facility_id.in_(operated_facility_ids()))
     series: dict[str, list[tuple[date, float, float, float]]] = defaultdict(list)
     for ndc, target, p10, p50, p90 in session.execute(stmt):
         series[ndc].append((target, float(p10), float(p50), float(p90)))
@@ -205,6 +221,14 @@ def on_hand(session, ndcs: set[str] | None, facility_id: int | None) -> dict[str
         stmt = stmt.where(StockSnapshot.ndc.in_(ndcs))
     if facility_id is not None:
         stmt = stmt.where(StockSnapshot.facility_id == facility_id)
+    else:
+        # NULL facility_id is a pre-B1 row, not a partner site — keep it.
+        stmt = stmt.where(
+            or_(
+                StockSnapshot.facility_id.is_(None),
+                StockSnapshot.facility_id.in_(operated_facility_ids()),
+            )
+        )
     return {ndc: int(qty) for ndc, qty in session.execute(stmt)}
 
 
@@ -233,7 +257,6 @@ def at_risk_skus(
         if clean_fid.isdigit():
             facility_id = int(clean_fid)
         else:
-            from .models import Facility
             fac_row = session.execute(
                 select(Facility.id).where(
                     (Facility.code == facility_id)
@@ -261,8 +284,13 @@ def at_risk_skus(
         return out
 
     ndcs = set(stock)
+    # Operated sites only: partner series must never make a stored run look
+    # outrun (the client auto-triggers POST /forecast/runs off this value).
     latest_data = session.execute(
-        select(func.max(ConsumptionDaily.date)).where(ConsumptionDaily.ndc.in_(ndcs))
+        select(func.max(ConsumptionDaily.date)).where(
+            ConsumptionDaily.ndc.in_(ndcs),
+            ConsumptionDaily.facility_id.in_(operated_facility_ids()),
+        )
     ).scalar()
     data_through = run[1] if run else latest_data
     if data_through is None:

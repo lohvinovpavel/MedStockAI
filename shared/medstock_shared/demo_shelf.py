@@ -25,7 +25,7 @@ Wave 5: `DEMO_ORDERS` plants the purchase-order history `/orders` shows
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from .demo_tenant import FACILITIES, location_for
 
@@ -536,14 +536,19 @@ def partner_shortage_stock_rows(hospital_id, fac_ids: dict[str, int]) -> list[di
 
 
 def partner_shortage_consumption_rows(
-    hospital_id, fac_ids: dict[str, int], *, days: int = 28
+    hospital_id, fac_ids: dict[str, int], *, days: int = 28, as_of: date | None = None
 ) -> list[dict]:
     """Trailing consumption so G1 days-of-supply matches PARTNER_SHORTAGE_STOCK.
 
     `consumption_daily.qty_consumed` is int, so the 28-day series is an
     integer mix whose mean reconstructs units/days (largest remainder).
+
+    `as_of` anchors the series end; seed_demo pins it to the artifact's
+    END_DATE. Left on the wall clock, this series outruns every other demo
+    series once the calendar passes END_DATE, and the forecasts page re-runs
+    against partner-only tail days.
     """
-    today = datetime.now(tz=UTC).date()
+    today = as_of or datetime.now(tz=UTC).date()
     rows: list[dict] = []
     for stock in partner_shortage_stock_rows(hospital_id, fac_ids):
         qty = int(stock["quantity"])
