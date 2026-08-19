@@ -449,6 +449,13 @@ class DrugRiskProfile(Base):
     section: Mapped[str | None] = mapped_column(Text)
     spl_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="awaiting_approval")
+    # What the extraction did, written for the pharmacist who has to rule on it:
+    # which factors were kept, which were re-expressed after a rejected first
+    # attempt, what was dropped, and which label sections were never read. The
+    # single-shot path leaves this empty; only the graph fills it. It is prose
+    # rather than structure because it is read once, by a person, at the moment
+    # of approval -- nothing queries it.
+    extraction_note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     # Who last ruled on it, either way. A rejection has a reviewer too, and only
     # `status` says which way they ruled.
     reviewed_by: Mapped[str | None] = mapped_column(Text)
@@ -562,6 +569,29 @@ class Patient(Base):
     )
     # Tier 3 input, as "GENE:phenotype" in CPIC's vocabulary. Reported by the
     # lab, never derived here — see PatientVector.pgx_phenotypes.
+    # The four features the rules engine weighs most and the record could not
+    # hold. Without these columns `patient_row_to_vector` had nothing to read,
+    # so egfr_band/hepatic/sex/prior_adr were "unknown" for every patient and
+    # 95 of the 220 weight points -- including PRIOR_ADR_SAME_CLASS, the
+    # heaviest finding in the table -- could not fire at all.
+    #
+    # eGFR is stored as the lab's own number, not a band. Bands are a ruleset
+    # concept and their boundaries belong to the ruleset; storing 47 keeps the
+    # measurement intact if 45-59 is ever redrawn, and `egfr_band_from_value`
+    # does the mapping at read time.
+    sex: Mapped[str | None] = mapped_column(Text)
+    egfr_value: Mapped[float | None] = mapped_column(Numeric(6, 2))
+    hepatic: Mapped[str | None] = mapped_column(Text)
+    prior_adr_rxcuis: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
+    # Which of the above a model read off a document rather than a clinician
+    # entering it, e.g. {"egfr_value": "lab-report:2026-08-01"}. Kept so
+    # /explain can mark a finding as resting on an extracted value -- a
+    # transcribed creatinine and a typed one are not the same evidence.
+    feature_provenance: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     pgx_phenotypes: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
@@ -570,6 +600,18 @@ class Patient(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        # Nullable and unconstrained sex on purpose: "unknown" is a real
+        # clinical state and a CHECK forcing M/F would make an unrecorded sex
+        # unrepresentable. Hepatic is constrained because the rules engine
+        # branches on exactly these three and a fourth value would fail silently
+        # -- `hepatic == "impaired"` is simply False for a typo.
+        CheckConstraint(
+            "hepatic IS NULL OR hepatic IN ('normal','impaired','unknown')",
+            name="ck_patient_hepatic",
+        ),
     )
 
 

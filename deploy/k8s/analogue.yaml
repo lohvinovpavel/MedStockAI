@@ -35,6 +35,10 @@ spec:
         # no redeploy needed either way.
         - name: COPILOT_GRAPH_ENABLED
           value: "false"
+        - name: GEMINI_MODEL
+          value: "gemini-3.6-flash"
+        - name: LLM_TIMEOUT_SECONDS
+          value: "60.0"
         resources:
           requests: { cpu: 50m, memory: 128Mi }
           limits:   { memory: 512Mi }

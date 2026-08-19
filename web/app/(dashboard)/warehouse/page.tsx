@@ -15,6 +15,7 @@ import { Callout } from "@/components/dashboard/Callout";
 import { SortableHead, compareValues, nextSortState, type SortState } from "@/components/dashboard/SortableHead";
 import { DrugName } from "@/components/dashboard/DrugName";
 import { apiFetch } from "@/lib/api";
+import { useCopilot } from "@/lib/copilot-context";
 import { parseDrugName } from "@/lib/drug-name";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +130,7 @@ function stockoutSpans(points: ConsumptionPoint[]) {
 }
 
 export default function WarehousePage() {
+  const { setFocus } = useCopilot();
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [facilityId, setFacilityId] = useState<number | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -252,6 +254,24 @@ export default function WarehousePage() {
     }
     return [...groups.entries()];
   }, [excursions, exSort]);
+
+  // Keep the assistant's context in sync with the facility/location being
+  // viewed here — otherwise a question asked in this page still answers
+  // about whatever SKU or forecast was last focused elsewhere.
+  useEffect(() => {
+    if (!facility) return;
+    const excursionCount = excursionGroups.length;
+    setFocus({
+      kind: "warehouse",
+      label: facility.name,
+      detail:
+        excursionCount > 0
+          ? `${excursionCount} storage location${excursionCount > 1 ? "s" : ""} with active excursions · ${stock.length} shelf positions`
+          : `${stock.length} shelf positions · all monitored locations within range`,
+      facilityId: facility.id,
+      locationId,
+    });
+  }, [facility, excursionGroups, stock.length, locationId, setFocus]);
 
   const drugClasses = useMemo(
     () => [...new Set(stock.map((s) => s.drug_class).filter((c): c is string => !!c))].sort(),

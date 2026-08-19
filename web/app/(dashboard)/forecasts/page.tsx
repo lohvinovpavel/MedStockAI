@@ -30,6 +30,7 @@ import { SortableHead, compareValues, nextSortState, type SortState } from "@/co
 import { DrugName } from "@/components/dashboard/DrugName";
 import { Pager } from "@/components/dashboard/Pager";
 import { parseDrugName } from "@/lib/drug-name";
+import { useCopilot } from "@/lib/copilot-context";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -134,6 +135,7 @@ const PAGE_SIZE = 25;
 
 export default function ForecastsPage() {
   const { user } = useSession();
+  const { setFocus } = useCopilot();
   // Mirrors forecast:run in shared PERMS — the backend 403s on its own;
   // this only decides whether the button is offered.
   const canRun = can(user?.role, "runForecast");
@@ -222,6 +224,18 @@ export default function ForecastsPage() {
   const items = useMemo(() => atRisk?.items ?? [], [atRisk]);
   const selected = items.find((i) => i.rxcui === rxcui) ?? null;
   const tier = surgeTier(surgePct);
+
+  // Keep the assistant's context in sync with whichever forecast is on
+  // screen — otherwise a question asked here still answers about whatever
+  // SKU/patient was focused on a previous page.
+  useEffect(() => {
+    if (!selected) return;
+    const name = parseDrugName(selected.name ?? selected.ndc).primary;
+    const detail = forecast
+      ? `${forecast.depletion?.days != null ? `${forecast.depletion.days}d of supply left` : "depletion unknown"} · ${surgePct}% demand scenario · run ${forecast.run_id ? forecast.run_id.slice(0, 8) : "none"}`
+      : `${selected.quantity} on hand · ${selected.days_of_supply}d of supply`;
+    setFocus({ kind: "forecast", label: name, detail, ndc: selected.ndc, rxcui: selected.rxcui });
+  }, [selected, forecast, surgePct, setFocus]);
 
   // Row click owns selection now (the header dropdown is gone); writing the
   // ?sku= deep link back keeps the selection shareable and refresh-safe —

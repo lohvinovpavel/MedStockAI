@@ -19,6 +19,8 @@ export type CopilotFocus =
   | { kind: "sku"; label: string; detail: string; itemId: string; ndc?: string; rxcui?: string | null }
   | { kind: "alert"; label: string; detail: string; ndc?: string }
   | { kind: "patient"; label: string; detail: string; patientId: string; rxcui?: string; drugName?: string }
+  | { kind: "forecast"; label: string; detail: string; ndc?: string; rxcui?: string | null }
+  | { kind: "warehouse"; label: string; detail: string; facilityId?: number; locationId?: number | null }
   | null;
 
 // A one-shot "do this now" ask fired by a page (e.g. the forecast scenario

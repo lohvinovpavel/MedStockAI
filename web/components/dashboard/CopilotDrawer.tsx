@@ -1390,7 +1390,11 @@ export function CopilotDrawer() {
             ? { type: "alert", ndc: focus.ndc, facility_id: facility.id }
             : focus?.kind === "patient"
               ? { type: "patient", patient_id: focus.patientId, rxcui: focus.rxcui, drug_name: focus.drugName, facility_id: facility.id }
-              : null;
+              : focus?.kind === "forecast"
+                ? { type: "forecast", ndc: focus.ndc, rxcui: focus.rxcui, facility_id: facility.id }
+                : focus?.kind === "warehouse"
+                  ? { type: "warehouse", facility_id: focus.facilityId ?? facility.id, location_id: focus.locationId }
+                  : null;
       const ndcTag = focus?.kind === "sku" ? (focus.ndc ? ` (NDC ${focus.ndc})` : "") : "";
       const patientTag = focus?.kind === "patient" ? ` [Patient ID: ${focus.patientId}]` : "";
       const contextPrefix = focus ? `[Currently viewing: ${focus.label}${ndcTag}${patientTag} — ${focus.detail}]\n\n` : "";

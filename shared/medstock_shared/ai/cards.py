@@ -360,6 +360,29 @@ def project_stock(result: dict, principal: Principal, request_id: str, args: dic
     )
 
 
+def _excursion_for_card(e: dict) -> dict:
+    """Rename `warehouse.excursions()`'s raw column names to the ones the
+    frontend's excursions card actually reads (`location_name`,
+    `temperature`, `breach_duration_hours`, ...). Passing the raw dict
+    through unchanged left every card field the UI looks for undefined, so
+    it fell back to the bare numeric `location_id` for every row -- the
+    "Location: 6" repeated for every excursion."""
+    violations = e.get("violations") or []
+    return {
+        "facility_id": e.get("facility_id"),
+        "location_id": str(e.get("location_id")),
+        "location_name": e.get("location"),
+        "temperature": e.get("observed_max_c") if "temperature" in violations else None,
+        "humidity": e.get("observed_max_humidity_pct") if "humidity" in violations else None,
+        "min_temp": e.get("observed_min_c"),
+        "max_temp": e.get("observed_max_c"),
+        "breach_duration_hours": e.get("hours"),
+        "stock_affected": [
+            {"ndc": e.get("ndc"), "drug_name": e.get("drug"), "quantity": e.get("quantity")}
+        ],
+    }
+
+
 @register_projector("list_storage_excursions")
 def project_excursions(result: dict, principal: Principal, request_id: str, args: dict | None) -> CardBase | None:
     if "error" in result:
@@ -370,11 +393,15 @@ def project_excursions(result: dict, principal: Principal, request_id: str, args
     readings = int(result.get("readings_checked") or 0)
     window = f"{result.get('window_hours', 24)}h"
 
+    # An excursion found is the thing worth flagging -- leaving source_note
+    # unset here (previously) rendered a green "all within range" summary
+    # right above a card full of active breaches. No readings is still the
+    # other non-clean case: nothing was actually measured.
     source_note = None
     if readings == 0 or monitored == 0:
         source_note = "No telemetry readings recorded for any location — this is not a clean result."
-    elif checked == 0:
-        source_note = f"All {monitored} monitored locations operating within acceptable temperature and humidity limits."
+    elif checked > 0:
+        source_note = f"{checked} location/drug pair{'s' if checked != 1 else ''} outside their required range."
 
     coverage = Coverage(
         checked=readings,
@@ -389,7 +416,7 @@ def project_excursions(result: dict, principal: Principal, request_id: str, args
         facility_id=args.get("facility_id") if args else None,
         window_hours=int(result.get("window_hours") or 24),
         checked=checked,
-        excursions=result.get("excursions") or [],
+        excursions=[_excursion_for_card(e) for e in (result.get("excursions") or [])],
         locations_monitored=monitored,
         locations_reporting=reporting,
         readings_checked=readings,
