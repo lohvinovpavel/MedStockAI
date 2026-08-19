@@ -11,6 +11,8 @@ Phase 4 rules out for
 Add it here, for real, once that logic exists somewhere.
 """
 
+import uuid
+
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -39,6 +41,7 @@ from ...patient import age_band_from_dob
 from ...patient_assess import NOT_FOUND, UNAVAILABLE, resolve_patient_ref
 from ...patient_assess import assess_for_drug as _assess_for_drug
 from ...patient_assess import explain_assessment as _explain_assessment
+from ...restock import compute_recommendations
 from ...review_queue import PROFILE_STATUSES, accept_rate
 from ...review_queue import load_queue as _load_queue
 from ...rxnorm import RxNormError, ndcs_for_rxcui, related_scd_sbd, therapeutic_scd_sbd
@@ -936,8 +939,11 @@ _PENDING_RECS_LIMIT = 20
         "List pending restock recommendations -- each one carries the review_decision_id "
         "draft_order/propose_order requires. Call this whenever the user asks to order, "
         "restock, or reorder a drug and you do not already have a review_decision_id from "
-        "them. Distinct from list_review_queue, which is the label-extraction sign-off queue, "
-        "not restock recommendations."
+        "them. If it returns nothing for the drug in question, call recommend_restock to "
+        "compute and create one -- an empty list here does not mean the drug cannot be "
+        "ordered, only that nobody has generated a recommendation for it yet. Distinct from "
+        "list_review_queue, which is the label-extraction sign-off queue, not restock "
+        "recommendations."
     ),
     args=ListPendingRecommendationsArgs,
 )
@@ -986,8 +992,9 @@ class DraftOrderArgs(BaseModel):
     review_decision_id: int = Field(
         description=(
             "Pending restock recommendation id this draft approves. You MUST obtain this "
-            "from list_pending_restock_recommendations or from the user in this conversation. "
-            "Never guess it -- a wrong id links the order to an approval for a different drug."
+            "from list_pending_restock_recommendations, from recommend_restock (if none "
+            "existed yet), or from the user in this conversation. Never guess it -- a wrong "
+            "id links the order to an approval for a different drug."
         )
     )
 
@@ -1103,5 +1110,70 @@ def propose_order(args: ProposeOrderArgs, principal: Principal) -> dict:
         }
         store_proposal(proposal_data, principal=principal)
         return proposal_data
+
+
+class RecommendRestockArgs(BaseModel):
+    facility_id: int = Field(description="Operated facility the recommendation is for")
+    ndc: str = Field(description="NDC to compute a restock recommendation for")
+
+
+@tool(
+    permission="order:write",
+    description=(
+        "Compute a restock recommendation for one drug at one facility from its par level, "
+        "on-hand stock, and supplier catalog, then materialise it as a pending restock "
+        "recommendation and prepare a draft order proposal for human confirmation -- the "
+        "same review_decision_id/proposal draft_order and propose_order produce. Use this "
+        "when the user asks to order, restock, or reorder a drug and "
+        "list_pending_restock_recommendations found nothing for it: this is the tool that "
+        "actually creates the pending recommendation the other order tools require, so it is "
+        "the right first call for 'create an order for X' rather than a dead end. Returns a "
+        "note instead of a proposal if the drug is already at or above its par level, or no "
+        "active supplier catalog entry covers it."
+    ),
+    args=RecommendRestockArgs,
+)
+def recommend_restock(args: RecommendRestockArgs, principal: Principal) -> dict:
+    with session_scope(principal.hospital_id, principal.user_id) as session:
+        items = compute_recommendations(session, facility_id=args.facility_id, ndc=args.ndc)
+        if not items:
+            return {
+                "note": (
+                    f"No restock recommendation applies to NDC {args.ndc} at facility "
+                    f"{args.facility_id} -- either on-hand stock already meets the par "
+                    "target, or no active supplier catalog entry covers this NDC."
+                )
+            }
+        item = items[0]
+        try:
+            actor_id = uuid.UUID(principal.user_id)
+        except ValueError:
+            actor_id = None
+        decision = ReviewDecision(
+            hospital_id=principal.hospital_uuid,
+            facility_id=item["facility_id"],
+            entity_type="restock_recommendation",
+            entity_ref=item["ndc"],
+            decision="pending",
+            actor_id=actor_id,
+            payload=item,
+        )
+        session.add(decision)
+        session.flush()
+        review_decision_id = decision.id
+
+    # Reuse propose_order's compliance check, supplier lookup and proposal-store
+    # write rather than re-deriving them -- the only new step here is having
+    # just materialised the review_decision propose_order otherwise requires.
+    return propose_order(
+        ProposeOrderArgs(
+            facility_id=item["facility_id"],
+            supplier_id=item["supplier_id"],
+            ndc=item["ndc"],
+            quantity=item["quantity"],
+            review_decision_id=review_decision_id,
+        ),
+        principal,
+    )
 
 

@@ -6,6 +6,7 @@ import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, Referen
 import { Building2, Refrigerator, ThermometerSun } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -299,7 +300,33 @@ export default function WarehousePage() {
     });
   }, [stock, stockQuery, classFilter, storageFilter, stockSort]);
 
-  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading warehouse…</div>;
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1.5">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-3 w-72" />
+          </div>
+          <Skeleton className="h-8 w-64" />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-[2fr_3fr]">
+          <Card className="gap-2 py-4">
+            <CardContent className="flex flex-col gap-2 px-4">
+              {Array.from({ length: 5 }, (_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+          <Card className="gap-2 py-4">
+            <CardContent className="px-4">
+              <Skeleton className="h-64 w-full" />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 p-4">

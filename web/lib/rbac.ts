@@ -33,7 +33,6 @@ const PAGE_ROLES: Record<string, Role[]> = {
   // now (issue #7) and 403s admin on its own; the page follows the backend.
   "/forecasts": ["pharmacist", "director"],
   "/orders": ["pharmacist", "admin"],
-  "/prognosis": ["pharmacist", "director", "admin"],
   "/audit": ["pharmacist", "director", "admin"],
 };
 

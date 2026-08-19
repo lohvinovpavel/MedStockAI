@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   AlertTriangle,
   Bot,
@@ -18,6 +20,7 @@ import {
   ShieldCheck,
   Send,
   Siren,
+  Trash2,
   Truck,
   X,
   Sparkles,
@@ -503,7 +506,7 @@ function ProvenanceFooter({ tool, requestId }: { tool?: string; requestId?: stri
   const [expanded, setExpanded] = useState(false);
   if (!tool && !requestId) return null;
   return (
-    <div className="mt-1 border-t pt-1 text-[10px] text-muted-foreground">
+    <div className="mt-1 border-t px-3 pt-1 text-[10px] text-muted-foreground">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center justify-between hover:text-foreground"
@@ -1091,8 +1094,32 @@ function ResponseCardView({
   return null;
 }
 
+// react-markdown output styled inline — one utility per element instead of
+// pulling in @tailwindcss/typography for what's a handful of tags in a chat
+// bubble (bold, lists, headings, inline code, links).
+const MARKDOWN_CLASS =
+  "text-sm leading-relaxed [&_p]:mb-2 [&_p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:mb-0.5 [&_strong]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mt-1.5 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-semibold [&_code]:rounded [&_code]:bg-foreground/10 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-foreground/10 [&_pre]:p-2 [&_a]:underline [&_a]:underline-offset-2 [&_hr]:my-2 [&_hr]:border-border [&_table]:my-2 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:px-1.5 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-1";
+
 function LiveText({ text }: { text: string }) {
-  return <p className="whitespace-pre-wrap text-sm leading-relaxed">{text}</p>;
+  return (
+    <div className={MARKDOWN_CLASS}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
+function ThinkingDots() {
+  return (
+    <div className="flex w-fit items-center gap-1 rounded-lg bg-muted px-3 py-2.5" aria-label="Assistant is thinking">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="size-1.5 rounded-full bg-muted-foreground/60"
+          style={{ animation: "bounce-dot 1.2s infinite", animationDelay: `${i * 0.15}s` }}
+        />
+      ))}
+    </div>
+  );
 }
 
 function ToolActivityRow({ tools }: { tools: ToolActivity[] }) {
@@ -1130,7 +1157,9 @@ function StreamingText({ text }: { text: string }) {
   }, [text]);
   return (
     <>
-      <p className="text-sm leading-relaxed" aria-hidden="true">{shown}</p>
+      <div className={MARKDOWN_CLASS} aria-hidden="true">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
+      </div>
       <p className="sr-only">{text}</p>
     </>
   );
@@ -1314,6 +1343,20 @@ export function CopilotDrawer() {
       toast.error("Could not load that conversation.");
     }
     setHistoryOpen(false);
+  }
+
+  async function deleteConversation(convId: string) {
+    try {
+      await apiFetch("copilot", `/conversations/${convId}`, { method: "DELETE" });
+      setHistory((h) => h.filter((c) => c.id !== convId));
+      if (conversationId === convId) {
+        setConversationId(null);
+        setMessages([GREETING]);
+      }
+      toast.success("Conversation deleted.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete conversation.");
+    }
   }
 
   async function createDraftFromCard(cardKey: string, card: Extract<ResponseCard, { kind: "po" }>) {
@@ -1536,15 +1579,26 @@ export function CopilotDrawer() {
 
       <ScrollArea className="min-h-0 flex-1 px-3 py-3">
         <div className="flex flex-col gap-3" role="log" aria-live="polite" aria-relevant="additions" aria-busy={pending}>
-          {messages.map((m) => {
+          {messages.map((m, idx) => {
             const allCards = m.cards?.length ? m.cards : m.card ? [m.card] : [];
+            // Only the last message can be the in-flight reply. Stays true
+            // through tool calls and cards — Gemini often keeps writing a
+            // closing remark after a card lands, and the reply isn't done
+            // until text shows up, not until the first card does.
+            const isThinking =
+              pending &&
+              idx === messages.length - 1 &&
+              m.role === "assistant" &&
+              m.live &&
+              !m.text &&
+              !m.patientPicker;
             return (
               <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>
                 {m.tools && <ToolActivityRow tools={m.tools} />}
                 {allCards.map((c, i) => {
                   const cardKey = c.kind === "proposal" ? c.proposal_id : `${m.id}-${i}`;
                   return (
-                    <div key={cardKey} className="flex w-[92%] flex-col gap-1">
+                    <div key={cardKey} className="flex max-w-[92%] flex-col gap-1">
                       <ResponseCardView
                         card={c}
                         onCreateDraft={c.kind === "po" ? () => createDraftFromCard(cardKey, c as Extract<ResponseCard, { kind: "po" }>) : undefined}
@@ -1571,6 +1625,7 @@ export function CopilotDrawer() {
                     </div>
                   );
                 })}
+                {isThinking && <ThinkingDots />}
                 {m.text && (
                   <div
                     className={cn(
@@ -1596,7 +1651,7 @@ export function CopilotDrawer() {
                   </div>
                 )}
                 {m.patientPicker && (
-                  <div className="flex w-[92%] flex-col gap-1">
+                  <div className="flex max-w-[92%] flex-col gap-1">
                     {m.patientPicker.candidates.map((c) => (
                       <Button
                         key={c.id}
@@ -1668,18 +1723,28 @@ export function CopilotDrawer() {
         ) : (
           <div className="flex flex-col gap-1">
             {history.map((h) => (
-              <button
-                key={h.id}
-                onClick={() => void openConversation(h)}
-                className="flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted"
-              >
-                <span className="truncate font-medium">{h.title || "New conversation"}</span>
-                <span className="text-[11px] text-muted-foreground">
-                  {h.savedAt
-                    ? new Date(h.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
-                    : ""}
-                </span>
-              </button>
+              <div key={h.id} className="flex items-center gap-1">
+                <button
+                  onClick={() => void openConversation(h)}
+                  className="flex flex-1 flex-col gap-0.5 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted"
+                >
+                  <span className="truncate font-medium">{h.title || "New conversation"}</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {h.savedAt
+                      ? new Date(h.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                      : ""}
+                  </span>
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+                  aria-label="Delete conversation"
+                  onClick={() => void deleteConversation(h.id)}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </div>
             ))}
           </div>
         )}

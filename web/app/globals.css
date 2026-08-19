@@ -505,3 +505,17 @@
   max-width: min(56rem, 92vw) !important;
   max-height: 90vh !important;
 }
+
+/* Indeterminate Progress bar (components/ui/progress.tsx) — duration/no
+   tailwind utility exists for a sliding "still working" bar, so it lives
+   here rather than as an inline style recomputed every render. */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* Copilot "thinking" dots (components/dashboard/CopilotDrawer.tsx). */
+@keyframes bounce-dot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+  40% { transform: translateY(-3px); opacity: 1; }
+}

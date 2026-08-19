@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { StockBand, type StockStatus } from "@/components/StockBand";
 import { Callout } from "@/components/dashboard/Callout";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableBody,
@@ -179,9 +180,12 @@ export function AnaloguesList({ rxcui }: { rxcui: string }) {
         Use AI works only in Full mode and keeps up to 5 substitutes with a
         reason; turn it off to see every candidate. Ingredient never calls AI.
       </p>
-      <Button type="button" size="sm" className="h-8 w-fit text-xs" onClick={() => void load()} disabled={busy}>
-        {busy ? "Finding analogues…" : "Find analogues"}
-      </Button>
+      <div className="flex flex-col gap-1.5">
+        <Button type="button" size="sm" className="h-8 w-fit text-xs" onClick={() => void load()} disabled={busy}>
+          {busy ? "Finding analogues…" : "Find analogues"}
+        </Button>
+        {busy ? <Progress className="h-1 w-48" /> : null}
+      </div>
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
       {stockDegraded ? (
         <Callout tone="warning">

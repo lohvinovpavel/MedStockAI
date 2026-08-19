@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Separator } from "@/components/ui/separator";
@@ -331,6 +332,9 @@ export default function ForecastsPage() {
   const depletionLabel = forecast?.depletion?.date ? forecast.depletion.date.slice(5) : null;
 
   const noRunYet = atRisk !== null && atRisk.run_id === null;
+  // First paint before /at-risk resolves: shape of the page that's about to
+  // appear, not a spinner — avoids the blank-screen flash while it loads.
+  const initialLoading = atRisk === null && atRiskError === null;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -357,7 +361,44 @@ export default function ForecastsPage() {
         </Card>
       )}
 
-      {noRunYet && (
+      {initialLoading && (
+        <>
+          <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+            <Card className="gap-3 py-4">
+              <CardHeader className="px-4">
+                <Skeleton className="h-4 w-64" />
+                <Skeleton className="h-3 w-40" />
+              </CardHeader>
+              <CardContent className="px-4">
+                <Skeleton className="h-48 w-full" />
+              </CardContent>
+            </Card>
+            <Card className="gap-3 py-4">
+              <CardHeader className="px-4">
+                <Skeleton className="h-4 w-32" />
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 px-4">
+                <Skeleton className="h-8 w-24" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-2/3" />
+              </CardContent>
+            </Card>
+          </div>
+          <Card className="gap-2 py-4">
+            <CardHeader className="px-4">
+              <Skeleton className="h-4 w-48" />
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 px-4">
+              {Array.from({ length: 6 }, (_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {!initialLoading && noRunYet && (
         <Card className="gap-2 py-4">
           <CardContent className="flex flex-col items-center gap-2 px-4 py-12 text-center">
             <TrendingUp className="size-6 text-muted-foreground/40" />

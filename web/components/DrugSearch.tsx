@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -117,6 +118,7 @@ export function DrugSearch({ initialQuery = "" }: { initialQuery?: string }) {
           {busy ? "Searching…" : "Search"}
         </Button>
       </form>
+      {busy ? <Progress className="h-1 max-w-xs" /> : null}
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
 

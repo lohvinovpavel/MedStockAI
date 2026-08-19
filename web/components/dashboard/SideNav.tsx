@@ -7,7 +7,6 @@ import { useTheme } from "next-themes";
 import {
   Bot,
   ChevronDown,
-  ClipboardList,
   Globe,
   LogOut,
   Menu,
@@ -51,9 +50,6 @@ const TABS = [
   { href: "/warehouse", label: "Warehouse", icon: Warehouse },
   { href: "/orders", label: "Purchase & Orders", icon: ShoppingCart },
   { href: "/shortages", label: "Shortage Matrix", icon: Globe },
-  // PP-5. Sits beside Audit Log because it is the same kind of thing: a record
-  // of who decided what, and on what basis.
-  { href: "/prognosis", label: "Prognosis Review", icon: ClipboardList },
   { href: "/audit", label: "Audit Log", icon: ScrollText },
 ];
 
@@ -206,10 +202,10 @@ function NavBody({ onNavigate }: { onNavigate?: () => void }) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
           <DropdownMenuGroup>
-            <DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => router.push("/profile")}>
               <UserIcon /> Profile
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => router.push("/settings")}>
               <Settings /> Settings
             </DropdownMenuItem>
           </DropdownMenuGroup>
