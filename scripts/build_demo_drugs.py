@@ -10,7 +10,7 @@ change the list, and commit the resulting CSV.
 
 Columns: ndc, rxcui, name (RxNorm canonical), query_name, cohort,
 storage_class, storage_min_c, storage_max_c, humidity_max_pct, base_daily,
-stockout_prone.
+stockout_prone, drug_class (primary RxClass name; blank when NLM has none).
 
 Cohorts (the generator's contract with prediction, issue #7):
   flat          — steady chronic-care demand
@@ -30,7 +30,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "shared"))
 
-from medstock_shared.rxnorm import RxNormError, ndcs_for_rxcui, search_concepts
+from medstock_shared.rxnorm import (
+    RxNormError,
+    ndcs_for_rxcui,
+    primary_class_name,
+    search_concepts,
+)
 
 OUT = ROOT / "data" / "demo" / "drugs.csv"
 
@@ -180,6 +185,11 @@ def resolve(entry: tuple[str, str, str, int, bool]) -> dict | None:
         print(f"FAIL ndcs {query!r} ({hits[0]['rxcui']} {hits[0]['name']}): none", file=sys.stderr)
         return None
     lo, hi, rh = STORAGE[storage_class]
+    try:
+        drug_class = primary_class_name(hit["rxcui"]) or ""
+    except RxNormError as exc:
+        print(f"WARN class {query!r} ({hit['rxcui']}): {exc}", file=sys.stderr)
+        drug_class = ""
     return {
         "ndc": min(ndcs),  # deterministic pick across reruns
         "rxcui": hit["rxcui"],
@@ -192,6 +202,7 @@ def resolve(entry: tuple[str, str, str, int, bool]) -> dict | None:
         "humidity_max_pct": rh,
         "base_daily": base_daily,
         "stockout_prone": stockout_prone,
+        "drug_class": drug_class,
     }
 
 

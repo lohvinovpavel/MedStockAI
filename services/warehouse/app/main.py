@@ -153,6 +153,7 @@ def get_stock(
                 StockSnapshot.quantity,
                 Drug.name,
                 Drug.storage_class,
+                Drug.drug_class,
             )
             .join(Drug, Drug.ndc == StockSnapshot.ndc, isouter=True)
             .where(StockSnapshot.facility_id == facility_id)
@@ -166,8 +167,9 @@ def get_stock(
                     "location": location,
                     "quantity": quantity,
                     "storage_class": storage_class,
+                    "drug_class": drug_class,
                 }
-                for ndc, location, quantity, name, storage_class in rows
+                for ndc, location, quantity, name, storage_class, drug_class in rows
             ]
         }
 

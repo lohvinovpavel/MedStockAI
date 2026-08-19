@@ -237,6 +237,7 @@ def _ranked_classes(source: str, infos: list[dict]) -> list[dict]:
         rows.append(
             {
                 "classId": str(class_id),
+                "className": str(item.get("className") or "").strip(),
                 "relaSource": rela_source,
                 "rela": (info.get("rela") or "").strip(),
                 "min_cui": str((info.get("minConcept") or {}).get("rxcui") or ""),
@@ -282,6 +283,27 @@ def _pick_primary_class(source: str, infos: list[dict]) -> dict | None:
     """Prefer ATC (product-level ATCPROD first); else VA, then MESHPA."""
     ranked = _ranked_classes(source, infos)
     return ranked[0] if ranked else None
+
+
+_CLASS_TTL = 3600.0
+
+
+def primary_class_name(rxcui: str) -> str | None:
+    """Human-readable primary therapeutic class, e.g. "Biguanides".
+
+    Same ranking as analogue's Full search (ATC preferred, VA/MESHPA fallback),
+    reduced to the one class name a filter dropdown can show. VA's ALL-CAPS
+    names are title-cased so the list reads uniformly next to ATC's.
+    """
+
+    def fill() -> str | None:
+        picked = _pick_primary_class(str(rxcui), _rxclass_infos(str(rxcui)))
+        name = (picked or {}).get("className")
+        if not name:
+            return None
+        return name.title() if name.isupper() else name
+
+    return _cached(("primary_class", str(rxcui)), _CLASS_TTL, fill)
 
 
 def _members_to_concepts(members: list) -> list[dict]:

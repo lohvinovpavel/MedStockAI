@@ -54,8 +54,11 @@ def seeded():
             (NDC_SHORT, "Testshort 20 MG"),
             (NDC_DRY, "Testdry 30 MG"),
         ]:
-            if not s.execute(select(Drug).where(Drug.ndc == ndc)).scalar_one_or_none():
-                s.add(Drug(ndc=ndc, name=name, raw={"source": "test"}))
+            existing = s.execute(select(Drug).where(Drug.ndc == ndc)).scalar_one_or_none()
+            if existing is None:
+                s.add(Drug(ndc=ndc, name=name, drug_class="Test Class", raw={"source": "test"}))
+            else:
+                existing.drug_class = "Test Class"
         spec = [
             (NDC_FLAT, RX_FLAT, 60, 10, 100),
             (NDC_SHORT, RX_SHORT, 10, 4, 200),
@@ -268,6 +271,7 @@ def test_at_risk_sorted_worst_first_with_shortage_flag(run):
     assert [i["ndc"] for i in mine[:2]] == [NDC_DRY, NDC_FLAT]
     assert by_ndc[NDC_DRY]["in_shortage"] is True
     assert by_ndc[NDC_FLAT]["in_shortage"] is False
+    assert by_ndc[NDC_FLAT]["drug_class"] == "Test Class"
     assert all(i["reorder_point"] is None for i in mine)
     days_list = [i["days_of_supply"] for i in body["items"]]
     assert days_list == sorted(days_list)

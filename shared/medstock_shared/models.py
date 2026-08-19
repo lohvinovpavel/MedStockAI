@@ -138,6 +138,10 @@ class Drug(Base):
     # warehouse excursion check compares location telemetry against these. A
     # future ingest job may overwrite them with label-derived values per NDC.
     storage_class: Mapped[str | None] = mapped_column(Text)  # refrigerated|crt|freezer
+    # Primary therapeutic class from RxClass (ATC preferred, VA fallback) —
+    # one class per drug so UI filters stay a flat dropdown. Backfilled by
+    # ingest (app.drug_classes) / demo seed; null when RxClass has no answer.
+    drug_class: Mapped[str | None] = mapped_column(Text)
     storage_min_c: Mapped[float | None] = mapped_column(Numeric(5, 2))
     storage_max_c: Mapped[float | None] = mapped_column(Numeric(5, 2))
     humidity_max_pct: Mapped[float | None] = mapped_column(Numeric(5, 2))

@@ -72,6 +72,7 @@ def _seed_drugs(s: Session, drugs: list[dict], hospital_id: uuid.UUID) -> None:
             "storage_min_c": float(row["storage_min_c"]),
             "storage_max_c": float(row["storage_max_c"]),
             "humidity_max_pct": float(row["humidity_max_pct"]),
+            "drug_class": row.get("drug_class") or None,
             "raw": {"source": "demo", "rxcui": row["rxcui"], "cohort": row["cohort"]},
         }
         s.execute(
