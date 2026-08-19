@@ -80,12 +80,19 @@ function Figure({
   const marks = organs.filter((o) => template.anchors[o.organ]);
 
   return (
-    <div className="relative shrink-0" style={{ height, width: (height * w) / h }}>
+    <div
+      className="relative shrink-0"
+      // The template's own proportions, held by CSS rather than a computed
+      // pixel width -- so the figure fits whatever box it is given and never
+      // distorts. maxWidth stops a tall container stretching it past the
+      // column it sits in.
+      style={{ height, aspectRatio: `${w} / ${h}`, maxWidth: "100%" }}
+    >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={template.src}
         alt={`${template.label} anatomical figure`}
-        className="absolute inset-0 h-full w-full select-none"
+        className="absolute inset-0 h-full w-full select-none object-contain"
         draggable={false}
       />
       {/* The overlay shares the template's viewBox, so anchors are used as-is —

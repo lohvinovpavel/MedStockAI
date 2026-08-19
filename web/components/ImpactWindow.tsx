@@ -21,6 +21,7 @@
  */
 
 import { useState } from "react";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { AnatomyImpact, type OrganImpact } from "@/components/AnatomyImpact";
 import {
   Dialog,
@@ -65,6 +66,11 @@ export function ImpactWindow({
 }) {
   const [open, setOpen] = useState(false);
   const [focus, setFocus] = useState<string | null>(null);
+  // Reading a body is a different task from glancing at one. Expanded gives the
+  // figure most of the viewport and drops the legend to a column beside it, for
+  // when someone is actually working through where a regimen lands rather than
+  // checking whether anything is there.
+  const [expanded, setExpanded] = useState(false);
 
   const withFindings = [...lines]
     .filter((l) => (l.organs?.length ?? 0) > 0)
@@ -95,9 +101,35 @@ export function ImpactWindow({
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+      <DialogContent
+        className="overflow-y-auto"
+        // Inline rather than utility classes, and not by preference.
+        // DialogContent defaults to `sm:max-w-sm`; tailwind-merge strips that,
+        // but the arbitrary replacements only exist if the JIT happened to see
+        // them, and the dialog sat at 384px regardless of what the class said.
+        // A style attribute is not subject to either problem.
+        style={
+          expanded
+            ? { width: "95vw", maxWidth: "95vw", height: "95vh", maxHeight: "95vh" }
+            : { width: "min(56rem, 92vw)", maxWidth: "min(56rem, 92vw)", maxHeight: "90vh" }
+        }
+      >
         <DialogHeader>
-          <DialogTitle>Impact — {patientName}</DialogTitle>
+          <div className="flex items-center justify-between gap-3 pr-8">
+            <DialogTitle>Impact — {patientName}</DialogTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? "Shrink the figure" : "Expand the figure"}
+            >
+              {expanded ? (
+                <Minimize2 className="h-4 w-4" />
+              ) : (
+                <Maximize2 className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
           <DialogDescription>
             {focused
               ? `Showing ${focused.name ?? focused.rxcui} alone.`
@@ -128,11 +160,13 @@ export function ImpactWindow({
           ))}
         </div>
 
+        {/* Sized off the viewport when expanded so the figure grows with the
+            window rather than sitting at a fixed height inside a bigger box. */}
         <AnatomyImpact
           organs={shown}
           unmapped={shownUnmapped}
           sex={sex}
-          height={460}
+          height={expanded ? 720 : 460}
         />
 
         {/* Which drugs put each organ where it is. The figure says WHERE; a
