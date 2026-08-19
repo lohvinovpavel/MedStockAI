@@ -38,9 +38,9 @@ import argparse
 import sys
 
 from medstock_shared.db import SessionLocal
-from medstock_shared.models import FormularyItem, PgxGuideline
+from medstock_shared.models import FormularyItem, Hospital, PgxGuideline
 from medstock_shared.patient import is_baseline_phenotype
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from ._source import fetch_json
@@ -129,7 +129,18 @@ def recommendations(levels: dict[str, str]) -> list[dict]:
 
 def formulary_rxcuis() -> set[str]:
     with SessionLocal() as session:
-        return {str(r) for r in session.scalars(select(FormularyItem.rxcui).distinct()).all()}
+        hospital_ids = session.scalars(select(Hospital.id)).all()
+        all_rxcuis: set[str] = set()
+        for hid in hospital_ids:
+            session.execute(
+                text("SELECT set_config('app.hospital_id', :h, true)"),
+                {"h": str(hid)},
+            )
+            for r in session.scalars(
+                select(FormularyItem.rxcui).where(FormularyItem.rxcui.is_not(None))
+            ):
+                all_rxcuis.add(str(r))
+        return all_rxcuis
 
 
 def write(rows: list[dict]) -> int:
