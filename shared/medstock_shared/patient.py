@@ -190,6 +190,48 @@ class Assessment:
 
 DRUG_CLASS: dict[str, str] = {
     # --- demo formulary ------------------------------------------------
+    "1014678": "antihistamine",  # cetirizine hydrochloride 10 MG Oral Tablet
+    "1049909": "anticholinergic",  # diphenhydramine hydrochloride 25 MG Oral C
+    "1234995": "neuromuscular_blocker",  # rocuronium bromide 10 MG/ML Injectable Sol
+    "1292443": "vaccine",  # 0.5 ML measles virus vaccine live, Enders'
+    "1292459": "vaccine",  # 0.5 ML varicella-zoster virus vaccine live
+    "1361615": "anticoagulant",  # heparin sodium, porcine 5000 UNT/ML Inject
+    "1545664": "sglt2_inhibitor",  # empagliflozin 10 MG Oral Tablet [Jardiance
+    "1551306": "glp1_agonist",  # 0.5 ML dulaglutide 3 MG/ML Auto-Injector [
+    "1594589": "neuromuscular_blocker",  # succinylcholine chloride 20 MG/ML Injectab
+    "1648759": "urinary_antibiotic",  # nitrofurantoin, macrocrystals 100 MG Oral 
+    "1649988": "tetracycline",  # doxycycline hyclate 100 MG Oral Capsule
+    "1665021": "cephalosporin",  # ceftriaxone 1000 MG Injection
+    "1797907": "inhaled_corticosteroid",  # fluticasone propionate 0.05 MG/ACTUAT Mete
+    "1870207": "adrenergic",  # NDA019430 0.3 ML epinephrine 1 MG/ML Auto-
+    "197320": "xanthine_oxidase_inhibitor",  # allopurinol 300 MG Oral Tablet
+    "197397": "antitussive",  # benzonatate 100 MG Oral Capsule
+    "198052": "antiemetic",  # ondansetron 4 MG Oral Tablet
+    "198116": "potassium",  # potassium chloride 20 MEQ Extended Release
+    "199362": "supplement",  # cholecalciferol 0.025 MG Oral Tablet
+    "200224": "leukotriene_antagonist",  # montelukast 10 MG Oral Tablet
+    "205923": "esa",  # 1 ML epoetin alfa 4000 UNT/ML Injection [E
+    "2601746": "glp1_agonist",  # 0.5 ML tirzepatide 10 MG/ML Auto-Injector 
+    "2619154": "glp1_agonist",  # 0.25 MG, 0.5 MG Dose 3 ML semaglutide 0.68
+    "2719212": "vaccine",  # 0.5 ML influenza A virus A/Croatia/10136RV
+    "309097": "cephalosporin",  # cefuroxime 250 MG Oral Tablet
+    "309114": "cephalosporin",  # cephalexin 500 MG Oral Capsule
+    "310325": "iron",  # ferrous sulfate 325 MG Oral Tablet
+    "310346": "five_alpha_reductase",  # finasteride 5 MG Oral Tablet
+    "310410": "supplement",  # folic acid 1 MG Oral Tablet
+    "311372": "antihistamine",  # loratadine 10 MG Oral Tablet
+    "311666": "prokinetic",  # metoclopramide 10 MG Oral Tablet
+    "312122": "antiviral",  # oseltamivir 75 MG Oral Capsule
+    "314072": "prostaglandin_analogue",  # latanoprost 0.05 MG/ML Ophthalmic Solution
+    "359601": "antitussive",  # guaifenesin 400 MG Oral Tablet
+    "665033": "dpp4_inhibitor",  # sitagliptin 100 MG Oral Tablet
+    "836358": "sama",  # ipratropium bromide 0.2 MG/ML Inhalation S
+    "856377": "sedating_antidepressant",  # trazodone hydrochloride 50 MG Oral Tablet
+    "859088": "saba",  # NDA020983 200 ACTUAT albuterol 0.09 MG/ACT
+    "863669": "alpha_blocker",  # tamsulosin hydrochloride 0.4 MG Oral Capsu
+    "884173": "alpha2_agonist",  # clonidine hydrochloride 0.1 MG Oral Tablet
+    "897126": "glp1_agonist",  # 3 ML liraglutide 6 MG/ML Pen Injector [Vic
+    "997420": "antihistamine",  # fexofenadine hydrochloride 180 MG Oral Tab
     # Derived from the ingredient names in data/demo/drugs.csv. Before this
     # the map held 35 entries against a 100-drug formulary, so most stages
     # were gated shut: a patient with eGFR 31 on metformin scored GREEN
