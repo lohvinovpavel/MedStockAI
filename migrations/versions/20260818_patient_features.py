@@ -53,11 +53,16 @@ def upgrade() -> None:
                 "prior_adr_rxcuis", ARRAY(sa.Text()), nullable=False, server_default="{}"
             ),
         )
+    # Which values a model read off a document rather than a clinician entering.
+    # A transcribed creatinine and a typed one are not the same evidence, and
+    # /explain has to be able to say which it was.
     if "feature_provenance" not in columns:
         op.add_column(
             "patient",
             sa.Column("feature_provenance", JSONB(), nullable=False, server_default="{}"),
         )
+    # Nullable and unconstrained on purpose: 'unknown' is a real clinical state,
+    # and a CHECK that forced M/F would make an unrecorded sex unrepresentable.
     constraints = [c["name"] for c in inspector.get_check_constraints("patient")]
     if "ck_patient_hepatic" not in constraints:
         op.create_check_constraint(

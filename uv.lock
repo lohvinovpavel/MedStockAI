@@ -961,6 +961,7 @@ version = "0.1.0"
 source = { editable = "services/ingest" }
 dependencies = [
     { name = "httpx" },
+    { name = "langgraph" },
     { name = "medstock-shared" },
     { name = "numpy" },
     { name = "tenacity" },
@@ -975,6 +976,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "langgraph", specifier = ">=0.2" },
     { name = "medstock-shared", editable = "shared" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "tenacity", specifier = ">=9.0" },
@@ -1028,6 +1030,7 @@ source = { editable = "services/patient-profiling" }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "langgraph" },
     { name = "medstock-shared" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1043,6 +1046,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "langgraph", specifier = ">=0.2" },
     { name = "medstock-shared", editable = "shared" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]

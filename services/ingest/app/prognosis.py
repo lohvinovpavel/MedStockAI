@@ -174,6 +174,58 @@ def merge_by_reaction(rows: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def extract_with_graph(rxcui: str) -> list[dict]:
+    """The graph path: a call per section, one repair round, then an account of
+    what happened (`prognosis_graph`).
+
+    Kept behind `--graph` rather than made the default, because it costs a call
+    per section plus up to two more — six to eight against one — and the case
+    for that spend is the factors the single-shot path drops. How often that
+    actually happens is what `scripts/prognosis_drop_report.py` measures. Switch
+    the default when the number justifies it, not before.
+    """
+    from .prognosis_graph import build_graph, split_sections
+
+    found = label_text(rxcui)
+    if found is None:
+        return []
+    text, spl_id = found
+
+    final = build_graph().invoke(
+        {
+            "rxcui": str(rxcui),
+            "drug_name": drug_name(rxcui, text),
+            "spl_id": spl_id,
+            "sections": split_sections(text),
+        }
+    )
+
+    explanation = final.get("explanation") or ""
+    note = final.get("explanation_note") or ""
+    if note:
+        # Labelled, and after the deterministic account rather than instead of
+        # it. The reviewer's own summary is the one generated from the data.
+        header = "--- model summary (generated) ---"
+        explanation = f"{explanation}\n\n{header}\n{note}"
+
+    return merge_by_reaction(
+        [
+            {
+                "rxcui": str(rxcui),
+                "reaction": str(risk.get("reaction"))[:200],
+                "seriousness": str(risk.get("seriousness") or "moderate")[:20],
+                "risk_factors": risk.get("risk_factors") or [],
+                "citation": str(risk.get("citation"))[:2000],
+                "section": str(risk.get("section") or "")[:60],
+                "spl_id": spl_id,
+                "status": "awaiting_approval",
+                "extraction_note": explanation[:8000],
+            }
+            for risk in final.get("kept") or []
+        ]
+    )
+
+
 def extract(rxcui: str) -> list[dict]:
     """Risk profiles for one drug. `[]` means no label, or nothing conditional
     in it — both are ordinary."""
@@ -252,12 +304,13 @@ def formulary_rxcuis(limit: int) -> list[str]:
         ]
 
 
-def run(rxcuis: list[str]) -> tuple[int, int]:
+def run(rxcuis: list[str], use_graph: bool = False) -> tuple[int, int]:
     """Returns (drugs with at least one profile, total profiles written)."""
+    extractor = extract_with_graph if use_graph else extract
     drugs = profiles = 0
     for rxcui in rxcuis:
         try:
-            rows = extract(rxcui)
+            rows = extractor(rxcui)
         except Exception as exc:  # noqa: BLE001 — one bad label must not end the run
             print(f"  {rxcui}: FAILED {type(exc).__name__}: {str(exc)[:120]}", file=sys.stderr)
             continue
@@ -275,6 +328,11 @@ def main() -> int:
     parser.add_argument("--rxcui", nargs="*", default=[])
     parser.add_argument("--formulary", action="store_true", help="use the stocked formulary")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument(
+        "--graph",
+        action="store_true",
+        help="use the section/repair/explain graph instead of one call per label",
+    )
     args = parser.parse_args()
 
     rxcuis = list(args.rxcui)
@@ -284,7 +342,7 @@ def main() -> int:
         print("nothing to do: pass --rxcui or --formulary", file=sys.stderr)
         return 2
 
-    drugs, profiles = run(rxcuis[: args.limit])
+    drugs, profiles = run(rxcuis[: args.limit], use_graph=args.graph)
     print(f"\n{profiles} profile(s) across {drugs}/{len(rxcuis[:args.limit])} drug(s), "
           f"all awaiting_approval")
     return 0

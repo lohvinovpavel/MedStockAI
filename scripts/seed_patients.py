@@ -64,6 +64,9 @@ DEMO_PATIENTS = (
         # Tier 3, actionable. Prescribe an SSRI and CPIC's level A
         # recommendation fires with a verbatim quote.
         "pgx_phenotypes": ["CYP2C19:Poor Metabolizer"],
+        "sex": "F",
+        "egfr_value": 96,
+        "hepatic": "normal",
     },
     {
         "full_name": "Marcus Chen",
@@ -77,6 +80,9 @@ DEMO_PATIENTS = (
         # patients, two answers — and his says "standard dosing" rather than
         # nothing, which is how a reader tells checked-and-fine from never-looked.
         "pgx_phenotypes": ["CYP2C19:Normal Metabolizer"],
+        "sex": "M",
+        "egfr_value": 102,
+        "hepatic": "normal",
     },
     {
         "full_name": "Doreen Whitfield",
@@ -88,6 +94,9 @@ DEMO_PATIENTS = (
         # pharmacist approves the profile.
         "condition_codes": ["I50.9"],
         "pgx_phenotypes": ["CYP2D6:Poor Metabolizer"],
+        "sex": "F",
+        "egfr_value": 31,
+        "hepatic": "impaired",
     },
     {
         "full_name": "Tomas Nowak",
@@ -95,12 +104,22 @@ DEMO_PATIENTS = (
         "blood_group": "A-",
         "allergy_codes": ["sulfa"],
         "condition_codes": [],
+        "sex": "M",
+        "egfr_value": 68,
+        "hepatic": "normal",
+        # PRIOR_ADR_SAME_CLASS is the heaviest finding in the ruleset at 45 pts
+        # and, until the column existed, could not fire for anyone. One curated
+        # patient carries a reaction so it is demonstrable rather than theoretical.
+        "prior_adr_rxcuis": ["29046"],
         # G6PD deficiency: eight drugs in the loaded CPIC set carry a
         # recommendation for it, several of them ordinary antibiotics.
         "pgx_phenotypes": ["G6PD:Deficient"],
     },
     {
         "full_name": "Amara Okonkwo",
+        "sex": "F",
+        "egfr_value": 26,
+        "hepatic": "impaired",
         "date_of_birth": date(1985, 6, 19),
         "blood_group": "O+",
         "allergy_codes": [],
@@ -111,6 +130,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Henry Ashfield",
+        "sex": "M",
+        "egfr_value": 38,
+        "hepatic": "normal",
         "date_of_birth": date(1934, 12, 1),
         "blood_group": "AB+",
         "allergy_codes": ["nsaid"],
@@ -121,6 +143,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Priya Raghavan",
+        "sex": "F",
+        "egfr_value": 88,
+        "hepatic": "normal",
         "date_of_birth": date(1998, 3, 15),
         "blood_group": "B-",
         "allergy_codes": [],
@@ -131,6 +156,9 @@ DEMO_PATIENTS = (
     },
     {
         "full_name": "Ruth Delacroix",
+        "sex": "F",
+        "egfr_value": 17,
+        "hepatic": "impaired",
         "date_of_birth": date(1961, 7, 22),
         "blood_group": "A+",
         "allergy_codes": [],
@@ -150,6 +178,27 @@ DEMO_PATIENTS = (
 # forecast look tidy in a way no real hospital ever is.
 
 SEED = 20260818
+
+# Which names are which. `_FIRST` stays a single flat list because
+# `rng.choice(_FIRST)` is part of the identity stream and re-pooling it would
+# renumber the whole cohort (see the note on `feature_rng` below).
+_FEMALE_NAMES = frozenset({
+    "Amara", "Priya", "Elena", "Doreen", "Ruth", "Ana", "Leila", "Mei",
+    "Sofia", "Fatima", "Hana", "Clara", "Nadia", "Rosa", "Aisha", "Lucia",
+    "Greta", "Mira", "Zara", "Ines", "Talia",
+})
+
+
+def sex_for_name(full_name: str) -> str:
+    """F or M from the given name.
+
+    Derived rather than drawn. Drawing it independently produced patients whose
+    recorded sex contradicted their name, and the body diagram then drew a male
+    figure for a woman -- correct against the record, and indefensible on screen.
+    """
+    given = full_name.strip().split(" ")[0]
+    return "F" if given in _FEMALE_NAMES else "M"
+
 
 _FIRST = [
     "Amara",
@@ -262,6 +311,22 @@ _ALLERGIES = ((None, 82), ("penicillin", 10), ("sulfa", 5), ("nsaid", 3))
 _CONDITIONS = ((None, 78), ("I50.9", 9), ("E11.9", 8), ("avoid_caffeine", 5))
 
 
+# Renal function by age bucket, as measured eGFR (mL/min/1.73m2). Weighted so
+# the older cohort carries most of the impairment: without this the record could
+# hold an eGFR but no patient would have one worth acting on, which is the same
+# dead-feature problem one level down.
+_EGFR_BY_AGE: dict[str, tuple] = {
+    "old": ((95, 15), (75, 25), (52, 25), (38, 20), (22, 10), (12, 5)),
+    "mid": ((95, 45), (75, 30), (52, 15), (38, 7), (22, 3), (12, 0)),
+    "young": ((95, 75), (75, 20), (52, 4), (38, 1), (22, 0), (12, 0)),
+}
+_HEPATIC: tuple = (("normal", 85), ("impaired", 10), ("unknown", 5))
+# RxCUIs of drugs in the demo formulary, so a prior reaction actually collides
+# with something a physician can prescribe. A reaction to a drug nobody stocks
+# would never produce a finding.
+_PRIOR_ADR: tuple = ((None, 88), ("29046", 5), ("6809", 4), ("1191", 3))
+
+
 def _pick(rng: random.Random, weighted: tuple):
     values, weights = zip(*weighted, strict=True)
     return rng.choices(values, weights=weights, k=1)[0]
@@ -275,6 +340,9 @@ def generated_patients(count: int, seed: int = SEED) -> list[dict]:
     on how many patients age out of a therapy — look far calmer than reality.
     """
     rng = random.Random(seed)
+    # Second stream for features added after the first cohorts were seeded. See
+    # the comment at the point of use: sharing `rng` would renumber everybody.
+    feature_rng = random.Random(seed + 1_000_003)
     people: list[dict] = []
     for i in range(count):
         # Roughly 40% born before 1961, 40% mid-life, 20% young.
@@ -288,8 +356,7 @@ def generated_patients(count: int, seed: int = SEED) -> list[dict]:
         phenotype = _pick(rng, _PHENOTYPES)
         allergy = _pick(rng, _ALLERGIES)
         condition = _pick(rng, _CONDITIONS)
-        people.append(
-            {
+        person = {
                 # The index keeps names unique without a retry loop. The natural
                 # key is (name, dob), and a 1 000-person cohort drawn from a
                 # 40x30 pool would otherwise collide constantly — birthday
@@ -300,9 +367,81 @@ def generated_patients(count: int, seed: int = SEED) -> list[dict]:
                 "allergy_codes": [allergy] if allergy else [],
                 "condition_codes": [condition] if condition else [],
                 "pgx_phenotypes": [phenotype] if phenotype else [],
-            }
-        )
+        }
+
+        # Drawn from a SEPARATE stream, which is the only way to add features
+        # without changing who the cohort is. `rng` is sequential: a draw added
+        # anywhere in the loop shifts every subsequent one, so patient #1 came
+        # back identical and #2 onward were different people. Against a thousand
+        # already-seeded rows that turns an idempotent backfill into a thousand
+        # duplicates. `feature_rng` is seeded off the same seed, so features stay
+        # reproducible while identities remain byte-identical to every cohort
+        # seeded before these columns existed.
+        #
+        # Renal function declines with age, so eGFR is drawn from the birth-year
+        # bucket rather than flat; otherwise the renal findings fire on nobody
+        # in particular instead of on the patients a ward round would catch.
+        # Drawn and discarded. The value is derived from the name below, but
+        # the draw has to stay: `feature_rng` is a single stream, and removing
+        # one call shifts every eGFR, hepatic status and prior reaction after
+        # it. Reproducibility of an existing cohort is worth one wasted call.
+        feature_rng.choice(("F", "M"))
+        person["sex"] = sex_for_name(person["full_name"])
+        person["egfr_value"] = _pick(feature_rng, _EGFR_BY_AGE[bucket])
+        person["hepatic"] = _pick(feature_rng, _HEPATIC)
+        # The heaviest finding in the ruleset (45 pts), so deliberately uncommon:
+        # at a high rate every second assessment turns RED and the verdict stops
+        # carrying information.
+        prior_adr = _pick(feature_rng, _PRIOR_ADR)
+        person["prior_adr_rxcuis"] = [prior_adr] if prior_adr else []
+        people.append(person)
     return people
+
+
+# Features carried one value per patient, as opposed to the list-valued ones.
+_SCALAR_FEATURES = ("sex", "egfr_value", "hepatic")
+_LIST_FEATURES = ("pgx_phenotypes", "prior_adr_rxcuis")
+
+
+def _backfill(existing: Patient, spec: dict) -> bool:
+    """Fill features onto a patient seeded before the column existed.
+
+    Re-running this has to upgrade an environment rather than skip it. The
+    original version did exactly this for `pgx_phenotypes`, and the reason
+    generalises: a thousand patients seeded before sex, eGFR, hepatic status and
+    prior reactions had columns leave three of the ruleset's findings -- 95 of
+    its 220 weight points -- with nothing to match on, and the run reports
+    success while the engine quietly assesses on a fraction of itself.
+
+    Only ever writes into a gap. A value already on the row was either entered
+    by someone or extracted from a document, and a demo seeder must not overwrite
+    either with an invented one.
+    """
+    changed = False
+
+    # Sex is reconciled, not merely filled. Every other feature here is
+    # invented, so overwriting one would destroy a real value; sex is DERIVED
+    # from the name on the same row, so a disagreement is not a difference of
+    # opinion -- it is a row that contradicts itself, and it renders as a male
+    # body above a woman's name. An earlier generator drew sex independently of
+    # the name and produced 518 of them, which a gap-only backfill cannot repair
+    # and which no operator will find by hand.
+    want_sex = sex_for_name(existing.full_name)
+    if existing.sex != want_sex:
+        existing.sex = want_sex
+        changed = True
+
+    for field in _SCALAR_FEATURES:
+        if field == "sex":
+            continue  # handled above
+        if getattr(existing, field, None) in (None, "") and spec.get(field) is not None:
+            setattr(existing, field, spec[field])
+            changed = True
+    for field in _LIST_FEATURES:
+        if not getattr(existing, field, None) and spec.get(field):
+            setattr(existing, field, list(spec[field]))
+            changed = True
+    return changed
 
 
 def resolve_hospital_id(session, explicit: str | None, name: str) -> str:
@@ -380,11 +519,7 @@ def main() -> int:
         for spec in specs:
             existing = existing_by_key.get((spec["full_name"], spec["date_of_birth"]))
             if existing:
-                # Backfill a genotype onto a patient seeded before the column
-                # existed, so re-running this upgrades an environment instead of
-                # skipping it and leaving Tier 3 with nothing to match.
-                if not existing.pgx_phenotypes and spec.get("pgx_phenotypes"):
-                    existing.pgx_phenotypes = list(spec["pgx_phenotypes"])
+                if _backfill(existing, spec):
                     backfilled += 1
                 continue
             session.add(
@@ -396,6 +531,8 @@ def main() -> int:
                     allergy_codes=list(spec["allergy_codes"]),
                     condition_codes=list(spec["condition_codes"]),
                     pgx_phenotypes=list(spec.get("pgx_phenotypes", [])),
+                    **{f: spec.get(f) for f in _SCALAR_FEATURES if spec.get(f) is not None},
+                    prior_adr_rxcuis=list(spec.get("prior_adr_rxcuis", [])),
                 )
             )
             created += 1

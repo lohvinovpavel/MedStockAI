@@ -16,6 +16,8 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Sequence
+from typing import Any
 
 from google import genai
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -132,11 +134,23 @@ def _generate_json(
     prompt: str,
     timeout_seconds: float | None = None,
     model: str | None = None,
+    images: Sequence[tuple[bytes, str]] = (),
 ) -> dict:
+    """`images` are (bytes, mime_type), passed to Gemini as inline parts.
+
+    This is how a photographed lab report is read without an OCR step of our
+    own: the model that has to interpret the values is the one reading them off
+    the page, so a misread is a model error rather than a silent transcription
+    error upstream of it.
+    """
+    contents: list[Any] = [prompt]
+    contents.extend(
+        {"inline_data": {"mime_type": mime, "data": blob}} for blob, mime in images
+    )
     try:
         response = _get_client().models.generate_content(
             model=model or settings.gemini_model,
-            contents=prompt,
+            contents=contents if images else prompt,
             config={
                 "response_mime_type": "application/json",
                 "http_options": {
@@ -169,6 +183,7 @@ def ask_ai(
     *,
     principal: Principal | None = None,
     request_id: str | None = None,
+    images: Sequence[tuple[bytes, str]] = (),
 ) -> dict:
     """Ask Gemini and get an answer back, synchronously. Raises `AIError` on
     any failure -- a 429 after retries, a 5xx, a timeout, an open breaker, or
@@ -187,7 +202,16 @@ def ask_ai(
     """
     task = TASKS[task_name]
     model_name = task.model or settings.gemini_model
-    key = dedupe_key(task_name, payload, task.prompt_version, model_name)
+    # Images are part of the question, so they are part of the key. Hashed
+    # rather than embedded: a 4 MB photograph in a cache key is not a key.
+    key_payload = payload
+    if images:
+        digest = hashlib.sha256()
+        for blob, mime in images:
+            digest.update(mime.encode())
+            digest.update(blob)
+        key_payload = {**payload, "_images": digest.hexdigest()}
+    key = dedupe_key(task_name, key_payload, task.prompt_version, model_name)
     request_id = request_id or uuid.uuid4().hex
     started = time.monotonic()
 
@@ -219,8 +243,19 @@ def ask_ai(
         raise AIError(f"circuit breaker open for task {task_name!r}")
 
     try:
-        result = _generate_json(
-            task.prompt.format(**payload), task.timeout_seconds, model=model_name
+        # `images` is only passed when there are any. Every existing caller and
+        # every test stub predates multimodal support, and handing them a keyword
+        # they do not accept turns an unrelated call into an AIError -- a new
+        # capability must not change the signature the old path is invoked with.
+        result = (
+            _generate_json(
+                task.prompt.format(**payload), task.timeout_seconds,
+                model=model_name, images=images,
+            )
+            if images
+            else _generate_json(
+                task.prompt.format(**payload), task.timeout_seconds, model=model_name
+            )
         )
         # Validate citations against the caller's source, not Gemini's echo.
         if isinstance(result, dict) and payload.get("source_text"):

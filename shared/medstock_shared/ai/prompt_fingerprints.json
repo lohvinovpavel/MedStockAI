@@ -3,8 +3,32 @@
     "prompt_version": "v2",
     "sha256": "2e7712a6b1f9f1a229915735f093bdcc0c76f35f3b68dfbabac6d387c2466570"
   },
+  "patient_doc_classify": {
+    "prompt_version": "v1",
+    "sha256": "e1e6d1b22fae60c123e6e8f50db8f885dfa1cb557391172d00066f07f27e12c6"
+  },
+  "patient_doc_labs": {
+    "prompt_version": "v1",
+    "sha256": "3de4435249ce6373204f3ed1f1694f4ba3fa1014d5843cf50c8df46192d9b5a4"
+  },
+  "patient_doc_summary": {
+    "prompt_version": "v1",
+    "sha256": "ed076c98a73be86d76b245b764cf39fd05b087aad0d355bb9ef0e7acc6588586"
+  },
   "prognosis": {
     "prompt_version": "v1",
     "sha256": "58192cacf76987f5cac22fcce0e5ad338692404e37b12d02b6a3df94145c5372"
+  },
+  "prognosis_explain": {
+    "prompt_version": "v1",
+    "sha256": "ff5df7721641c5cd69e511316df80996ad0d374d86d5262c960a11770ecb63de"
+  },
+  "prognosis_repair": {
+    "prompt_version": "v1",
+    "sha256": "54fdc566fbed0336c6c465f659435b64dc37f794d2d68cd71e5773713ca9c66d"
+  },
+  "prognosis_section": {
+    "prompt_version": "v1",
+    "sha256": "61e595fbdfaa14d9b6522cdf5ab880ac65c1ded32913b67db4e59f3838dd4762"
   }
 }

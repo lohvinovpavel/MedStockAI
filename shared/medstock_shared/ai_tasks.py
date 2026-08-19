@@ -116,6 +116,33 @@ def _prognosis_is_applicable(result: dict) -> None:
     result["risks"] = kept
 
 
+# A runaway generation, not a style rule. The explanation summarises a handful
+# of profiles for a reviewer; anything past this is the model writing an essay,
+# and the deterministic fallback is better than an essay.
+MAX_EXPLANATION_CHARS = 4_000
+
+
+def _explanation_adds_no_risks(result: dict) -> None:
+    """Reject an explanation that is empty or has run away.
+
+    Be clear about what this does not do: it cannot tell whether the prose
+    invented a clinical claim. String matching against free-text reaction names
+    would false-positive on every paraphrase, and a validator that fires on
+    correct output is worse than none.
+
+    What makes the stage safe is not this function — it is that
+    `prognosis_graph.explain_node` falls back to `fallback_explanation` whenever
+    this raises. That fallback is generated from the extraction itself, so a
+    rejected explanation degrades to one that is true by construction and still
+    lists everything that was dropped.
+    """
+    text = result.get("explanation")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("explanation must be a non-empty string")
+    if len(text) > MAX_EXPLANATION_CHARS:
+        raise ValueError(f"explanation is {len(text)} chars, over {MAX_EXPLANATION_CHARS}")
+
+
 TASKS: dict[str, AITask] = {
     "analogue": AITask(
         name="analogue",
@@ -170,6 +197,149 @@ TASKS: dict[str, AITask] = {
         # far longer than ranking a candidate list, and 20 s times out on every
         # label. This is offline work in a CronJob, so nobody is waiting.
         timeout_seconds=120.0,
+    ),
+    # --- PP-3 as a graph (prognosis_graph.py) --------------------------------
+    # The single-shot `prognosis` task above reads a whole label in one call and
+    # silently loses any factor it cannot phrase in the vocabulary. These three
+    # split that into section extraction, a bounded repair round, and an account
+    # of what happened — which is what makes the pharmacist's approval a review
+    # rather than a signature on a list.
+    "prognosis_section": AITask(
+        name="prognosis_section",
+        owner="Andrii",
+        prompt=(
+            "You are reading the {section} section of the FDA label for {drug_name} "
+            "(RxCUI {rxcui}).\n\n"
+            "Extract adverse reactions this section says are MORE LIKELY in patients with "
+            "particular characteristics. Ignore reactions stated without a patient "
+            "qualifier — a reaction everyone may have predicts nothing about anyone.\n\n"
+            "Describe patients ONLY with these features and values:\n"
+            "  age_band: 18-39 | 40-64 | 65-74 | 75-89 | 90+\n"
+            "  egfr_band: >=90 | 60-89 | 45-59 | 30-44 | 15-29 | <15   (kidney function)\n"
+            "  hepatic: normal | impaired | unknown\n"
+            "  sex: F | M\n"
+            "  condition_codes: ICD-10 codes\n"
+            "  active_rxcuis: RxCUI of a concomitant drug\n"
+            "  prior_adr_rxcuis: RxCUI of a drug previously reacted to\n"
+            "  ops: eq | in | has | at_or_below | at_or_above\n"
+            "Use at_or_below for kidney function to mean 'this band or worse'.\n"
+            "Prefer the closest allowed value to what the text says; if there is no "
+            "close one, omit that factor rather than inventing a value.\n\n"
+            "Return JSON: "
+            '{{"source_text": str, "risks": [{{"reaction": str, '
+            '"seriousness": "fatal"|"serious"|"moderate", '
+            '"risk_factors": [{{"feature": str, "op": str, "value": str|list}}], '
+            '"section": str, "citation": str}}]}}\n'
+            "Copy source_text from the Section text unchanged. Every citation must be a "
+            "verbatim sentence from it.\n\n"
+            "Section text: {source_text}"
+        ),
+        # No validate: the graph partitions instead of pruning, because the
+        # reasons are what the repair round and the reviewer both need. Running
+        # _prognosis_is_applicable here would discard them first.
+        timeout_seconds=120.0,
+    ),
+    "prognosis_repair": AITask(
+        name="prognosis_repair",
+        owner="Andrii",
+        prompt=(
+            "Risk factors you extracted from the label for RxCUI {rxcui} could not be "
+            "used. Each is listed with the reason.\n\n"
+            "{rejected}\n\n"
+            "Re-express ONLY these, using ONLY:\n{vocabulary}\n\n"
+            "If a factor genuinely cannot be expressed in that vocabulary, leave it out. "
+            "An approximation that changes which patients match is worse than nothing — "
+            "these are used to decide whether a drug is flagged for a specific person.\n"
+            "Do not add factors that are not listed above, and do not restate ones that "
+            "were accepted.\n\n"
+            "Return JSON: "
+            '{{"source_text": str, "risks": [{{"reaction": str, '
+            '"seriousness": "fatal"|"serious"|"moderate", '
+            '"risk_factors": [{{"feature": str, "op": str, "value": str|list}}], '
+            '"section": str, "citation": str}}]}}\n'
+            "Copy source_text from the Label text unchanged. Every citation must be a "
+            "verbatim sentence from it.\n\n"
+            "Label text: {source_text}"
+        ),
+        timeout_seconds=120.0,
+    ),
+    "prognosis_explain": AITask(
+        name="prognosis_explain",
+        owner="Andrii",
+        prompt=(
+            "A system extracted conditional risk profiles from the FDA label for "
+            "{drug_name} (RxCUI {rxcui}). A pharmacist is about to approve or reject "
+            "them and needs an account of what the extraction did.\n\n"
+            "Kept:\n{kept}\n\nDropped:\n{dropped}\n\n"
+            "Write a short plain-English account for that pharmacist. Say what was "
+            "found and which patients each profile would flag. Then say plainly what "
+            "was dropped and why, because those conditions are NOT represented in what "
+            "they are approving — a profile that lost a factor now matches more "
+            "patients than the label describes.\n\n"
+            "Describe only what is above. You are not reading the label and must not "
+            "add a clinical claim, a citation, or a risk that is not listed.\n\n"
+            'Return JSON: {{"explanation": str}}'
+        ),
+        validate=_explanation_adds_no_risks,
+    ),
+    # --- patient document intake (patient-profiling/app/intake_graph.py) -----
+    # The only tasks here that send PATIENT data to the model. Everything else
+    # reads public labels, which is why prognosis.py can say the BAA question
+    # does not arise; for these it does.
+    "patient_doc_classify": AITask(
+        name="patient_doc_classify",
+        owner="Andrii",
+        prompt=(
+            "What kind of clinical document is this, and what date does it carry?\n\n"
+            'Return JSON: {{"kind": "lab_report"|"discharge_summary"|"note"|"unknown", '
+            '"document_date": "YYYY-MM-DD or empty"}}\n\n'
+            "The date is the date of the RESULT or the discharge, not the date it was "
+            "printed. If the page shows no such date return empty rather than guessing — "
+            "a wrong date decides whether this overwrites a newer measurement.\n\n"
+            "Document: {source_text}"
+        ),
+    ),
+    "patient_doc_labs": AITask(
+        name="patient_doc_labs",
+        owner="Andrii",
+        prompt=(
+            "Read the values off this laboratory report.\n\n"
+            "Return ONLY these fields, omitting any the report does not state:\n"
+            "  egfr_value    the eGFR, exactly as printed (e.g. 32, >60)\n"
+            "  hepatic       normal | impaired, from the LFT panel (ALT/AST/bilirubin/"
+            "albumin). Say impaired only if the panel supports it — a single mildly "
+            "raised enzyme is not impairment.\n"
+            "  sex           F | M, if the report states it\n\n"
+            "Transcribe, do not interpret. If a value is unclear on the page, omit it: a "
+            "guessed digit in an eGFR moves a patient between renal bands and turns a "
+            "dose warning on or off.\n\n"
+            'Return JSON: {{"features": [{{"field": str, "value": str, "quote": str}}]}}\n'
+            "quote is the text on the page the value came from.\n\n"
+            "Report: {source_text}"
+        ),
+        timeout_seconds=90.0,
+    ),
+    "patient_doc_summary": AITask(
+        name="patient_doc_summary",
+        owner="Andrii",
+        prompt=(
+            "Read this clinical document for facts that affect drug safety.\n\n"
+            "Return ONLY these fields, omitting any it does not state:\n"
+            "  egfr_value          eGFR, if a number is given\n"
+            "  hepatic             normal | impaired\n"
+            "  sex                 F | M\n"
+            "  prior_adr_rxcuis    RxCUIs of drugs the patient REACTED to previously. "
+            "Only where the document names a reaction or intolerance — a drug simply "
+            "stopped is not a reaction. Omit the field entirely if you cannot give an "
+            "RxCUI; a drug name in this field is unusable.\n"
+            "  condition_codes     ICD-10 codes for stated diagnoses\n\n"
+            "Do not infer. A patient 'doing well on' a drug has no reaction to it, and a "
+            "family history is not the patient's history.\n\n"
+            'Return JSON: {{"features": [{{"field": str, "value": str|list, "quote": str}}]}}\n'
+            "quote is the sentence the fact came from.\n\n"
+            "Document: {source_text}"
+        ),
+        timeout_seconds=90.0,
     ),
     # prediction — Mykhailo
     # compliance (extract) — Andrii

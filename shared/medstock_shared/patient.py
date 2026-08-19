@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -53,6 +53,14 @@ WEIGHTS: dict[str, int] = {
     "RENAL_DOSE_EXCEEDED": 30,
     "DUPLICATE_CLASS": 25,
     "HEPATIC_IMPAIRED": 20,
+    # A documented condition the drug class is known to worsen. Weighted at 30
+    # deliberately: that is the amber threshold, and this finding is raised at
+    # HIGH severity. At 25 it scored below the band and a diabetic prescribed a
+    # corticosteroid came back GREEN with a high-severity warning attached --
+    # the verdict contradicting the finding under it is worse than either alone.
+    # Same weight as RENAL_DOSE_EXCEEDED, which is the same kind of claim:
+    # patient-specific, documented, and a reason to look before prescribing.
+    "CONDITION_WORSENED": 30,
     "AGE_INAPPROPRIATE": 20,
     "INTERACTION_MODERATE": 15,
     "NARROW_THERAPEUTIC_INDEX": 10,
@@ -189,6 +197,105 @@ class Assessment:
 # build the real ones from CPIC, label text and FAERS.
 
 DRUG_CLASS: dict[str, str] = {
+    # --- demo formulary ------------------------------------------------
+    "1014678": "antihistamine",  # cetirizine hydrochloride 10 MG Oral Tablet
+    "1049909": "anticholinergic",  # diphenhydramine hydrochloride 25 MG Oral C
+    "1234995": "neuromuscular_blocker",  # rocuronium bromide 10 MG/ML Injectable Sol
+    "1292443": "vaccine",  # 0.5 ML measles virus vaccine live, Enders'
+    "1292459": "vaccine",  # 0.5 ML varicella-zoster virus vaccine live
+    "1361615": "anticoagulant",  # heparin sodium, porcine 5000 UNT/ML Inject
+    "1545664": "sglt2_inhibitor",  # empagliflozin 10 MG Oral Tablet [Jardiance
+    "1551306": "glp1_agonist",  # 0.5 ML dulaglutide 3 MG/ML Auto-Injector [
+    "1594589": "neuromuscular_blocker",  # succinylcholine chloride 20 MG/ML Injectab
+    "1648759": "urinary_antibiotic",  # nitrofurantoin, macrocrystals 100 MG Oral 
+    "1649988": "tetracycline",  # doxycycline hyclate 100 MG Oral Capsule
+    "1665021": "cephalosporin",  # ceftriaxone 1000 MG Injection
+    "1797907": "inhaled_corticosteroid",  # fluticasone propionate 0.05 MG/ACTUAT Mete
+    "1870207": "adrenergic",  # NDA019430 0.3 ML epinephrine 1 MG/ML Auto-
+    "197320": "xanthine_oxidase_inhibitor",  # allopurinol 300 MG Oral Tablet
+    "197397": "antitussive",  # benzonatate 100 MG Oral Capsule
+    "198052": "antiemetic",  # ondansetron 4 MG Oral Tablet
+    "198116": "potassium",  # potassium chloride 20 MEQ Extended Release
+    "199362": "supplement",  # cholecalciferol 0.025 MG Oral Tablet
+    "200224": "leukotriene_antagonist",  # montelukast 10 MG Oral Tablet
+    "205923": "esa",  # 1 ML epoetin alfa 4000 UNT/ML Injection [E
+    "2601746": "glp1_agonist",  # 0.5 ML tirzepatide 10 MG/ML Auto-Injector 
+    "2619154": "glp1_agonist",  # 0.25 MG, 0.5 MG Dose 3 ML semaglutide 0.68
+    "2719212": "vaccine",  # 0.5 ML influenza A virus A/Croatia/10136RV
+    "309097": "cephalosporin",  # cefuroxime 250 MG Oral Tablet
+    "309114": "cephalosporin",  # cephalexin 500 MG Oral Capsule
+    "310325": "iron",  # ferrous sulfate 325 MG Oral Tablet
+    "310346": "five_alpha_reductase",  # finasteride 5 MG Oral Tablet
+    "310410": "supplement",  # folic acid 1 MG Oral Tablet
+    "311372": "antihistamine",  # loratadine 10 MG Oral Tablet
+    "311666": "prokinetic",  # metoclopramide 10 MG Oral Tablet
+    "312122": "antiviral",  # oseltamivir 75 MG Oral Capsule
+    "314072": "prostaglandin_analogue",  # latanoprost 0.05 MG/ML Ophthalmic Solution
+    "359601": "antitussive",  # guaifenesin 400 MG Oral Tablet
+    "665033": "dpp4_inhibitor",  # sitagliptin 100 MG Oral Tablet
+    "836358": "sama",  # ipratropium bromide 0.2 MG/ML Inhalation S
+    "856377": "sedating_antidepressant",  # trazodone hydrochloride 50 MG Oral Tablet
+    "859088": "saba",  # NDA020983 200 ACTUAT albuterol 0.09 MG/ACT
+    "863669": "alpha_blocker",  # tamsulosin hydrochloride 0.4 MG Oral Capsu
+    "884173": "alpha2_agonist",  # clonidine hydrochloride 0.1 MG Oral Tablet
+    "897126": "glp1_agonist",  # 3 ML liraglutide 6 MG/ML Pen Injector [Vic
+    "997420": "antihistamine",  # fexofenadine hydrochloride 180 MG Oral Tab
+    # Derived from the ingredient names in data/demo/drugs.csv. Before this
+    # the map held 35 entries against a 100-drug formulary, so most stages
+    # were gated shut: a patient with eGFR 31 on metformin scored GREEN
+    # because the renal stage never ran, not because it looked and passed.
+    # A stopgap -- RxNorm should derive this, and ingest already talks to it.
+    "1049621": "opioid",  # oxycodone hydrochloride 5 MG Oral Tablet
+    "106258": "corticosteroid",  # hydrocortisone 10 MG/ML Topical Cream
+    "1232086": "anticoagulant",  # rivaroxaban 20 MG Oral Tablet
+    "1364445": "anticoagulant",  # apixaban 5 MG Oral Tablet
+    "1652639": "hypoglycaemic",  # 3 ML insulin lispro 100 UNT/ML Pen Injector
+    "1653202": "hypoglycaemic",  # 3 ML insulin aspart, human 100 UNT/ML Pen In
+    "1656349": "arb",  # sacubitril 49 MG / valsartan 51 MG Oral Tabl
+    "1807513": "glycopeptide",  # vancomycin 1000 MG Injection
+    "197361": "calcium_blocker",  # amlodipine 5 MG Oral Tablet
+    "197381": "beta_blocker",  # atenolol 50 MG Oral Tablet
+    "197517": "macrolide",  # clarithromycin 500 MG Oral Tablet
+    "197604": "digoxin",  # digoxin 0.125 MG Oral Tablet
+    "197806": "nsaid",  # ibuprofen 600 MG Oral Tablet
+    "197901": "benzodiazepine",  # lorazepam 1 MG Oral Tablet
+    "198014": "nsaid",  # naproxen 500 MG Oral Tablet
+    "198051": "ppi",  # omeprazole 20 MG Delayed Release Oral Capsul
+    "198145": "corticosteroid",  # prednisone 10 MG Oral Tablet
+    "198440": "paracetamol",  # acetaminophen 500 MG Oral Tablet
+    "199885": "fluoroquinolone",  # levofloxacin 500 MG Oral Tablet
+    "200032": "beta_blocker",  # carvedilol 12.5 MG Oral Tablet
+    "259966": "corticosteroid",  # methylprednisolone 4 MG Oral Tablet
+    "308048": "benzodiazepine",  # alprazolam 0.5 MG Oral Tablet
+    "308416": "nsaid",  # aspirin 81 MG Delayed Release Oral Tablet
+    "308460": "macrolide",  # azithromycin 250 MG Oral Tablet
+    "309309": "fluoroquinolone",  # ciprofloxacin 500 MG Oral Tablet
+    "309362": "antiplatelet",  # clopidogrel 75 MG Oral Tablet
+    "310273": "h2_blocker",  # famotidine 20 MG Oral Tablet
+    "310385": "ssri",  # fluoxetine 20 MG Oral Capsule
+    "310431": "gabapentinoid",  # gabapentin 300 MG Oral Capsule
+    "310488": "hypoglycaemic",  # glipizide 10 MG Oral Tablet
+    "311026": "hypoglycaemic",  # insulin isophane, human 100 UNT/ML Injectabl
+    "311036": "hypoglycaemic",  # insulin, regular, human 100 UNT/ML Injectabl
+    "312743": "antipsychotic",  # quetiapine 100 MG Oral Tablet
+    "312941": "ssri",  # sertraline 50 MG Oral Tablet
+    "312961": "statin",  # simvastatin 20 MG Oral Tablet
+    "313096": "potassium_sparing",  # spironolactone 25 MG Oral Tablet
+    "313988": "loop_diuretic",  # furosemide 40 MG Oral Tablet
+    "314154": "antipsychotic",  # olanzapine 10 MG Oral Tablet
+    "314200": "ppi",  # pantoprazole 40 MG Delayed Release Oral Tabl
+    "349199": "arb",  # valsartan 80 MG Oral Tablet
+    "349332": "ssri",  # escitalopram 10 MG Oral Tablet
+    "483450": "gabapentinoid",  # pregabalin 75 MG Oral Capsule
+    "596934": "snri",  # duloxetine 60 MG Delayed Release Oral Capsul
+    "835603": "opioid",  # tramadol hydrochloride 50 MG Oral Tablet
+    "847230": "hypoglycaemic",  # 3 ML insulin glargine 100 UNT/ML Pen Injecto
+    "854873": "z_drug",  # zolpidem tartrate 10 MG Oral Tablet
+    "855332": "anticoagulant",  # warfarin sodium 5 MG Oral Tablet
+    "859747": "statin",  # rosuvastatin calcium 10 MG Oral Tablet
+    "866514": "beta_blocker",  # metoprolol tartrate 50 MG Oral Tablet
+    "966221": "thyroid_hormone",  # levothyroxine sodium 0.05 MG Oral Tablet
+    "979492": "arb",  # losartan potassium 50 MG Oral Tablet
     "308182": "penicillin",  # amoxicillin
     "723": "penicillin",  # ampicillin
     "617310": "statin",  # atorvastatin
@@ -275,6 +382,75 @@ RENAL_MIN_BAND: dict[str, str] = {
     "loop_diuretic": "15-29",
 }
 
+
+# (ICD-10 prefix, drug class) -> why the pair matters.
+#
+# Prefixes, not whole codes: a record holds E11.9 and the rule is about E11.
+# Ordered longest-prefix-first is unnecessary -- a code matching two rules
+# should raise both, because they are two different clinical reasons.
+CONDITION_CLASS_RISK: dict[tuple[str, str], str] = {
+    # Endocrine
+    ("E11", "corticosteroid"): "corticosteroids raise blood glucose",
+    ("E10", "corticosteroid"): "corticosteroids raise blood glucose",
+    ("E11", "thiazide"): "thiazides impair glucose tolerance",
+    ("E11", "antipsychotic"): "antipsychotics worsen glycaemic control",
+    ("E03", "amiodarone"): "amiodarone alters thyroid function",
+    # Cardiac
+    ("I50", "nsaid"): "NSAIDs cause fluid retention in heart failure",
+    ("I50", "calcium_blocker"): "negative inotropy worsens heart failure",
+    ("I48", "nsaid"): "NSAIDs raise bleeding risk on anticoagulation",
+    ("I10", "nsaid"): "NSAIDs raise blood pressure",
+    ("I10", "corticosteroid"): "corticosteroids cause sodium retention",
+    # Respiratory
+    ("J45", "beta_blocker"): "beta blockade can provoke bronchospasm in asthma",
+    ("J44", "beta_blocker"): "beta blockade can worsen airflow obstruction",
+    ("J45", "nsaid"): "NSAIDs can trigger bronchospasm in aspirin-sensitive asthma",
+    # Gastrointestinal
+    ("K25", "nsaid"): "NSAIDs cause ulceration and bleeding",
+    ("K27", "nsaid"): "NSAIDs cause ulceration and bleeding",
+    ("K25", "corticosteroid"): "corticosteroids add to ulcer risk",
+    ("K70", "paracetamol"): "hepatic impairment lowers the paracetamol threshold",
+    # Renal
+    ("N18", "nsaid"): "NSAIDs reduce renal perfusion in chronic kidney disease",
+    ("N18", "metformin"): "metformin accumulates in chronic kidney disease",
+    ("N18", "biguanide"): "metformin accumulates in chronic kidney disease",
+    # Neurological and psychiatric
+    ("G40", "fluoroquinolone"): "fluoroquinolones lower the seizure threshold",
+    ("G40", "tramadol"): "tramadol lowers the seizure threshold",
+    ("G40", "opioid"): "some opioids lower the seizure threshold",
+    ("F32", "corticosteroid"): "corticosteroids can precipitate mood disturbance",
+    ("G20", "antipsychotic"): "dopamine blockade worsens parkinsonism",
+    ("G30", "anticholinergic"): "anticholinergic burden worsens cognition in dementia",
+    ("G30", "benzodiazepine"): "benzodiazepines worsen confusion and falls in dementia",
+    # Urological and ocular
+    ("N40", "anticholinergic"): "anticholinergics precipitate urinary retention",
+    ("H40", "anticholinergic"): "anticholinergics can raise intraocular pressure",
+    # Musculoskeletal
+    ("M81", "corticosteroid"): "corticosteroids accelerate bone loss",
+    ("M10", "thiazide"): "thiazides raise urate and can provoke gout",
+}
+
+
+def condition_risks(
+    condition_codes: Sequence[str], drug_class: str | None
+) -> list[tuple[str, str]]:
+    """(condition code, reason) for every rule this drug trips on this patient.
+
+    Prefix-matched, so E11.9 answers a rule written about E11. Returns every
+    match rather than the first: two rules firing on one code are two distinct
+    clinical reasons, and collapsing them would hide one.
+    """
+    if not drug_class:
+        return []
+    out: list[tuple[str, str]] = []
+    for code in condition_codes:
+        normalised = str(code or "").upper().replace(".", "")
+        for (prefix, cls), reason in CONDITION_CLASS_RISK.items():
+            if cls == drug_class and normalised.startswith(prefix):
+                out.append((str(code), reason))
+    return out
+
+
 HEPATIC_RISK = {"statin", "benzodiazepine"}
 NARROW_THERAPEUTIC_INDEX = {"anticoagulant"}
 # Classes with published caution in older adults (Beers-style seed).
@@ -315,6 +491,13 @@ def _factor_matches(vector: PatientVector, factor: dict) -> str | None:
     characteristics matched — "eGFR 30-44, age 75-89" is reviewable, "3 factors"
     is not.
     """
+    if not isinstance(factor, dict):
+        # risk_factors is model-extracted JSONB. Validation rejects malformed
+        # factors on the way in, but rows predate the validator and a hand-edited
+        # one is a support action away -- and this runs inside an assessment a
+        # physician is waiting on. A factor we cannot read is not a match; it is
+        # not grounds for a 500.
+        return None
     feature, op, value = factor.get("feature"), factor.get("op"), factor.get("value")
     actual = getattr(vector, feature, None)
     if actual in (None, "unknown", ()):
@@ -557,8 +740,187 @@ def pgx_findings(
     return findings
 
 
+# Ingredient stem -> class. The same table that classified the demo formulary,
+# kept here so it can be applied to any drug RxNorm can name rather than only to
+# the hundred we happened to seed.
+#
+# Stems, not exact names, because RxNorm returns "metformin hydrochloride" and
+# "metformin" for the same drug, and salt forms multiply endlessly. Ordered
+# longest-first within a class is unnecessary; the patterns are disjoint.
+INGREDIENT_CLASS_STEMS: tuple[tuple[str, str], ...] = (
+    ("vaccine", "vaccine"), ("virus vaccine", "vaccine"),
+    ("antigen", "vaccine"), ("toxoid", "vaccine"),
+    ("caffeine", "stimulant"), ("methylphenidate", "stimulant"),
+    ("amphetamine", "stimulant"), ("modafinil", "stimulant"),
+    ("theophylline", "methylxanthine"),
+    ("propofol", "anaesthetic"), ("ketamine", "anaesthetic"),
+    ("lidocaine", "local_anaesthetic"), ("bupivacaine", "local_anaesthetic"),
+    ("norepinephrine", "vasopressor"), ("noradrenaline", "vasopressor"),
+    ("dopamine", "vasopressor"), ("dobutamine", "vasopressor"),
+    ("vasopressin", "vasopressor"), ("epinephrine", "adrenergic"),
+    ("benzonatate", "antitussive"), ("guaifenesin", "antitussive"),
+    ("dextromethorphan", "antitussive"),
+    ("cholecalciferol", "supplement"), ("ergocalciferol", "supplement"),
+    ("folic", "supplement"), ("cyanocobalamin", "supplement"),
+    ("thiamine", "supplement"), ("ascorbic", "supplement"),
+    ("magnesium", "supplement"), ("calcium carbonate", "supplement"),
+    ("ferrous", "iron"), ("iron sucrose", "iron"),
+    ("potassium", "potassium"),
+    ("carmellose", "ocular_lubricant"), ("hypromellose", "ocular_lubricant"),
+    ("sodium chloride", "fluid"), ("dextrose", "fluid"), ("glucose", "fluid"),
+    ("lactated ringer", "fluid"),
+    ("naloxone", "opioid_antagonist"), ("flumazenil", "benzodiazepine_antagonist"),
+    ("ondansetron", "antiemetic"), ("prochlorperazine", "antiemetic"),
+    ("promethazine", "antiemetic"),
+    ("levetiracetam", "anticonvulsant"), ("phenytoin", "anticonvulsant"),
+    ("valproate", "anticonvulsant"), ("valproic", "anticonvulsant"),
+    ("carbamazepine", "anticonvulsant"), ("lamotrigine", "anticonvulsant"),
+    ("levodopa", "dopaminergic"), ("carbidopa", "dopaminergic"),
+    ("donepezil", "cholinesterase_inhibitor"), ("memantine", "nmda_antagonist"),
+    ("sumatriptan", "triptan"), ("rizatriptan", "triptan"),
+    ("tamoxifen", "hormonal_therapy"), ("anastrozole", "hormonal_therapy"),
+    ("hydroxychloroquine", "dmard"), ("sulfasalazine", "dmard"),
+    ("azathioprine", "immunosuppressant"), ("tacrolimus", "immunosuppressant"),
+    ("ciclosporin", "immunosuppressant"), ("cyclosporine", "immunosuppressant"),
+    ("mycophenolate", "immunosuppressant"),
+    ("fluconazole", "antifungal"), ("itraconazole", "antifungal"),
+    ("nystatin", "antifungal"), ("metronidazole", "nitroimidazole"),
+    ("trimethoprim", "folate_antagonist"), ("sulfamethoxazole", "sulfonamide"),
+    ("clindamycin", "lincosamide"), ("meropenem", "carbapenem"),
+    ("linezolid", "oxazolidinone"),
+    ("metformin", "biguanide"),
+    ("ibuprofen", "nsaid"), ("naproxen", "nsaid"), ("diclofenac", "nsaid"),
+    ("ketorolac", "nsaid"), ("celecoxib", "nsaid"), ("meloxicam", "nsaid"),
+    ("aspirin", "nsaid"), ("indomethacin", "nsaid"),
+    ("atorvastatin", "statin"), ("simvastatin", "statin"),
+    ("rosuvastatin", "statin"), ("pravastatin", "statin"),
+    ("lisinopril", "ace_inhibitor"), ("enalapril", "ace_inhibitor"),
+    ("ramipril", "ace_inhibitor"), ("captopril", "ace_inhibitor"),
+    ("perindopril", "ace_inhibitor"),
+    ("losartan", "arb"), ("valsartan", "arb"), ("irbesartan", "arb"),
+    ("candesartan", "arb"), ("olmesartan", "arb"),
+    ("metoprolol", "beta_blocker"), ("atenolol", "beta_blocker"),
+    ("bisoprolol", "beta_blocker"), ("carvedilol", "beta_blocker"),
+    ("propranolol", "beta_blocker"), ("nebivolol", "beta_blocker"),
+    ("amlodipine", "calcium_blocker"), ("nifedipine", "calcium_blocker"),
+    ("diltiazem", "calcium_blocker"), ("verapamil", "calcium_blocker"),
+    ("furosemide", "loop_diuretic"), ("bumetanide", "loop_diuretic"),
+    ("torsemide", "loop_diuretic"),
+    ("hydrochlorothiazide", "thiazide"), ("chlorthalidone", "thiazide"),
+    ("indapamide", "thiazide"),
+    ("spironolactone", "potassium_sparing"), ("eplerenone", "potassium_sparing"),
+    ("warfarin", "anticoagulant"), ("apixaban", "anticoagulant"),
+    ("rivaroxaban", "anticoagulant"), ("dabigatran", "anticoagulant"),
+    ("edoxaban", "anticoagulant"), ("heparin", "anticoagulant"),
+    ("enoxaparin", "anticoagulant"),
+    ("clopidogrel", "antiplatelet"), ("ticagrelor", "antiplatelet"),
+    ("prasugrel", "antiplatelet"),
+    ("sertraline", "ssri"), ("escitalopram", "ssri"), ("fluoxetine", "ssri"),
+    ("citalopram", "ssri"), ("paroxetine", "ssri"),
+    ("venlafaxine", "snri"), ("duloxetine", "snri"),
+    ("amitriptyline", "tricyclic"), ("nortriptyline", "tricyclic"),
+    ("trazodone", "sedating_antidepressant"),
+    ("quetiapine", "antipsychotic"), ("olanzapine", "antipsychotic"),
+    ("risperidone", "antipsychotic"), ("aripiprazole", "antipsychotic"),
+    ("haloperidol", "antipsychotic"),
+    ("lorazepam", "benzodiazepine"), ("alprazolam", "benzodiazepine"),
+    ("diazepam", "benzodiazepine"), ("clonazepam", "benzodiazepine"),
+    ("temazepam", "benzodiazepine"), ("midazolam", "benzodiazepine"),
+    ("zolpidem", "z_drug"), ("zopiclone", "z_drug"),
+    ("morphine", "opioid"), ("oxycodone", "opioid"), ("hydrocodone", "opioid"),
+    ("fentanyl", "opioid"), ("tramadol", "opioid"), ("codeine", "opioid"),
+    ("hydromorphone", "opioid"), ("buprenorphine", "opioid"),
+    ("gabapentin", "gabapentinoid"), ("pregabalin", "gabapentinoid"),
+    ("omeprazole", "ppi"), ("pantoprazole", "ppi"), ("esomeprazole", "ppi"),
+    ("lansoprazole", "ppi"),
+    ("famotidine", "h2_blocker"), ("ranitidine", "h2_blocker"),
+    ("levothyroxine", "thyroid_hormone"), ("liothyronine", "thyroid_hormone"),
+    ("amoxicillin", "penicillin"), ("ampicillin", "penicillin"),
+    ("penicillin", "penicillin"), ("piperacillin", "penicillin"),
+    ("flucloxacillin", "penicillin"),
+    ("cephalexin", "cephalosporin"), ("cefuroxime", "cephalosporin"),
+    ("ceftriaxone", "cephalosporin"), ("cefazolin", "cephalosporin"),
+    ("ciprofloxacin", "fluoroquinolone"), ("levofloxacin", "fluoroquinolone"),
+    ("moxifloxacin", "fluoroquinolone"),
+    ("azithromycin", "macrolide"), ("clarithromycin", "macrolide"),
+    ("erythromycin", "macrolide"),
+    ("gentamicin", "aminoglycoside"), ("tobramycin", "aminoglycoside"),
+    ("amikacin", "aminoglycoside"),
+    ("vancomycin", "glycopeptide"), ("doxycycline", "tetracycline"),
+    ("nitrofurantoin", "urinary_antibiotic"),
+    ("alendronate", "bisphosphonate"), ("risedronate", "bisphosphonate"),
+    ("zoledronic", "bisphosphonate"),
+    ("prednisone", "corticosteroid"), ("prednisolone", "corticosteroid"),
+    ("dexamethasone", "corticosteroid"), ("hydrocortisone", "corticosteroid"),
+    ("fluticasone", "inhaled_corticosteroid"), ("budesonide", "inhaled_corticosteroid"),
+    ("insulin", "hypoglycaemic"), ("glipizide", "hypoglycaemic"),
+    ("gliclazide", "hypoglycaemic"), ("glyburide", "hypoglycaemic"),
+    ("sitagliptin", "dpp4_inhibitor"), ("linagliptin", "dpp4_inhibitor"),
+    ("semaglutide", "glp1_agonist"), ("tirzepatide", "glp1_agonist"),
+    ("dulaglutide", "glp1_agonist"), ("liraglutide", "glp1_agonist"),
+    ("empagliflozin", "sglt2_inhibitor"), ("dapagliflozin", "sglt2_inhibitor"),
+    ("digoxin", "digoxin"), ("amiodarone", "antiarrhythmic"),
+    ("lithium", "lithium"), ("methotrexate", "antimetabolite"),
+    ("allopurinol", "xanthine_oxidase_inhibitor"),
+    ("ondansetron", "antiemetic"), ("metoclopramide", "prokinetic"),
+    ("tamsulosin", "alpha_blocker"), ("doxazosin", "alpha_blocker"),
+    ("finasteride", "five_alpha_reductase"), ("clonidine", "alpha2_agonist"),
+    ("oxybutynin", "anticholinergic"), ("tolterodine", "anticholinergic"),
+    ("solifenacin", "anticholinergic"), ("diphenhydramine", "anticholinergic"),
+    ("cetirizine", "antihistamine"), ("loratadine", "antihistamine"),
+    ("fexofenadine", "antihistamine"),
+    ("montelukast", "leukotriene_antagonist"),
+    ("albuterol", "saba"), ("salbutamol", "saba"), ("ipratropium", "sama"),
+    ("salmeterol", "laba"), ("formoterol", "laba"),
+    ("paracetamol", "paracetamol"), ("acetaminophen", "paracetamol"),
+    ("oseltamivir", "antiviral"), ("acyclovir", "antiviral"),
+    ("latanoprost", "prostaglandin_analogue"), ("epoetin", "esa"),
+    ("succinylcholine", "neuromuscular_blocker"),
+    ("rocuronium", "neuromuscular_blocker"),
+)
+
+
+def class_from_ingredients(names: Iterable[str]) -> str | None:
+    """Class from an ingredient name, or None if nothing matches.
+
+    The ingredient is what carries the class: metformin hydrochloride is a
+    biguanide because of the word metformin, not because of its RxCUI. Callers
+    already holding ingredients from RxNorm can classify any drug this way,
+    rather than only the ones somebody thought to add to DRUG_CLASS.
+    """
+    for name in names:
+        lowered = str(name or "").lower()
+        for stem, cls in INGREDIENT_CLASS_STEMS:
+            if stem in lowered:
+                return cls
+    return None
+
+
+# Classes resolved at request time from RxNorm ingredients. Separate from
+# DRUG_CLASS so the curated map stays the override: a curated entry is a
+# deliberate decision about how the ruleset should reason, and a derived one
+# must never quietly replace it.
+_RESOLVED_CLASS: dict[str, str] = {}
+
+
+def register_drug_class(rxcui: str, cls: str | None) -> None:
+    """Record a class derived for an rxcui the curated map does not cover."""
+    if cls and str(rxcui) not in DRUG_CLASS:
+        _RESOLVED_CLASS[str(rxcui)] = cls
+
+
 def _class_of(rxcui: str) -> str | None:
-    return DRUG_CLASS.get(str(rxcui))
+    return DRUG_CLASS.get(str(rxcui)) or _RESOLVED_CLASS.get(str(rxcui))
+
+
+def class_of(rxcui: str) -> str | None:
+    """The therapeutic class of a drug, or None if neither the curated map nor
+    a resolved ingredient gives one.
+
+    Public because the organ diagram needs it: a duplicate-class finding shades
+    whichever organ that class stacks on, and the caller has only the rxcui.
+    """
+    return _class_of(rxcui)
 
 
 def _band_index(band: str) -> int | None:
@@ -582,20 +944,66 @@ def age_band_from_dob(dob: date, today: date | None = None) -> str:
     return "90+"
 
 
+# KDIGO G-stage boundaries, which is also the vocabulary PROGNOSIS_FEATURES
+# offers the label extractor. Kept as (floor, band) so the mapping reads the way
+# the guideline states it, and so a boundary change is one number.
+EGFR_BAND_FLOORS: tuple[tuple[float, str], ...] = (
+    (90.0, ">=90"),
+    (60.0, "60-89"),
+    (45.0, "45-59"),
+    (30.0, "30-44"),
+    (15.0, "15-29"),
+)
+
+
+def egfr_band_from_value(value: float | None) -> str:
+    """Map a measured eGFR to the ruleset's band vocabulary.
+
+    Stored as the lab's number and banded here rather than banded on the way in:
+    the boundaries are a ruleset concept, and a profile re-scored after they move
+    should reflect the measurement, not the band that was current when it was
+    filed. Same reasoning as `age_band_from_dob` deriving from a date of birth
+    rather than storing an age.
+    """
+    if value is None:
+        return "unknown"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if numeric < 0:
+        return "unknown"
+    for floor, band in EGFR_BAND_FLOORS:
+        if numeric >= floor:
+            return band
+    return "<15"
+
+
 def patient_row_to_vector(row: Any, active_rxcuis: Sequence[str] = ()) -> PatientVector:
     """Strip PHI from a Patient ORM row into the de-identified rules vector.
 
     Demo exception: the DB row may hold name/DOB; the vector never does.
+
+    Everything below the identifiers is read straight through, and that is the
+    point: for as long as the record had no columns for sex, eGFR, hepatic
+    status or prior reactions, this could only default them to "unknown", and
+    three findings worth 95 of the 220 weight points -- PRIOR_ADR_SAME_CLASS,
+    RENAL_DOSE_EXCEEDED, HEPATIC_IMPAIRED -- could not fire for anybody.
     """
     allergies = tuple(str(a) for a in (getattr(row, "allergy_codes", None) or ()))
     conditions = tuple(str(c) for c in (getattr(row, "condition_codes", None) or ()))
     phenotypes = tuple(str(p) for p in (getattr(row, "pgx_phenotypes", None) or ()))
+    prior_adr = tuple(str(r) for r in (getattr(row, "prior_adr_rxcuis", None) or ()))
     dob = getattr(row, "date_of_birth", None)
     return PatientVector(
         age_band=age_band_from_dob(dob) if isinstance(dob, date) else "unknown",
+        sex=str(getattr(row, "sex", None) or "unknown"),
+        egfr_band=egfr_band_from_value(getattr(row, "egfr_value", None)),
+        hepatic=str(getattr(row, "hepatic", None) or "unknown"),
         allergy_codes=allergies,
         condition_codes=conditions,
         active_rxcuis=tuple(str(r) for r in active_rxcuis),
+        prior_adr_rxcuis=prior_adr,
         # A phenotype is not an identifier: it is a band-like clinical fact, the
         # same class of thing as the eGFR band beside it.
         pgx_phenotypes=phenotypes,
@@ -745,6 +1153,23 @@ def assess(
                         "Liver function not supplied — hepatic check skipped",
                         "feature vector", 6)
             )
+
+    # A condition this drug class is known to worsen. Same stage as the organ
+    # gates above and for the same reason: it is patient-specific knowledge, not
+    # a population statistic. Every matching rule is reported -- two rules on one
+    # code are two clinical reasons, and a reader deciding whether to prescribe
+    # needs both.
+    for code, reason in condition_risks(vector.condition_codes, candidate_class):
+        findings.append(
+            Finding(
+                "CONDITION_WORSENED",
+                Severity.HIGH,
+                WEIGHTS["CONDITION_WORSENED"],
+                f"Patient has {code} — {reason}",
+                "condition rules",
+                6,
+            )
+        )
 
     # --- stage 7a: population signal (Tier 1, FAERS) ------------------------
     # patient-pipeline.md §2 puts the FAERS ratio at stage 7 and
