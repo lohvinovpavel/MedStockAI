@@ -47,6 +47,7 @@ from medstock_shared.certification import (
 from medstock_shared.db import SessionLocal
 from medstock_shared.models import (
     CertificationFinding,
+    Drug,
     DrugCertification,
     ImportAlert,
     StockSnapshot,
@@ -383,6 +384,33 @@ def shelf_ndcs() -> list[str]:
         return sorted({str(n) for n in s.scalars(select(StockSnapshot.ndc).distinct()).all()})
 
 
+def catalogue_ndcs() -> list[str]:
+    """Every NDC the drug catalogue knows, stocked or not.
+
+    Not the same question as `shelf_ndcs`. A physician can prescribe, and the
+    analogue search will offer, drugs this hospital does not currently hold --
+    that is most of what substitution is for. Certifying only the shelf meant
+    every one of those came back Unknown, which on a compliance surface reads
+    as "we checked and found nothing" rather than "we never looked".
+
+    Cheap, unlike the full-directory sweep the module docstring rules out: the
+    catalogue is a few hundred NDCs, so this is a handful of batched requests.
+    """
+    with Session(engine) as s:
+        return sorted({str(n) for n in s.scalars(select(Drug.ndc).distinct()).all() if n})
+
+
+def certifiable_ndcs() -> list[str]:
+    """What a certification pass should cover: the catalogue and the shelf.
+
+    The union, not either alone. The catalogue is what can be prescribed; the
+    shelf can still hold an NDC that never made it into `drug` (a stock feed
+    and the catalogue are populated by different jobs), and dropping those
+    would take working badges away.
+    """
+    return sorted(set(catalogue_ndcs()) | set(shelf_ndcs()))
+
+
 def write(mapped: list[tuple[dict, list[dict]]]) -> int:
     with Session(engine) as s:
         for certification, findings in mapped:
@@ -406,7 +434,13 @@ def write(mapped: list[tuple[dict, list[dict]]]) -> int:
 
 
 def run(targeted: bool = True) -> int:
-    """Targeted by default: certify what is on a shelf.
+    """Targeted by default: certify the catalogue and the shelf.
+
+    This used to be the shelf alone, which quietly meant a drug had to be in
+    stock before anyone could learn whether it was recalled. Substitution
+    proposes drugs that are not stocked -- that is the point of it -- so the
+    badge on the one you were about to switch to was the one guaranteed to
+    read Unknown.
 
     The alternative — sweeping the whole directory — cannot complete anyway
     (§ module docstring: `skip` stops at 25 000 against 136 942 products), so a
@@ -418,7 +452,7 @@ def run(targeted: bool = True) -> int:
     shortages = shortages_by_ndc()
 
     if targeted:
-        wanted = shelf_ndcs()
+        wanted = certifiable_ndcs()
         if not wanted:
             return 0
         products = products_for_ndcs(wanted)
