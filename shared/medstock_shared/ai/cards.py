@@ -550,6 +550,7 @@ def project_audit(result: dict, principal: Principal, request_id: str, args: dic
 
 
 @register_projector("propose_order")
+@register_projector("draft_order")
 def project_proposal(result: dict, principal: Principal, request_id: str, args: dict | None) -> CardBase | None:
     if "error" in result and result.get("error") not in ("compliance_blocked", "review_decision_mismatch"):
         return None
@@ -604,26 +605,92 @@ def card_for(
         return None
 
 
-def store_proposal(proposal: dict[str, Any]) -> str:
-    """Store a proposal in-memory with 15-minute TTL."""
+def store_proposal(proposal: dict[str, Any], principal: Principal | None = None) -> str:
+    """Store a proposal with 15-minute TTL, shared across replicas via DB cache."""
     pid = proposal.get("proposal_id") or uuid.uuid4().hex
+    now = datetime.now(UTC)
     proposal["proposal_id"] = pid
-    proposal["expires_at"] = (datetime.now(UTC) + timedelta(minutes=15)).isoformat()
+    proposal["expires_at"] = (now + timedelta(minutes=15)).isoformat()
+    if principal:
+        proposal["hospital_id"] = str(principal.hospital_id)
+        proposal["user_id"] = str(principal.user_id)
+
+    # In-memory update and sweep of expired proposals
     _PROPOSALS[pid] = proposal
+    for k in list(_PROPOSALS.keys()):
+        exp = _PROPOSALS[k].get("expires_at")
+        if exp:
+            try:
+                if datetime.fromisoformat(exp) <= now:
+                    _PROPOSALS.pop(k, None)
+            except Exception:
+                pass
+
+    # Persistent DB cache so proposals survive pod restarts and cross replicas
+    try:
+        from .cache import cache_put
+        cache_put("order_proposal", "v1", "copilot", pid, proposal)
+    except Exception:
+        pass
     return pid
 
 
 def get_proposal(proposal_id: str) -> dict[str, Any] | None:
     """Retrieve an unexpired proposal by ID."""
+    now = datetime.now(UTC)
     p = _PROPOSALS.get(proposal_id)
-    if not p:
-        return None
-    exp = p.get("expires_at")
-    if exp:
-        try:
-            if datetime.fromisoformat(exp) < datetime.now(UTC):
+    if p:
+        exp = p.get("expires_at")
+        if exp:
+            try:
+                if datetime.fromisoformat(exp) > now:
+                    return dict(p)
                 _PROPOSALS.pop(proposal_id, None)
-                return None
+            except Exception:
+                return dict(p)
+        else:
+            return dict(p)
+
+    # DB fallback
+    try:
+        from .cache import cache_get
+        data = cache_get("order_proposal", "v1", proposal_id)
+        if data:
+            exp_str = data.get("expires_at")
+            if exp_str:
+                if datetime.fromisoformat(exp_str) > now:
+                    return data
+            else:
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def consume_proposal(proposal_id: str) -> dict[str, Any] | None:
+    """Consume an unexpired proposal for single-use confirmation."""
+    p = get_proposal(proposal_id)
+    if p is None:
+        return None
+    _PROPOSALS.pop(proposal_id, None)
+    try:
+        from ..db import SessionLocal
+        from ..models import AICache
+        from sqlalchemy import delete
+
+        session = SessionLocal()
+        try:
+            session.execute(
+                delete(AICache).where(
+                    AICache.type == "order_proposal",
+                    AICache.dedupe_key == proposal_id,
+                )
+            )
+            session.commit()
         except Exception:
-            pass
+            session.rollback()
+        finally:
+            session.close()
+    except Exception:
+        pass
     return p

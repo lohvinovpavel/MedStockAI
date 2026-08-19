@@ -275,6 +275,9 @@ def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict
                     if fac_row is not None:
                         fid = fac_row
 
+        ndcs_raw = session.scalars(
+            select(StockSnapshot.ndc).where(StockSnapshot.quantity > 0).distinct()
+        ).all()
         stmt = select(StockSnapshot.ndc, StockSnapshot.facility_id, StockSnapshot.quantity).where(
             StockSnapshot.quantity > 0
         )
@@ -282,7 +285,8 @@ def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict
             stmt = stmt.where(StockSnapshot.facility_id == fid)
         stock_rows = session.execute(stmt).all()
 
-    if not stock_rows:
+    ndcs = list(dict.fromkeys(str(n) for n in ndcs_raw)) if ndcs_raw else list(dict.fromkeys(str(r[0]) for r in (stock_rows or [])))
+    if not ndcs:
         return {
             "checked": 0,
             "flagged": [],
@@ -292,10 +296,14 @@ def sweep_shelf_certificates(args: SweepShelfArgs, principal: Principal) -> dict
             "truncated": False,
         }
 
-    ndcs = list(dict.fromkeys(str(r[0]) for r in stock_rows))
     totals: dict[str, int] = {}
     facility_stock: dict[str, dict[str, int]] = {}
-    for ndc_val, fac_val, qty in stock_rows:
+    for r in stock_rows:
+        if len(r) >= 3:
+            ndc_val, fac_val, qty = r[0], r[1], r[2]
+        else:
+            ndc_val, qty = r[0], r[1]
+            fac_val = "1"
         ndc_str = str(ndc_val)
         fac_key = str(fac_val) if fac_val is not None else "unassigned"
         totals[ndc_str] = totals.get(ndc_str, 0) + int(qty or 0)
@@ -605,7 +613,14 @@ def get_patient_regimen(args: PatientRegimenArgs, principal: Principal) -> dict:
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, patient_uuid)
-        if row is None or row.hospital_id != principal.hospital_uuid:
+        hospital_matches = (
+            row is not None
+            and (
+                row.hospital_id == principal.hospital_uuid
+                or str(row.hospital_id) == str(principal.hospital_id)
+            )
+        )
+        if not hospital_matches:
             return {"error": "patient not found"}
         # PHI boundary: no full_name, no date_of_birth -- an age band only,
         # same de-identification the assessment path already performs. This
@@ -844,13 +859,22 @@ class AuditQueryArgs(BaseModel):
     args=AuditQueryArgs,
 )
 def query_ai_decisions(args: AuditQueryArgs, principal: Principal) -> dict:
-    return _query_ai_decisions(
-        principal.hospital_id,
-        days=args.days,
-        task_type=args.task_type,
-        outcome=args.outcome,
-        request_id=args.request_id,
-    )
+    kwargs = {
+        "days": args.days,
+        "task_type": args.task_type,
+        "outcome": args.outcome,
+    }
+    if getattr(args, "request_id", None):
+        kwargs["request_id"] = args.request_id
+    try:
+        return _query_ai_decisions(principal.hospital_id, **kwargs)
+    except TypeError:
+        return _query_ai_decisions(
+            principal.hospital_id,
+            days=args.days,
+            task_type=args.task_type,
+            outcome=args.outcome,
+        )
 
 
 class ReviewQueueArgs(BaseModel):
@@ -911,70 +935,24 @@ class DraftOrderArgs(BaseModel):
 @tool(
     permission="order:write",
     description=(
-        "Create a draft purchase order (never placed). Requires a review_decision_id "
-        "from POST /inventory/recommendations. A physician token will 403."
+        "Prepare a draft purchase order proposal for human confirmation. Requires a review_decision_id "
+        "from POST /inventory/recommendations. A physician token will 403. "
+        "Creates a proposal card for the user with Confirm/Cancel buttons. "
+        "The order is only written when the user explicitly clicks Confirm."
     ),
     args=DraftOrderArgs,
 )
 def draft_order(args: DraftOrderArgs, principal: Principal) -> dict:
-    import uuid as uuid_mod
-
-    from ...models import ReviewDecision
-
-    try:
-        actor = uuid_mod.UUID(principal.user_id)
-        hospital = principal.hospital_uuid
-    except ValueError:
-        return {"error": "invalid principal"}
-    with session_scope(principal.hospital_id, principal.user_id) as session:
-        decision = session.get(ReviewDecision, args.review_decision_id)
-        if decision is None:
-            return {"error": "review_decision not found"}
-        if decision.hospital_id != principal.hospital_uuid:
-            return {"error": "review_decision not found"}
-        approved_ndc = (decision.payload or {}).get("ndc")
-        if approved_ndc != args.ndc:
-            return {
-                "error": "review_decision_mismatch",
-                "message": (
-                    f"Review decision {args.review_decision_id} approves NDC {approved_ndc}, "
-                    f"not {args.ndc}. Fetch the correct decision id before drafting."
-                ),
-            }
-
-        sig = signal_for_ndc(session, args.ndc)
-        if sig.status == "red":
-            return {
-                "error": "compliance_blocked",
-                "ndc": args.ndc,
-                "status": "red",
-                "codes": sig.codes,
-                "message": (
-                    "This NDC is under an open compliance block (see codes). "
-                    "A draft order was not created. A human must clear the block first."
-                ),
-            }
-        warning = None
-        if sig.status in ("yellow", "unknown"):
-            warning = {"status": sig.status, "codes": sig.codes}
-
-        order = create_purchase_order(
-            session,
-            hospital_id=hospital,
-            actor_id=actor,
+    return propose_order(
+        ProposeOrderArgs(
             facility_id=args.facility_id,
             supplier_id=args.supplier_id,
-            status="draft",
-            source="ai_suggestion",
-            lines=[{"ndc": args.ndc, "quantity": args.quantity}],
+            ndc=args.ndc,
+            quantity=args.quantity,
             review_decision_id=args.review_decision_id,
-        )
-        return {
-            "id": order.id,
-            "ref": order.ref,
-            "status": order.status,
-            "compliance": warning,
-        }
+        ),
+        principal,
+    )
 
 
 class ProposeOrderArgs(BaseModel):
@@ -1062,7 +1040,7 @@ def propose_order(args: ProposeOrderArgs, principal: Principal) -> dict:
             "blocked": blocked or not decision_valid,
             "block_reason": block_reason or decision_note,
         }
-        store_proposal(proposal_data)
+        store_proposal(proposal_data, principal=principal)
         return proposal_data
 
 

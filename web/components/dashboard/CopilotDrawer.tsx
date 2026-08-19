@@ -1316,7 +1316,7 @@ export function CopilotDrawer() {
     setHistoryOpen(false);
   }
 
-  async function createDraftFromCard(messageId: string, card: Extract<ResponseCard, { kind: "po" }>) {
+  async function createDraftFromCard(cardKey: string, card: Extract<ResponseCard, { kind: "po" }>) {
     try {
       const rec = (await apiFetch("inventory", "/recommendations", {
         method: "POST",
@@ -1326,7 +1326,7 @@ export function CopilotDrawer() {
         method: "POST",
       })) as { ref: string };
       reloadOrders();
-      setDraftedMessageIds((prev) => new Set(prev).add(messageId));
+      setDraftedMessageIds((prev) => new Set(prev).add(cardKey));
       toast.success(`Draft order ${order.ref} created.`, {
         description: `${card.quantity} ${card.unit} of ${card.drugName} for ${facility.name}.`,
         action: { label: "Review", onClick: () => router.push("/orders") },
@@ -1537,19 +1537,21 @@ export function CopilotDrawer() {
             return (
               <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>
                 {m.tools && <ToolActivityRow tools={m.tools} />}
-                {allCards.map((c, i) => (
-                  <div key={i} className="flex w-[92%] flex-col gap-1">
-                    <ResponseCardView
-                      card={c}
-                      onCreateDraft={c.kind === "po" ? () => createDraftFromCard(m.id, c as Extract<ResponseCard, { kind: "po" }>) : undefined}
-                      onConfirmProposal={c.kind === "proposal" ? () => confirmProposal(c as Extract<ResponseCard, { kind: "proposal" }>) : undefined}
-                      onAskFollowup={(prompt) => {
-                        setMessages((prev) => [...prev, { id: id(), role: "user", text: prompt }]);
-                        setPending(true);
-                        void streamReply(prompt);
-                      }}
-                      drafted={draftedMessageIds.has(m.id) || (c.kind === "proposal" && draftedMessageIds.has(c.proposal_id))}
-                    />
+                {allCards.map((c, i) => {
+                  const cardKey = c.kind === "proposal" ? c.proposal_id : `${m.id}-${i}`;
+                  return (
+                    <div key={cardKey} className="flex w-[92%] flex-col gap-1">
+                      <ResponseCardView
+                        card={c}
+                        onCreateDraft={c.kind === "po" ? () => createDraftFromCard(cardKey, c as Extract<ResponseCard, { kind: "po" }>) : undefined}
+                        onConfirmProposal={c.kind === "proposal" ? () => confirmProposal(c as Extract<ResponseCard, { kind: "proposal" }>) : undefined}
+                        onAskFollowup={(prompt) => {
+                          setMessages((prev) => [...prev, { id: id(), role: "user", text: prompt }]);
+                          setPending(true);
+                          void streamReply(prompt);
+                        }}
+                        drafted={draftedMessageIds.has(cardKey)}
+                      />
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1562,8 +1564,9 @@ export function CopilotDrawer() {
                       <Copy className="size-3" />
                       Copy
                     </Button>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
                 {m.text && (
                   <div
                     className={cn(

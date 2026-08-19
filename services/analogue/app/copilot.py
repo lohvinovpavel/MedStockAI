@@ -241,18 +241,7 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
         b.record(True)
 
         if not function_call_parts:
-            full_text = "".join(text_parts).lower()
-            outcome = "live"
-            refusal_phrases = ["permission", "not permitted", "forbidden", "authorized", "privilege"]
-            for tool_name in successful_tools:
-                if tool_name.lower() in full_text:
-                    for phrase in refusal_phrases:
-                        if phrase in full_text:
-                            outcome = "contradiction"
-                            break
-                    if outcome == "contradiction":
-                        break
-            _write_copilot_audit(principal, request_id, outcome, started, tools_called)
+            _write_copilot_audit(principal, request_id, "live", started, tools_called)
             yield _sse("done", {"request_id": request_id})
             return
 
@@ -301,6 +290,7 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
 
 
 @copilot.post("/copilot/chat")
+@copilot.post("/chat")
 async def copilot_chat(
     body: ChatRequest,
     principal: Principal = Depends(require("copilot:chat")),

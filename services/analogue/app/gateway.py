@@ -42,7 +42,10 @@ def _actor(principal: Principal) -> uuid.UUID:
 
 
 def _hospital(principal: Principal) -> uuid.UUID:
-    return principal.hospital_uuid
+    h = principal.hospital_uuid
+    if h is None:
+        raise HTTPException(status_code=400, detail="invalid hospital_id")
+    return h
 
 
 def _owned(session, conversation_id: uuid.UUID, actor: uuid.UUID) -> CopilotConversation:
@@ -284,12 +287,30 @@ def confirm_order_proposal(
     body: ConfirmProposalBody,
     principal: Principal = Depends(require("order:write")),
 ) -> dict:
-    from medstock_shared.ai.cards import get_proposal
+    from medstock_shared.ai.cards import consume_proposal
     from medstock_shared.certification import signal_for_ndc
     from medstock_shared.models import ReviewDecision
     from medstock_shared.ordering import create_purchase_order
 
-    proposal = get_proposal(body.proposal_id)
+    proposal = consume_proposal(body.proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired proposal")
+
+    if proposal.get("hospital_id") and proposal.get("hospital_id") != str(principal.hospital_id):
+        raise HTTPException(status_code=403, detail="Proposal hospital mismatch")
+    if proposal.get("facility_id") != body.facility_id:
+        raise HTTPException(status_code=400, detail="Proposal facility mismatch")
+    if proposal.get("supplier_id") != body.supplier_id:
+        raise HTTPException(status_code=400, detail="Proposal supplier mismatch")
+    if proposal.get("ndc") != body.ndc:
+        raise HTTPException(status_code=400, detail="Proposal NDC mismatch")
+    if proposal.get("quantity") != body.quantity:
+        raise HTTPException(status_code=400, detail="Proposal quantity mismatch")
+    if proposal.get("review_decision_id") != body.review_decision_id:
+        raise HTTPException(status_code=400, detail="Proposal review decision mismatch")
+    if proposal.get("blocked"):
+        raise HTTPException(status_code=400, detail=f"Proposal is blocked: {proposal.get('block_reason')}")
+
     # Check server-side gates unconditionally
     with session_scope(principal.hospital_id, principal.user_id) as session:
         decision = session.get(ReviewDecision, body.review_decision_id)

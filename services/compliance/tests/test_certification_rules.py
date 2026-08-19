@@ -53,12 +53,16 @@ def colour(**kwargs) -> Status:
         ("0093-9222-05", "00093922205"),  # 4-4-2, the common published form
         ("00093-922-05", "00093092205"),  # 5-3-2 — pads the *product* segment
         ("0904-2015-59", "00904201559"),  # verified live against openFDA
-        ("0093-9222", "000939222"),  # product NDC, no package segment
         ("00093922205", "00093922205"),  # already canonical
     ],
 )
 def test_ndc11_pads_to_5_4_2(raw, expected):
     assert ndc11(raw) == expected
+
+
+def test_ndc11_rejects_incomplete_2_segment_product_ndc():
+    with pytest.raises(ValueError):
+        ndc11("0093-9222")
 
 
 def test_different_hyphenations_are_different_drugs():

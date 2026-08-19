@@ -31,6 +31,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # Bump when any threshold or rule below changes. Stored on every row so a colour
 # computed months ago can still say which rules produced it.
@@ -703,6 +707,7 @@ def signal_for_ndc(session: Session, ndc: str) -> CertSignal:
             )
         ).all()
     except (ProgrammingError, SQLAlchemyError):
+        session.rollback()
         findings = []
 
     return CertSignal(status=str(record.status), codes=sorted(set(findings)))
@@ -727,6 +732,7 @@ def recalls_for(session: Session, ndc: str) -> list[Recall]:
             )
         ).all()
     except (ProgrammingError, SQLAlchemyError):
+        session.rollback()
         return []
 
     class_map = {
@@ -777,7 +783,7 @@ def shortages_for(session: Session, ndc: str) -> list[Shortage]:
                 )
             )
     except (ProgrammingError, SQLAlchemyError):
-        pass
+        session.rollback()
 
     if not out:
         try:
@@ -799,7 +805,7 @@ def shortages_for(session: Session, ndc: str) -> list[Shortage]:
                     )
                 )
         except (ProgrammingError, SQLAlchemyError):
-            pass
+            session.rollback()
 
     return out
 

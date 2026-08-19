@@ -13,7 +13,7 @@ from importlib.metadata import version as pkg_version
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from medstock_shared.auth import Principal, require
+from medstock_shared.auth import PERMS, Principal, require
 from medstock_shared.certification import (
     RULESET_VERSION,
     Finding,
@@ -306,6 +306,12 @@ def explore_certificate(
     with Session(engine) as session:
         try:
             return explore(session, ndc)
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HTTPException:
+            session.rollback()
+            raise
         except Exception as exc:
             session.rollback()
             raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -23,13 +23,17 @@ class Principal:
     role: str
 
     @property
-    def hospital_uuid(self) -> uuid.UUID:
+    def hospital_uuid(self) -> uuid.UUID | None:
         """Typed form of hospital_id, for comparison against ORM UUID columns.
 
         Every model column is UUID(as_uuid=True); the JWT claim is a str.
         Comparing them directly is silently always-unequal — see F-01.
+        Returns None if hospital_id is not a valid UUID to ensure closed-fail comparisons.
         """
-        return uuid.UUID(self.hospital_id)
+        try:
+            return uuid.UUID(str(self.hospital_id))
+        except (ValueError, TypeError, AttributeError):
+            return None
 
 
 def credentials_token(request: Request) -> str | None:
