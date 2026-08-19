@@ -25,6 +25,14 @@ const PUBLIC_PATHS = ["/auth", "/version"];
 export const LOCAL_AUTH_ENABLED = process.env.NEXT_PUBLIC_ALLOW_LOCAL_AUTH === "true";
 const LOCAL_USER_KEY = "medstock-local-user";
 
+// Set on logout, read (and cleared) once by CopilotDrawer's mount effect so
+// the next login starts a fresh chat instead of silently reopening whoever
+// was logged in before's last conversation — the drawer's own state resets
+// on unmount, but it re-fetches "my most recent conversation" from the
+// backend on every mount, which after a same-browser account switch is a
+// stranger's chat history rendering under the new user's name.
+export const COPILOT_FRESH_LOGIN_KEY = "medstock-copilot-fresh-login";
+
 function readLocalUser(): Me | null {
   if (!LOCAL_AUTH_ENABLED || typeof window === "undefined") return null;
   const raw = window.localStorage.getItem(LOCAL_USER_KEY);
@@ -147,6 +155,7 @@ export function SessionProvider({
   async function logout() {
     const wasLocal = readLocalUser() !== null;
     window.localStorage.removeItem(LOCAL_USER_KEY);
+    window.localStorage.setItem(COPILOT_FRESH_LOGIN_KEY, "1");
     if (wasLocal) {
       // Never backed by a real cookie — calling the real /logout here would
       // just be a guaranteed-failing request against a backend that isn't
