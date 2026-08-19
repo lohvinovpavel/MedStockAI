@@ -66,6 +66,7 @@ import {
   CERT_LABELS,
   CertificationBadge,
   recheckCertification,
+  recheckCertifications,
   useCertificateDetail,
   useCertificationStatuses,
   useRuleset,
@@ -629,7 +630,12 @@ export default function InventoryPage() {
   }, [rxcuiFilter, facility.id]);
 
   const certNdcs = useMemo(() => items.map((i) => i.ndc).filter(Boolean), [items]);
-  const certification = useCertificationStatuses(certNdcs);
+  // Bumped after a bulk re-check so the badges re-read rather than keeping the
+  // colours they had before the FDA was asked.
+  const [certNonce, setCertNonce] = useState(0);
+  const [bulkRechecking, setBulkRechecking] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const certification = useCertificationStatuses(certNdcs, certNonce);
 
   // Mirrors CertificationBadge's own fallback: no ndc to look up is "unknown",
   // an ndc whose result hasn't arrived (or failed) is "unavailable" — not the
@@ -637,6 +643,45 @@ export default function InventoryPage() {
   const certFor = (item: ShelfItem): CertResult =>
     (item.ndc ? certification[item.ndc] : undefined) ??
     { status: item.ndc ? "unavailable" : "unknown", reasons: 0 };
+
+  // The drugs a bulk re-check would actually help: no verdict has been
+  // established for them. Green/yellow/red are left alone — re-fetching a drug
+  // whose colour is already known spends the shared openFDA budget to confirm
+  // what the page is already showing.
+  const uncertified = useMemo(
+    () =>
+      items
+        .map((i) => i.ndc)
+        .filter((ndc): ndc is string => {
+          if (!ndc) return false;
+          const status = certification[ndc]?.status;
+          return status === undefined || status === "unknown" || status === "unavailable";
+        }),
+    [items, certification],
+  );
+
+  async function bulkRecheck() {
+    setBulkRechecking(true);
+    setBulkProgress(0);
+    try {
+      const { ok, errors } = await recheckCertifications(uncertified, (done) =>
+        setBulkProgress(done),
+      );
+      // Always reload, even with failures: the ones that did resolve should
+      // show their new colour rather than waiting for another click.
+      setCertNonce((n) => n + 1);
+      const failed = Object.keys(errors).length;
+      if (failed === 0) {
+        toast.success(`Re-checked ${ok} drug${ok === 1 ? "" : "s"} against the FDA record.`);
+      } else {
+        toast.warning(`Re-checked ${ok}, ${failed} could not be looked up.`, {
+          description: Object.values(errors)[0]?.slice(0, 120),
+        });
+      }
+    } finally {
+      setBulkRechecking(false);
+    }
+  }
 
   const kpis = useMemo(() => {
     return {
@@ -802,6 +847,24 @@ export default function InventoryPage() {
             button lands at the start of its own line instead of pinned to
             the far right with a large empty gap above it. */}
         {can(user?.role, "receiveBatch") && <ReceiveBatchDialog items={items} />}
+
+        {/* Bulk COMP-2, for the drugs whose colour nobody has been able to
+            establish. Offered only when there are any, and only to a role that
+            may explore — the same stance the per-drug button uses, so the two
+            controls never disagree about who is allowed to spend the budget. */}
+        {exploreStance(user?.role) !== "denied" && uncertified.length > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={bulkRechecking}
+            onClick={bulkRecheck}
+          >
+            <RefreshCw className={cn("size-4", bulkRechecking && "animate-spin")} />
+            {bulkRechecking
+              ? `Re-checking ${bulkProgress}/${uncertified.length}…`
+              : `Re-check ${uncertified.length} unknown`}
+          </Button>
+        )}
       </div>
 
       <p className="text-[11px] text-muted-foreground">
