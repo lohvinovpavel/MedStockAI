@@ -19,12 +19,17 @@ import { AlertTriangle, RefreshCw, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Separator } from "@/components/ui/separator";
 import { StatusBadge, type StatusTone } from "@/components/dashboard/StatusBadge";
+import { SortableHead, compareValues, nextSortState, type SortState } from "@/components/dashboard/SortableHead";
+import { DrugName } from "@/components/dashboard/DrugName";
+import { Pager } from "@/components/dashboard/Pager";
+import { parseDrugName } from "@/lib/drug-name";
 import { useSession } from "@/lib/session";
 import { can } from "@/lib/rbac";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -34,6 +39,7 @@ type AtRiskItem = {
   ndc: string;
   rxcui: string | null;
   name: string | null;
+  drug_class: string | null;
   quantity: number;
   days_of_supply: number;
   days_of_supply_p90: number | null;
@@ -103,6 +109,29 @@ function basisLabel(basis: string | null, reason: string | null): string {
   return basis ?? "—";
 }
 
+type AtRiskSortKey = "name" | "drug_class" | "quantity" | "days" | "days_p90" | "depletion" | "shortage";
+
+function atRiskSortValue(i: AtRiskItem, key: AtRiskSortKey): string | number {
+  switch (key) {
+    case "name":
+      return parseDrugName(i.name ?? i.ndc).primary.toLowerCase();
+    case "drug_class":
+      return (i.drug_class ?? "").toLowerCase();
+    case "quantity":
+      return i.quantity;
+    case "days":
+      return i.days_of_supply;
+    case "days_p90":
+      return i.days_of_supply_p90 ?? Number.MAX_SAFE_INTEGER;
+    case "depletion":
+      return i.depletion_date ?? "9999-12-31";
+    case "shortage":
+      return i.in_shortage ? 0 : 1;
+  }
+}
+
+const PAGE_SIZE = 25;
+
 export default function ForecastsPage() {
   const { user } = useSession();
   // Mirrors forecast:run in shared PERMS — the backend 403s on its own;
@@ -116,6 +145,10 @@ export default function ForecastsPage() {
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [running, setRunning] = useState(false);
   const autoRan = useRef(false);
+  const [sort, setSort] = useState<SortState<AtRiskSortKey>>(null);
+  const [query, setQuery] = useState("");
+  const [classFilter, setClassFilter] = useState("all");
+  const [page, setPage] = useState(1);
 
   const loadAtRisk = useCallback(async () => {
     try {
@@ -186,9 +219,46 @@ export default function ForecastsPage() {
     return () => clearTimeout(handle);
   }, [rxcui, surgePct]);
 
-  const items = atRisk?.items ?? [];
+  const items = useMemo(() => atRisk?.items ?? [], [atRisk]);
   const selected = items.find((i) => i.rxcui === rxcui) ?? null;
   const tier = surgeTier(surgePct);
+
+  // Row click owns selection now (the header dropdown is gone); writing the
+  // ?sku= deep link back keeps the selection shareable and refresh-safe —
+  // loadAtRisk already reads it on mount.
+  const selectItem = useCallback((i: AtRiskItem) => {
+    if (!i.rxcui) return;
+    setRxcui(i.rxcui);
+    const url = new URL(window.location.href);
+    url.searchParams.set("sku", i.ndc);
+    window.history.replaceState(null, "", url.toString());
+  }, []);
+
+  const drugClasses = useMemo(
+    () => [...new Set(items.map((i) => i.drug_class).filter((c): c is string => !!c))].sort(),
+    [items],
+  );
+  // Unsorted view keeps the server's worst-first order, so page 1 is always
+  // the 25 worst; sorting/filtering/paging are all client-side (~100 rows).
+  const tableItems = useMemo(() => {
+    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const filtered = items.filter((i) => {
+      if (classFilter !== "all" && i.drug_class !== classFilter) return false;
+      if (tokens.length === 0) return true;
+      const hay = `${i.name ?? ""} ${parseDrugName(i.name ?? i.ndc).primary} ${i.ndc} ${i.drug_class ?? ""}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+    if (!sort) return filtered;
+    return [...filtered].sort((a, b) => {
+      const r = compareValues(atRiskSortValue(a, sort.key), atRiskSortValue(b, sort.key));
+      return sort.direction === "asc" ? r : -r;
+    });
+  }, [items, query, classFilter, sort]);
+  const pageCount = Math.max(1, Math.ceil(tableItems.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageItems = tableItems.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  useEffect(() => setPage(1), [query, classFilter, sort]);
 
   const chartData = useMemo(() => {
     if (!forecast) return [];
@@ -257,28 +327,12 @@ export default function ForecastsPage() {
             Consumption history and quantile demand forecast per drug — served from the latest stored run.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {canRun && (
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={running} onClick={() => runForecast(false)}>
-              <RefreshCw className={cn("size-3.5", running && "animate-spin")} />
-              {running ? "Running…" : "Run forecast"}
-            </Button>
-          )}
-          <Select value={rxcui ?? undefined} onValueChange={setRxcui}>
-            <SelectTrigger size="sm" className="h-8 w-64 text-xs">
-              <SelectValue placeholder="Select a drug" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {items.filter((i) => i.rxcui).map((i) => (
-                  <SelectItem key={i.ndc} value={i.rxcui!}>
-                    {i.name ?? i.ndc}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
+        {canRun && (
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={running} onClick={() => runForecast(false)}>
+            <RefreshCw className={cn("size-3.5", running && "animate-spin")} />
+            {running ? "Running…" : "Run forecast"}
+          </Button>
+        )}
       </div>
 
       {atRiskError && (
@@ -312,7 +366,7 @@ export default function ForecastsPage() {
           <Card className="gap-3 py-4">
             <CardHeader className="px-4">
               <CardTitle className="text-sm">
-                {selected.name ?? selected.ndc} — 60 day actuals vs. 30 day forecast
+                {parseDrugName(selected.name ?? selected.ndc).primary} — 60 day actuals vs. 30 day forecast
               </CardTitle>
               <CardDescription className="flex flex-wrap items-center gap-1.5 text-xs">
                 <Badge variant="secondary" className="font-normal">Model: {forecast.model_version ?? "—"}</Badge>
@@ -460,32 +514,64 @@ export default function ForecastsPage() {
       {items.length > 0 && (
         <Card className="gap-2 py-4">
           <CardHeader className="px-4">
-            <CardTitle className="text-sm">At risk — worst first</CardTitle>
-            <CardDescription className="text-xs">
-              Drugs whose stock runs out within 90 days at forecast demand, or that carry an active shortage signal.
-            </CardDescription>
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <CardTitle className="text-sm">At risk — worst first</CardTitle>
+                <CardDescription className="text-xs">
+                  Drugs whose stock runs out within 90 days at forecast demand, or that carry an active shortage signal. Click a row to chart it.
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search drug, NDC, class…"
+                  className="h-8 w-56 text-xs"
+                />
+                <Select value={classFilter} onValueChange={setClassFilter}>
+                  <SelectTrigger size="sm" className="h-8 w-52 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all" className="text-xs">All classes</SelectItem>
+                    {drugClasses.map((c) => (
+                      <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="px-4">
             <Table>
               <TableHeader>
                 <TableRow className="text-xs">
-                  <TableHead>Drug</TableHead>
-                  <TableHead className="text-right">On hand</TableHead>
-                  <TableHead className="text-right">Days of supply</TableHead>
-                  <TableHead className="text-right">If demand runs high</TableHead>
-                  <TableHead>Depletion</TableHead>
+                  <SortableHead sortKey="name" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))}>Drug</SortableHead>
+                  <SortableHead sortKey="drug_class" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))}>Class</SortableHead>
+                  <SortableHead sortKey="quantity" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))} className="text-right">On hand</SortableHead>
+                  <SortableHead sortKey="days" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))} className="text-right">Days of supply</SortableHead>
+                  <SortableHead sortKey="days_p90" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))} className="text-right">If demand runs high</SortableHead>
+                  <SortableHead sortKey="depletion" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))}>Depletion</SortableHead>
                   <TableHead>Basis</TableHead>
-                  <TableHead>Shortage</TableHead>
+                  <SortableHead sortKey="shortage" sort={sort} onSort={(k) => setSort((s) => nextSortState(s, k))}>Shortage</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.slice(0, 25).map((i) => (
+                {pageItems.map((i) => (
                   <TableRow
                     key={i.ndc}
-                    className={cn("cursor-pointer text-xs", i.rxcui === rxcui && "bg-muted/50")}
-                    onClick={() => i.rxcui && setRxcui(i.rxcui)}
+                    className={cn(
+                      "cursor-pointer text-xs",
+                      i.rxcui === rxcui && "bg-primary/5 shadow-[inset_2px_0_0_0_var(--primary)]",
+                    )}
+                    onClick={() => selectItem(i)}
                   >
-                    <TableCell className="max-w-64 truncate font-medium">{i.name ?? i.ndc}</TableCell>
+                    <TableCell className="max-w-72">
+                      <DrugName name={i.name} fallback={i.ndc} />
+                    </TableCell>
+                    <TableCell className="max-w-44 truncate text-muted-foreground" title={i.drug_class ?? undefined}>
+                      {i.drug_class ?? "—"}
+                    </TableCell>
                     <TableCell className="text-right font-mono tabular-nums">{i.quantity}</TableCell>
                     <TableCell className="text-right font-mono tabular-nums">
                       <span className={cn(i.days_of_supply <= 14 && "font-semibold text-red-500")}>{i.days_of_supply}d</span>
@@ -500,11 +586,20 @@ export default function ForecastsPage() {
                     </TableCell>
                   </TableRow>
                 ))}
+                {pageItems.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-6 text-center text-xs text-muted-foreground">
+                      No at-risk drugs match the current filters.
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
-            {items.length > 25 && (
-              <p className="mt-2 text-[11px] text-muted-foreground">Showing the 25 worst of {items.length} at-risk drugs.</p>
-            )}
+            <Pager page={currentPage} pageCount={pageCount} onPage={setPage} className="mt-2">
+              {tableItems.length === items.length
+                ? `Showing ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, tableItems.length)} of ${tableItems.length} at-risk drugs${sort ? "" : " — worst first"}.`
+                : `Showing ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, tableItems.length)} of ${tableItems.length} matching (${items.length} total).`}
+            </Pager>
           </CardContent>
         </Card>
       )}

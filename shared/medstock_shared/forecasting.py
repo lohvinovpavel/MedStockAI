@@ -272,7 +272,11 @@ def at_risk_skus(
 
     by_ndc = forecast_by_ndc(session, run[0], ndcs, facility_id) if run else {}
     trailing = trailing_means(session, ndcs, data_through, facility_id)
-    names = dict(session.execute(select(Drug.ndc, Drug.name).where(Drug.ndc.in_(ndcs))).all())
+    drug_rows = session.execute(
+        select(Drug.ndc, Drug.name, Drug.drug_class).where(Drug.ndc.in_(ndcs))
+    ).all()
+    names = {ndc: name for ndc, name, _ in drug_rows}
+    drug_classes = {ndc: drug_class for ndc, _, drug_class in drug_rows}
     rxcuis = dict(
         session.execute(
             select(ConsumptionDaily.ndc, func.max(ConsumptionDaily.rxcui))
@@ -301,6 +305,7 @@ def at_risk_skus(
                 "ndc": ndc,
                 "rxcui": rxcuis.get(ndc),
                 "name": names.get(ndc),
+                "drug_class": drug_classes.get(ndc),
                 "quantity": quantity,
                 "days_of_supply": days,
                 "days_of_supply_p90": verdict["days_of_supply_p90"],

@@ -9,6 +9,7 @@ touching the real SDK's types.
 """
 
 import json
+from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -321,14 +322,14 @@ def test_chat_requires_copilot_permission():
 
 def test_check_stock_by_ndc_sums_across_locations(monkeypatch):
     from contextlib import contextmanager
-    from datetime import datetime, timezone
+    from datetime import datetime
     from unittest.mock import MagicMock
 
     from medstock_shared.ai.tools.pharmacy import CheckStockArgs, check_stock_by_ndc
 
     rows = [
-        ("main-pharmacy", 30, datetime(2026, 8, 18, tzinfo=timezone.utc)),
-        ("icu", 12, datetime(2026, 8, 17, tzinfo=timezone.utc)),
+        ("main-pharmacy", 30, datetime(2026, 8, 18, tzinfo=UTC)),
+        ("icu", 12, datetime(2026, 8, 17, tzinfo=UTC)),
     ]
 
     @contextmanager
@@ -435,12 +436,12 @@ def test_propose_forecast_rerun_never_calls_run_forecast(monkeypatch):
     assert not hasattr(pharmacy_module, "run_forecast")
 
     from contextlib import contextmanager
-    from datetime import date, datetime, timezone
+    from datetime import date, datetime
 
     from medstock_shared.ai.tools.pharmacy import ProposeRerunArgs, propose_forecast_rerun
 
     def fake_latest_run(session):
-        return ("run-1", date(2026, 8, 17), datetime(2026, 8, 17, 6, tzinfo=timezone.utc))
+        return ("run-1", date(2026, 8, 17), datetime(2026, 8, 17, 6, tzinfo=UTC))
 
     monkeypatch.setattr("medstock_shared.ai.tools.pharmacy._latest_run", fake_latest_run)
 
@@ -789,7 +790,7 @@ def test_resolve_patient_ref_cleans_formatted_name_or_id(monkeypatch):
 
 def test_check_stock_by_ndc_supports_rxcui(monkeypatch):
     from contextlib import contextmanager
-    from datetime import datetime, timezone
+    from datetime import datetime
     from unittest.mock import MagicMock
 
     from medstock_shared.ai.tools.pharmacy import CheckStockArgs, check_stock_by_ndc
@@ -798,8 +799,8 @@ def test_check_stock_by_ndc_supports_rxcui(monkeypatch):
         "medstock_shared.ai.tools.pharmacy._ndcs_or_empty", lambda rxcui: ["00069406101", "00069406102"]
     )
     rows = [
-        ("main-pharmacy", 25, datetime(2026, 8, 18, tzinfo=timezone.utc)),
-        ("icu", 15, datetime(2026, 8, 18, tzinfo=timezone.utc)),
+        ("main-pharmacy", 25, datetime(2026, 8, 18, tzinfo=UTC)),
+        ("icu", 15, datetime(2026, 8, 18, tzinfo=UTC)),
     ]
 
     @contextmanager

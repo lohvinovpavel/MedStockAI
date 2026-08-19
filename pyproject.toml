@@ -5,6 +5,14 @@ members = ["shared", "services/*"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint.per-file-ignores]
+# The copilot's card projection and tool lookups deliberately degrade instead
+# of failing the request: a cache miss, projection error, or best-effort name
+# lookup falls back to prose/None rather than 500ing a chat turn. Broad
+# catches are the design there, not an oversight.
+"shared/medstock_shared/ai/cards.py" = ["BLE001", "S110"]
+"shared/medstock_shared/ai/tools/pharmacy.py" = ["BLE001", "S110"]
+
 [tool.ruff.lint.flake8-bugbear]
 # `Depends(...)` in an argument default is FastAPI's idiom, not the mutable-
 # default bug B008 exists to catch. Every service hits this on its first real

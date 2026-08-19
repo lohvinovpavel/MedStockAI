@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..auth import Principal
 
@@ -674,9 +675,10 @@ def consume_proposal(proposal_id: str) -> dict[str, Any] | None:
         return None
     _PROPOSALS.pop(proposal_id, None)
     try:
+        from sqlalchemy import delete
+
         from ..db import SessionLocal
         from ..models import AICache
-        from sqlalchemy import delete
 
         session = SessionLocal()
         try:

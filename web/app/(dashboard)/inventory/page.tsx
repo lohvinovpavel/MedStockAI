@@ -72,6 +72,7 @@ import {
 } from "@/components/CertificationBadge";
 import { explainCertification, exploreStance, gatesFor, type Gate } from "@/lib/certification";
 import { apiFetch } from "@/lib/api";
+import { parseDrugName } from "@/lib/drug-name";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useInventory, type ShelfItem, type ShelfStatus } from "@/lib/inventory-context";
@@ -182,7 +183,7 @@ function shelfStatusLabel(status: string): string {
 
 function sortValue(item: ShelfItem, key: SortKey): string | number {
   switch (key) {
-    case "drugName": return item.name ?? item.ndc;
+    case "drugName": return parseDrugName(item.name ?? item.ndc).primary.toLowerCase();
     case "batchNumber": return item.lot ?? "";
     case "stock": return item.quantity;
     case "risk": return item.status === "stockout" ? 0 : item.status === "critical" ? 1 : item.status === "surplus" ? 2 : 3;
@@ -809,7 +810,7 @@ export default function InventoryPage() {
               {sorted.map((item) => {
                 const expiryDays = daysUntil(item.earliest_expiry);
                 const selected = selectedId === item.ndc;
-                const label = item.name ?? item.ndc;
+                const label = parseDrugName(item.name ?? item.ndc);
                 return (
                     <TableRow
                       key={item.ndc}
@@ -826,7 +827,10 @@ export default function InventoryPage() {
                           }}
                           className="rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          {label}
+                          {label.primary}
+                          {label.detail && (
+                            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{label.detail}</span>
+                          )}
                           {item.in_formulary ? (
                             <Badge variant="secondary" className="ml-1.5 text-[10px] font-normal">
                               formulary
@@ -863,8 +867,8 @@ export default function InventoryPage() {
                       <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                         <CertificationBadge
                           result={certFor(item)}
-                          label={label}
-                          onClick={() => setCertItem({ drugName: label, ndc: item.ndc })}
+                          label={label.primary}
+                          onClick={() => setCertItem({ drugName: label.primary, ndc: item.ndc })}
                         />
                       </TableCell>
                       <TableCell
@@ -878,7 +882,7 @@ export default function InventoryPage() {
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="size-7">
                               <MoreHorizontal className="size-4" />
-                              <span className="sr-only">Actions for {label}</span>
+                              <span className="sr-only">Actions for {label.primary}</span>
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-auto min-w-48">
@@ -886,12 +890,12 @@ export default function InventoryPage() {
                               <DropdownMenuItem
                                 onSelect={() => {
                                   selectRow(item);
-                                  router.push(`/analogue?q=${encodeURIComponent(label)}`);
+                                  router.push(`/analogue?q=${encodeURIComponent(label.raw)}`);
                                 }}
                               >
                                 <Repeat2 /> Find analogues
                               </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => setCertItem({ drugName: label, ndc: item.ndc })}>
+                              <DropdownMenuItem onSelect={() => setCertItem({ drugName: label.primary, ndc: item.ndc })}>
                                 <FileText /> View certificate
                               </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => router.push(`/forecasts?sku=${item.ndc}`)}>

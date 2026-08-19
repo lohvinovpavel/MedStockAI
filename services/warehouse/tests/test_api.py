@@ -25,7 +25,7 @@ from medstock_shared.models import (
     StockSnapshot,
     StorageLocation,
 )
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 HOSPITAL_ID = uuid.uuid4()
@@ -59,15 +59,20 @@ def seeded():
         for d in [
             Drug(
                 ndc=NDC_FRIDGE, name="Testinsulin 100 UNT/ML", storage_class="refrigerated",
-                storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0, raw={"source": "test"},
+                storage_min_c=2.0, storage_max_c=8.0, humidity_max_pct=75.0,
+                drug_class="Insulins And Analogues For Injection", raw={"source": "test"},
             ),
             Drug(
                 ndc=NDC_ROOM, name="Testformin 500 MG Oral Tablet", storage_class="crt",
-                storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0, raw={"source": "test"},
+                storage_min_c=15.0, storage_max_c=25.0, humidity_max_pct=60.0,
+                drug_class="Biguanides", raw={"source": "test"},
             ),
         ]:
-            if not s.execute(select(Drug).where(Drug.ndc == d.ndc)).scalar_one_or_none():
+            existing = s.execute(select(Drug).where(Drug.ndc == d.ndc)).scalar_one_or_none()
+            if existing is None:
                 s.add(d)
+            else:
+                existing.drug_class = d.drug_class
         s.add_all([
             StockSnapshot(
                 hospital_id=HOSPITAL_ID, ndc=NDC_FRIDGE, facility_id=central.id,
@@ -175,6 +180,8 @@ def test_stock_joins_drug_metadata(seeded):
     items = _client().get("/stock", params={"facility_id": seeded["central"]}).json()["items"]
     by_ndc = {i["ndc"]: i for i in items}
     assert by_ndc[NDC_FRIDGE]["storage_class"] == "refrigerated"
+    assert by_ndc[NDC_FRIDGE]["drug_class"] == "Insulins And Analogues For Injection"
+    assert by_ndc[NDC_ROOM]["drug_class"] == "Biguanides"
     assert by_ndc[NDC_FRIDGE]["location"] == "t-fridge"
     assert by_ndc[NDC_ROOM]["quantity"] == 500
 

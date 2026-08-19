@@ -231,6 +231,7 @@ def shortages_by_ndc() -> dict[str, list[Shortage]]:
     one pack size can be in shortage while another is not.
     """
     index: dict[str, list[Shortage]] = {}
+    for row in _pages(SHORTAGE_URL, {}, max_pages=5):
         ndc = row.get("package_ndc")
         if not ndc:
             continue

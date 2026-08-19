@@ -687,6 +687,7 @@ def signal_for_ndc(session: Session, ndc: str) -> CertSignal:
     """Fetch current compliance status and active finding codes for an NDC."""
     from sqlalchemy import select
     from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+
     from .models import CertificationFinding, DrugCertification
 
     try:
@@ -717,6 +718,7 @@ def recalls_for(session: Session, ndc: str) -> list[Recall]:
     """Active recall findings recorded for this NDC."""
     from sqlalchemy import select
     from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+
     from .models import CertificationFinding
 
     try:
@@ -756,6 +758,7 @@ def shortages_for(session: Session, ndc: str) -> list[Shortage]:
     """Active FDA drug shortages recorded for this NDC."""
     from sqlalchemy import select
     from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+
     from .models import CertificationFinding, ShortageEvent
 
     try:

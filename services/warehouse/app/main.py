@@ -28,7 +28,7 @@ from medstock_shared.models import (
 )
 from medstock_shared.warehouse import excursions
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import select, text
 
 from .pricing import adjust_quantity, quote_totals
 from .transfers import transfers
@@ -153,6 +153,7 @@ def get_stock(
                 StockSnapshot.quantity,
                 Drug.name,
                 Drug.storage_class,
+                Drug.drug_class,
             )
             .join(Drug, Drug.ndc == StockSnapshot.ndc, isouter=True)
             .where(StockSnapshot.facility_id == facility_id)
@@ -166,8 +167,9 @@ def get_stock(
                     "location": location,
                     "quantity": quantity,
                     "storage_class": storage_class,
+                    "drug_class": drug_class,
                 }
-                for ndc, location, quantity, name, storage_class in rows
+                for ndc, location, quantity, name, storage_class, drug_class in rows
             ]
         }
 

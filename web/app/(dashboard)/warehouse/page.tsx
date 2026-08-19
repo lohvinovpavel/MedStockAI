@@ -6,12 +6,17 @@ import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, Referen
 import { Building2, Refrigerator, ThermometerSun } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { Callout } from "@/components/dashboard/Callout";
+import { SortableHead, compareValues, nextSortState, type SortState } from "@/components/dashboard/SortableHead";
+import { DrugName } from "@/components/dashboard/DrugName";
 import { apiFetch } from "@/lib/api";
+import { parseDrugName } from "@/lib/drug-name";
+import { cn } from "@/lib/utils";
 
 // Mirrors the class-level requirements seeded on the drug table
 // (data/demo/drugs.csv) — used only to draw requirement bands; the server's
@@ -24,7 +29,7 @@ const CLASS_RANGES: Record<string, { minC: number; maxC: number; maxRh: number }
 
 interface Facility { id: number; code: string; name: string; type: string; operated: boolean }
 interface Location { id: number; code: string; name: string; kind: string }
-interface StockItem { ndc: string; name: string | null; location: string; quantity: number; storage_class: string | null }
+interface StockItem { ndc: string; name: string | null; location: string; quantity: number; storage_class: string | null; drug_class: string | null }
 interface ConsumptionPoint { date: string; qty: number; stockout: boolean }
 interface ConditionPoint { ts: string; temperature_c: number; humidity_pct: number }
 interface Excursion {
@@ -74,6 +79,38 @@ function bucketize(points: ConsumptionPoint[], size: number) {
   return out;
 }
 
+type StockSortKey = "name" | "ndc" | "location" | "storage_class" | "drug_class" | "quantity";
+
+function stockSortValue(item: StockItem, key: StockSortKey): string | number {
+  switch (key) {
+    case "name":
+      return parseDrugName(item.name ?? item.ndc).primary.toLowerCase();
+    case "ndc":
+      return item.ndc;
+    case "location":
+      return item.location;
+    case "storage_class":
+      return item.storage_class ?? "";
+    case "drug_class":
+      return (item.drug_class ?? "").toLowerCase();
+    case "quantity":
+      return item.quantity;
+  }
+}
+
+type ExcursionSortKey = "drug" | "quantity" | "hours";
+
+function excursionSortValue(e: Excursion, key: ExcursionSortKey): string | number {
+  switch (key) {
+    case "drug":
+      return parseDrugName(e.drug ?? e.ndc).primary.toLowerCase();
+    case "quantity":
+      return e.quantity;
+    case "hours":
+      return e.hours;
+  }
+}
+
 // Contiguous stockout buckets → [start, end] spans for ReferenceArea shading.
 function stockoutSpans(points: ConsumptionPoint[]) {
   const spans: { x1: string; x2: string }[] = [];
@@ -103,6 +140,14 @@ export default function WarehousePage() {
   const [locationId, setLocationId] = useState<number | null>(null);
   const [conditions, setConditions] = useState<ConditionPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [stockSort, setStockSort] = useState<SortState<StockSortKey>>(null);
+  const [stockQuery, setStockQuery] = useState("");
+  const [classFilter, setClassFilter] = useState("all");
+  const [storageFilter, setStorageFilter] = useState("all");
+  // One sort state shared by every per-location excursion table — they are
+  // small slices of the same shape, and one set of arrows is less surprising
+  // than each group remembering its own.
+  const [exSort, setExSort] = useState<SortState<ExcursionSortKey>>(null);
 
   const fail = useCallback((what: string) => (err: unknown) => {
     toast.error(`Failed to load ${what}`, { description: err instanceof Error ? err.message : undefined });
@@ -197,8 +242,42 @@ export default function WarehousePage() {
       const key = e.location;
       groups.set(key, [...(groups.get(key) ?? []), e]);
     }
+    if (exSort) {
+      for (const [, group] of groups) {
+        group.sort((a, b) => {
+          const r = compareValues(excursionSortValue(a, exSort.key), excursionSortValue(b, exSort.key));
+          return exSort.direction === "asc" ? r : -r;
+        });
+      }
+    }
     return [...groups.entries()];
-  }, [excursions]);
+  }, [excursions, exSort]);
+
+  const drugClasses = useMemo(
+    () => [...new Set(stock.map((s) => s.drug_class).filter((c): c is string => !!c))].sort(),
+    [stock],
+  );
+  const storageClasses = useMemo(
+    () => [...new Set(stock.map((s) => s.storage_class).filter((c): c is string => !!c))].sort(),
+    [stock],
+  );
+  // Sorting/filtering are client-side over the full facility list (~100 rows);
+  // unsorted keeps the server's name order.
+  const stockRows = useMemo(() => {
+    const tokens = stockQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    const filtered = stock.filter((item) => {
+      if (classFilter !== "all" && item.drug_class !== classFilter) return false;
+      if (storageFilter !== "all" && item.storage_class !== storageFilter) return false;
+      if (tokens.length === 0) return true;
+      const hay = `${item.name ?? ""} ${parseDrugName(item.name ?? item.ndc).primary} ${item.ndc} ${item.location} ${item.drug_class ?? ""}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+    if (!stockSort) return filtered;
+    return [...filtered].sort((a, b) => {
+      const r = compareValues(stockSortValue(a, stockSort.key), stockSortValue(b, stockSort.key));
+      return stockSort.direction === "asc" ? r : -r;
+    });
+  }, [stock, stockQuery, classFilter, storageFilter, stockSort]);
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading warehouse…</div>;
 
@@ -252,17 +331,19 @@ export default function WarehousePage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="text-xs">Affected drug</TableHead>
-                        <TableHead className="text-xs">On hand</TableHead>
+                        <SortableHead sortKey="drug" sort={exSort} onSort={(k) => setExSort((s) => nextSortState(s, k))} className="text-xs">Affected drug</SortableHead>
+                        <SortableHead sortKey="quantity" sort={exSort} onSort={(k) => setExSort((s) => nextSortState(s, k))} className="text-xs">On hand</SortableHead>
                         <TableHead className="text-xs">Required</TableHead>
                         <TableHead className="text-xs">Observed</TableHead>
-                        <TableHead className="text-xs">Hours</TableHead>
+                        <SortableHead sortKey="hours" sort={exSort} onSort={(k) => setExSort((s) => nextSortState(s, k))} className="text-xs">Hours</SortableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {items.map((e) => (
                         <TableRow key={e.ndc}>
-                          <TableCell className="max-w-[26rem] truncate text-xs" title={e.drug}>{e.drug}</TableCell>
+                          <TableCell className="max-w-[26rem] text-xs">
+                            <DrugName name={e.drug} fallback={e.ndc} />
+                          </TableCell>
                           <TableCell className="text-xs tabular-nums">{e.quantity}</TableCell>
                           <TableCell className="text-xs tabular-nums">
                             {e.required_min_c}–{e.required_max_c} °C · ≤{e.required_max_humidity_pct}%
@@ -296,19 +377,13 @@ export default function WarehousePage() {
                   Recorded daily usage at {facility?.name}. Red bands mark stockout windows — recorded zeros there are censored demand, not zero demand.
                 </CardDescription>
               </div>
-              <div className="flex gap-2">
-                <Select value={drugNdc ?? undefined} onValueChange={setDrugNdc}>
-                  <SelectTrigger size="sm" className="h-8 w-64 text-xs">
-                    <SelectValue placeholder="Drug" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {drugs.map((d) => (
-                      <SelectItem key={d.ndc} value={d.ndc} className="text-xs">
-                        {(d.name ?? d.ndc).slice(0, 60)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="flex items-center gap-2">
+                {/* Selection moved to the Stock by location rows below; this
+                    just names the drug the chart is showing. */}
+                <DrugName
+                  name={drugs.find((d) => d.ndc === drugNdc)?.name ?? drugNdc}
+                  className="max-w-64 text-xs"
+                />
                 <Select value={range} onValueChange={(v) => setRange(v as typeof range)}>
                   <SelectTrigger size="sm" className="h-8 w-40 text-xs">
                     <SelectValue />
@@ -397,27 +472,72 @@ export default function WarehousePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Stock by location</CardTitle>
-          <CardDescription className="text-xs">
-            {stock.length} shelf positions at {facility?.name}.
-          </CardDescription>
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <CardTitle className="text-sm">Stock by location</CardTitle>
+              <CardDescription className="text-xs">
+                {stock.length} shelf positions at {facility?.name}. Click a row to chart its consumption history.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={stockQuery}
+                onChange={(e) => setStockQuery(e.target.value)}
+                placeholder="Search drug, NDC, location…"
+                className="h-8 w-56 text-xs"
+              />
+              <Select value={classFilter} onValueChange={setClassFilter}>
+                <SelectTrigger size="sm" className="h-8 w-52 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-xs">All classes</SelectItem>
+                  {drugClasses.map((c) => (
+                    <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={storageFilter} onValueChange={setStorageFilter}>
+                <SelectTrigger size="sm" className="h-8 w-36 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-xs">All storage</SelectItem>
+                  {storageClasses.map((c) => (
+                    <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="text-xs">Drug</TableHead>
-                <TableHead className="text-xs">NDC</TableHead>
-                <TableHead className="text-xs">Location</TableHead>
-                <TableHead className="text-xs">Storage class</TableHead>
-                <TableHead className="text-right text-xs">On hand</TableHead>
+                <SortableHead sortKey="name" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-xs">Drug</SortableHead>
+                <SortableHead sortKey="drug_class" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-xs">Class</SortableHead>
+                <SortableHead sortKey="ndc" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-xs">NDC</SortableHead>
+                <SortableHead sortKey="location" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-xs">Location</SortableHead>
+                <SortableHead sortKey="storage_class" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-xs">Storage class</SortableHead>
+                <SortableHead sortKey="quantity" sort={stockSort} onSort={(k) => setStockSort((s) => nextSortState(s, k))} className="text-right text-xs">On hand</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {stock.map((item) => (
-                <TableRow key={`${item.ndc}-${item.location}`}>
-                  <TableCell className="max-w-[30rem] truncate text-xs" title={item.name ?? undefined}>
-                    {item.name ?? "—"}
+              {stockRows.map((item) => (
+                <TableRow
+                  key={`${item.ndc}-${item.location}`}
+                  className={cn(
+                    "cursor-pointer",
+                    item.ndc === drugNdc && "bg-primary/5 shadow-[inset_2px_0_0_0_var(--primary)]",
+                  )}
+                  onClick={() => setDrugNdc(item.ndc)}
+                >
+                  <TableCell className="max-w-[26rem] text-xs">
+                    <DrugName name={item.name} fallback={item.ndc} />
+                  </TableCell>
+                  <TableCell className="max-w-44 truncate text-xs text-muted-foreground" title={item.drug_class ?? undefined}>
+                    {item.drug_class ?? "—"}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{item.ndc}</TableCell>
                   <TableCell className="text-xs">{item.location}</TableCell>
@@ -427,6 +547,13 @@ export default function WarehousePage() {
                   <TableCell className="text-right text-xs tabular-nums">{item.quantity}</TableCell>
                 </TableRow>
               ))}
+              {stockRows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-6 text-center text-xs text-muted-foreground">
+                    No shelf positions match the current filters.
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>

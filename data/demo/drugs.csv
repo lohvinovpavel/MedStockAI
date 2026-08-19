@@ -1,101 +1,101 @@
-ndc,rxcui,name,query_name,cohort,storage_class,storage_min_c,storage_max_c,humidity_max_pct,base_daily,stockout_prone
-00093104801,861007,metformin hydrochloride 500 MG Oral Tablet,metformin 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,120,False
-00093111310,314076,lisinopril 10 MG Oral Tablet,lisinopril 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,90,False
-00378520905,197361,amlodipine 5 MG Oral Tablet,amlodipine 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,85,False
-00093505910,617310,atorvastatin 20 MG Oral Tablet,atorvastatin 20 MG Oral Tablet,flat,crt,15.0,25.0,60.0,100,False
-00378220377,859747,rosuvastatin calcium 10 MG Oral Tablet,rosuvastatin 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False
-00378180304,966221,levothyroxine sodium 0.05 MG Oral Tablet,levothyroxine sodium 0.05 MG Oral Tablet,flat,crt,15.0,25.0,60.0,70,False
-00093521156,198051,omeprazole 20 MG Delayed Release Oral Capsule,omeprazole 20 MG Delayed Release Oral Capsule,flat,crt,15.0,25.0,60.0,95,False
-00378668910,314200,pantoprazole 40 MG Delayed Release Oral Tablet,pantoprazole 40 MG Delayed Release Oral Tablet,flat,crt,15.0,25.0,60.0,80,False
-00113019400,310273,famotidine 20 MG Oral Tablet,famotidine 20 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False
-00378418701,312941,sertraline 50 MG Oral Tablet,sertraline 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False
-00143980801,349332,escitalopram 10 MG Oral Tablet,escitalopram 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False
-00185008501,310385,fluoxetine 20 MG Oral Capsule,fluoxetine 20 MG Oral Capsule,flat,crt,15.0,25.0,60.0,45,False
-00054022120,312743,quetiapine 100 MG Oral Tablet,quetiapine 100 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00378545410,314154,olanzapine 10 MG Oral Tablet,olanzapine 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False
-00093342601,197901,lorazepam 1 MG Oral Tablet,lorazepam 1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False
-00228202910,308048,alprazolam 0.5 MG Oral Tablet,alprazolam 0.5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00378542701,310431,gabapentin 300 MG Oral Capsule,gabapentin 300 MG Oral Capsule,flat,crt,15.0,25.0,60.0,65,False
-00228285809,483450,pregabalin 75 MG Oral Capsule,pregabalin 75 MG Oral Capsule,flat,crt,15.0,25.0,60.0,40,False
-00172208360,310798,hydrochlorothiazide 25 MG Oral Tablet,hydrochlorothiazide 25 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False
-00054429925,313988,furosemide 40 MG Oral Tablet,furosemide 40 MG Oral Tablet,flat,crt,15.0,25.0,60.0,70,False
-00378214601,313096,spironolactone 25 MG Oral Tablet,spironolactone 25 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False
-00378003201,866514,metoprolol tartrate 50 MG Oral Tablet,metoprolol tartrate 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,85,False
-00093729501,200032,carvedilol 12.5 MG Oral Tablet,carvedilol 12.5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,45,False
-00054012422,979492,losartan potassium 50 MG Oral Tablet,losartan potassium 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,75,False
-00378581377,349199,valsartan 80 MG Oral Tablet,valsartan 80 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False
-00093731405,309362,clopidogrel 75 MG Oral Tablet,clopidogrel 75 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False
-00363025514,308416,aspirin 81 MG Delayed Release Oral Tablet,aspirin 81 MG Oral Tablet,flat,crt,15.0,25.0,60.0,110,False
-00115981101,197604,digoxin 0.125 MG Oral Tablet,digoxin 0.125 MG Oral Tablet,flat,crt,15.0,25.0,60.0,15,False
-00378018101,197320,allopurinol 300 MG Oral Tablet,allopurinol 300 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False
-00054001720,198145,prednisone 10 MG Oral Tablet,prednisone 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False
-00615831039,197806,ibuprofen 600 MG Oral Tablet,ibuprofen 600 MG Oral Tablet,flat,crt,15.0,25.0,60.0,90,False
-00031930101,198440,acetaminophen 500 MG Oral Tablet,acetaminophen 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,150,False
-00378045101,198014,naproxen 500 MG Oral Tablet,naproxen 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False
-00093005801,835603,tramadol hydrochloride 50 MG Oral Tablet,tramadol hydrochloride 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,45,False
-00378611201,1049621,oxycodone hydrochloride 5 MG Oral Tablet,oxycodone hydrochloride 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00378031553,198052,ondansetron 4 MG Oral Tablet,ondansetron 4 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False
-00093220301,311666,metoclopramide 10 MG Oral Tablet,metoclopramide 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00115821101,863669,tamsulosin hydrochloride 0.4 MG Oral Capsule,tamsulosin hydrochloride 0.4 MG Oral Capsule,flat,crt,15.0,25.0,60.0,35,False
-00093735505,310346,finasteride 5 MG Oral Tablet,finasteride 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False
-70710190103,665033,sitagliptin 100 MG Oral Tablet,sitagliptin 100 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00378111001,310488,glipizide 10 MG Oral Tablet,glipizide 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False
-00228289203,596934,duloxetine 60 MG Delayed Release Oral Capsule,duloxetine 60 MG Delayed Release Oral Capsule,flat,crt,15.0,25.0,60.0,35,False
-00378347101,856377,trazodone hydrochloride 50 MG Oral Tablet,trazodone 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False
-00093007401,854873,zolpidem tartrate 10 MG Oral Tablet,zolpidem tartrate 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False
-00093075201,197381,atenolol 50 MG Oral Tablet,atenolol 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00228212710,884173,clonidine hydrochloride 0.1 MG Oral Tablet,clonidine 0.1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False
-00615858005,198116,potassium chloride 20 MEQ Extended Release Oral Tablet,potassium chloride 20 MEQ Extended Release Oral Tablet,flat,crt,15.0,25.0,60.0,40,False
-00143124801,310410,folic acid 1 MG Oral Tablet,folic acid 1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00536100901,310325,ferrous sulfate 325 MG Oral Tablet,ferrous sulfate 325 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False
-00761009840,199362,cholecalciferol 0.025 MG Oral Tablet,cholecalciferol 25 MCG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00603459321,259966,methylprednisolone 4 MG Oral Tablet,methylprednisolone 4 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False
-00143992801,309309,ciprofloxacin 500 MG Oral Tablet,ciprofloxacin 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False
-00143916201,1807513,vancomycin 1000 MG Injection,vancomycin 1000 MG Injection,flat,crt,15.0,25.0,60.0,20,False
-00069005901,1361615,"heparin sodium, porcine 5000 UNT/ML Injectable Solution",heparin sodium 5000 UNT/ML Injectable Solution,flat,crt,15.0,25.0,60.0,40,False
-00548560200,854235,0.4 ML enoxaparin sodium 100 MG/ML Prefilled Syringe,enoxaparin sodium 40 MG in 0.4 ML Prefilled Syringe,flat,crt,15.0,25.0,60.0,25,False
-00527459313,312122,oseltamivir 75 MG Oral Capsule,oseltamivir 75 MG Oral Capsule,winter,crt,15.0,25.0,60.0,40,False
-00093310901,308191,amoxicillin 500 MG Oral Capsule,amoxicillin 500 MG Oral Capsule,winter,crt,15.0,25.0,60.0,80,True
-00093227534,562508,amoxicillin 875 MG / clavulanate 125 MG Oral Tablet,amoxicillin 875 MG / clavulanate potassium 125 MG Oral Tablet,winter,crt,15.0,25.0,60.0,45,False
-00378153356,308460,azithromycin 250 MG Oral Tablet,azithromycin 250 MG Oral Tablet,winter,crt,15.0,25.0,60.0,60,False
-00054003721,197517,clarithromycin 500 MG Oral Tablet,clarithromycin 500 MG Oral Tablet,winter,crt,15.0,25.0,60.0,25,False
-00143314205,1649988,doxycycline hyclate 100 MG Oral Capsule,doxycycline hyclate 100 MG Oral Capsule,winter,crt,15.0,25.0,60.0,40,False
-00904754210,309097,cefuroxime 250 MG Oral Tablet,cefuroxime axetil 250 MG Oral Tablet,winter,crt,15.0,25.0,60.0,30,False
-00093314701,309114,cephalexin 500 MG Oral Capsule,cephalexin 500 MG Oral Capsule,winter,crt,15.0,25.0,60.0,45,False
-00378121789,199885,levofloxacin 500 MG Oral Tablet,levofloxacin 500 MG Oral Tablet,winter,crt,15.0,25.0,60.0,35,False
-00143985701,1665021,ceftriaxone 1000 MG Injection,ceftriaxone 1000 MG Injection,winter,crt,15.0,25.0,60.0,30,False
-00615840305,197397,benzonatate 100 MG Oral Capsule,benzonatate 100 MG Oral Capsule,winter,crt,15.0,25.0,60.0,35,False
-00363053201,359601,guaifenesin 400 MG Oral Tablet,guaifenesin 400 MG Oral Tablet,winter,crt,15.0,25.0,60.0,30,False
-00173068220,859088,NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler [Ventolin],Ventolin HFA 0.09 MG/ACTUAT Metered Dose Inhaler,winter,crt,15.0,25.0,60.0,50,True
-00378797031,836358,ipratropium bromide 0.2 MG/ML Inhalation Solution,ipratropium bromide 0.2 MG/ML Inhalation Solution,winter,crt,15.0,25.0,60.0,20,False
-49281042550,2719212,0.5 ML influenza A virus A/Croatia/10136RV/2023 (H3N2) antigen 0.03 MG/ML / influenza A virus A/Victoria/4897/2022 (H1N1) antigen 0.03 MG/ML / influenza B virus B/Michigan/01/2021 antigen 0.03 MG/ML Prefilled Syringe [Fluzone 2025-2026],Fluzone 2025-2026,winter,refrigerated,2.0,8.0,75.0,30,False
-00113945813,1014678,cetirizine hydrochloride 10 MG Oral Tablet,cetirizine hydrochloride 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,50,False
-00067067410,311372,loratadine 10 MG Oral Tablet,loratadine 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,45,False
-00113057122,997420,fexofenadine hydrochloride 180 MG Oral Tablet,fexofenadine hydrochloride 180 MG Oral Tablet,summer,crt,15.0,25.0,60.0,35,False
-00113005253,1049909,diphenhydramine hydrochloride 25 MG Oral Capsule,diphenhydramine hydrochloride 25 MG Oral Capsule,summer,crt,15.0,25.0,60.0,40,False
-00054327099,1797907,fluticasone propionate 0.05 MG/ACTUAT Metered Dose Nasal Spray,fluticasone propionate 0.05 MG/ACTUAT Nasal Spray,summer,crt,15.0,25.0,60.0,30,False
-00093598619,1870207,NDA019430 0.3 ML epinephrine 1 MG/ML Auto-Injector,epinephrine 1 MG/ML Auto-Injector,summer,crt,15.0,25.0,60.0,10,False
-00054025922,200224,montelukast 10 MG Oral Tablet,montelukast 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,45,False
-00113054164,106258,hydrocortisone 10 MG/ML Topical Cream,hydrocortisone 1 % Topical Cream,summer,crt,15.0,25.0,60.0,25,False
-00115164501,1648759,"nitrofurantoin, macrocrystals 100 MG Oral Capsule",nitrofurantoin 100 MG Oral Capsule,summer,crt,15.0,25.0,60.0,25,False
-00169418103,2619154,"0.25 MG, 0.5 MG Dose 3 ML semaglutide 0.68 MG/ML Pen Injector [Ozempic]",Ozempic 2 MG/1.5 ML Pen Injector,trending_up,refrigerated,2.0,8.0,75.0,12,True
-00002149501,2601746,0.5 ML tirzepatide 10 MG/ML Auto-Injector [Mounjaro],Mounjaro 5 MG per 0.5 ML Auto-Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False
-00002143401,1551306,0.5 ML dulaglutide 3 MG/ML Auto-Injector [Trulicity],Trulicity 1.5 MG per 0.5 ML Auto-Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False
-00169406012,897126,3 ML liraglutide 6 MG/ML Pen Injector [Victoza],Victoza 6 MG/ML Pen Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False
-00597015207,1545664,empagliflozin 10 MG Oral Tablet [Jardiance],Jardiance 10 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,30,False
-00115172201,1364445,apixaban 5 MG Oral Tablet,apixaban 5 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,55,False
-14445018400,1232086,rivaroxaban 20 MG Oral Tablet,rivaroxaban 20 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,35,False
-00904758204,1656349,sacubitril 49 MG / valsartan 51 MG Oral Tablet,sacubitril 49 MG / valsartan 51 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,20,False
-00093172101,855332,warfarin sodium 5 MG Oral Tablet,warfarin sodium 5 MG Oral Tablet,trending_down,crt,15.0,25.0,60.0,25,False
-00615799305,312961,simvastatin 20 MG Oral Tablet,simvastatin 20 MG Oral Tablet,trending_down,crt,15.0,25.0,60.0,30,False
-00955172801,847230,3 ML insulin glargine 100 UNT/ML Pen Injector,insulin glargine 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,25,False
-00002822201,1652639,3 ML insulin lispro 100 UNT/ML Pen Injector,insulin lispro 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,20,False
-50090495600,1653202,"3 ML insulin aspart, human 100 UNT/ML Pen Injector",insulin aspart 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,20,False
-00002831501,311026,"insulin isophane, human 100 UNT/ML Injectable Suspension [Humulin N]",Humulin N 100 UNT/ML Injectable Suspension,flat,refrigerated,2.0,8.0,75.0,12,False
-00002021301,311036,"insulin, regular, human 100 UNT/ML Injectable Solution [Humulin R]",Humulin R 100 UNT/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,15,False
-00378964532,314072,latanoprost 0.05 MG/ML Ophthalmic Solution,latanoprost 0.05 MG/ML Ophthalmic Solution,flat,refrigerated,2.0,8.0,75.0,10,False
-55513014801,205923,1 ML epoetin alfa 4000 UNT/ML Injection [Epogen],Epogen 4000 UNT/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,6,False
-00143933801,1594589,succinylcholine chloride 20 MG/ML Injectable Solution,succinylcholine chloride 20 MG/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,8,False
-00143925001,1234995,rocuronium bromide 10 MG/ML Injectable Solution,rocuronium bromide 10 MG/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,10,False
-00006482600,1292459,0.5 ML varicella-zoster virus vaccine live (Oka-Merck) strain 2700 UNT/ML Injection [Varivax],Varivax 0.5 ML Injection,flat,freezer,-25.0,-15.0,75.0,5,False
-00006417100,1292443,"0.5 ML measles virus vaccine live, Enders' attenuated Edmonston strain 2000 UNT/ML / mumps virus vaccine live, Jeryl Lynn strain 40000 UNT/ML / rubella virus vaccine live (Wistar RA 27-3 strain) 2000 UNT/ML / varicella-zoster virus vaccine live (Oka-Merck) strain 20000 UNT/ML Injection [ProQuad]",ProQuad,flat,freezer,-25.0,-15.0,75.0,3,False
+ndc,rxcui,name,query_name,cohort,storage_class,storage_min_c,storage_max_c,humidity_max_pct,base_daily,stockout_prone,drug_class
+00093104801,861007,metformin hydrochloride 500 MG Oral Tablet,metformin 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,120,False,Biguanides
+00093111310,314076,lisinopril 10 MG Oral Tablet,lisinopril 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,90,False,"ACE inhibitors, plain"
+00378520905,197361,amlodipine 5 MG Oral Tablet,amlodipine 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,85,False,Dihydropyridine derivatives
+00093505910,617310,atorvastatin 20 MG Oral Tablet,atorvastatin 20 MG Oral Tablet,flat,crt,15.0,25.0,60.0,100,False,HMG CoA reductase inhibitors
+00378220377,859747,rosuvastatin calcium 10 MG Oral Tablet,rosuvastatin 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False,HMG CoA reductase inhibitors
+00378180304,966221,levothyroxine sodium 0.05 MG Oral Tablet,levothyroxine sodium 0.05 MG Oral Tablet,flat,crt,15.0,25.0,60.0,70,False,Thyroid hormones
+00093521156,198051,omeprazole 20 MG Delayed Release Oral Capsule,omeprazole 20 MG Delayed Release Oral Capsule,flat,crt,15.0,25.0,60.0,95,False,Proton pump inhibitors
+00378668910,314200,pantoprazole 40 MG Delayed Release Oral Tablet,pantoprazole 40 MG Delayed Release Oral Tablet,flat,crt,15.0,25.0,60.0,80,False,Proton pump inhibitors
+00113019400,310273,famotidine 20 MG Oral Tablet,famotidine 20 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False,H2-receptor antagonists
+00378418701,312941,sertraline 50 MG Oral Tablet,sertraline 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False,Selective serotonin reuptake inhibitors
+00143980801,349332,escitalopram 10 MG Oral Tablet,escitalopram 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False,Selective serotonin reuptake inhibitors
+00185008501,310385,fluoxetine 20 MG Oral Capsule,fluoxetine 20 MG Oral Capsule,flat,crt,15.0,25.0,60.0,45,False,Selective serotonin reuptake inhibitors
+00054022120,312743,quetiapine 100 MG Oral Tablet,quetiapine 100 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,"Diazepines, oxazepines, thiazepines and oxepines"
+00378545410,314154,olanzapine 10 MG Oral Tablet,olanzapine 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False,"Diazepines, oxazepines, thiazepines and oxepines"
+00093342601,197901,lorazepam 1 MG Oral Tablet,lorazepam 1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False,Benzodiazepine derivatives
+00228202910,308048,alprazolam 0.5 MG Oral Tablet,alprazolam 0.5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Benzodiazepine derivatives
+00378542701,310431,gabapentin 300 MG Oral Capsule,gabapentin 300 MG Oral Capsule,flat,crt,15.0,25.0,60.0,65,False,Gabapentinoids
+00228285809,483450,pregabalin 75 MG Oral Capsule,pregabalin 75 MG Oral Capsule,flat,crt,15.0,25.0,60.0,40,False,Gabapentinoids
+00172208360,310798,hydrochlorothiazide 25 MG Oral Tablet,hydrochlorothiazide 25 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False,"Thiazides, plain"
+00054429925,313988,furosemide 40 MG Oral Tablet,furosemide 40 MG Oral Tablet,flat,crt,15.0,25.0,60.0,70,False,"Sulfonamides, plain"
+00378214601,313096,spironolactone 25 MG Oral Tablet,spironolactone 25 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False,Aldosterone antagonists
+00378003201,866514,metoprolol tartrate 50 MG Oral Tablet,metoprolol tartrate 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,85,False,"Beta blocking agents, selective"
+00093729501,200032,carvedilol 12.5 MG Oral Tablet,carvedilol 12.5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,45,False,Alpha and beta blocking agents
+00054012422,979492,losartan potassium 50 MG Oral Tablet,losartan potassium 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,75,False,"Angiotensin II receptor blockers (ARBs), plain"
+00378581377,349199,valsartan 80 MG Oral Tablet,valsartan 80 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False,"Angiotensin II receptor blockers (ARBs), plain"
+00093731405,309362,clopidogrel 75 MG Oral Tablet,clopidogrel 75 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False,Platelet aggregation inhibitors excl. heparin
+00363025514,308416,aspirin 81 MG Delayed Release Oral Tablet,aspirin 81 MG Oral Tablet,flat,crt,15.0,25.0,60.0,110,False,Platelet aggregation inhibitors excl. heparin
+00115981101,197604,digoxin 0.125 MG Oral Tablet,digoxin 0.125 MG Oral Tablet,flat,crt,15.0,25.0,60.0,15,False,Digitalis glycosides
+00378018101,197320,allopurinol 300 MG Oral Tablet,allopurinol 300 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False,Preparations inhibiting uric acid production
+00054001720,198145,prednisone 10 MG Oral Tablet,prednisone 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,50,False,Glucocorticoids
+00615831039,197806,ibuprofen 600 MG Oral Tablet,ibuprofen 600 MG Oral Tablet,flat,crt,15.0,25.0,60.0,90,False,Propionic acid derivatives
+00031930101,198440,acetaminophen 500 MG Oral Tablet,acetaminophen 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,150,False,Anilides
+00378045101,198014,naproxen 500 MG Oral Tablet,naproxen 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,55,False,Propionic acid derivatives
+00093005801,835603,tramadol hydrochloride 50 MG Oral Tablet,tramadol hydrochloride 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,45,False,Other opioids
+00378611201,1049621,oxycodone hydrochloride 5 MG Oral Tablet,oxycodone hydrochloride 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Natural opium alkaloids
+00378031553,198052,ondansetron 4 MG Oral Tablet,ondansetron 4 MG Oral Tablet,flat,crt,15.0,25.0,60.0,60,False,Serotonin (5HT3) antagonists
+00093220301,311666,metoclopramide 10 MG Oral Tablet,metoclopramide 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Propulsives
+00115821101,863669,tamsulosin hydrochloride 0.4 MG Oral Capsule,tamsulosin hydrochloride 0.4 MG Oral Capsule,flat,crt,15.0,25.0,60.0,35,False,Alpha-adrenoreceptor antagonists
+00093735505,310346,finasteride 5 MG Oral Tablet,finasteride 5 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False,Testosterone-5-alpha reductase inhibitors
+70710190103,665033,sitagliptin 100 MG Oral Tablet,sitagliptin 100 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Dipeptidyl peptidase 4 (DPP-4) inhibitors
+00378111001,310488,glipizide 10 MG Oral Tablet,glipizide 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False,Sulfonylureas
+00228289203,596934,duloxetine 60 MG Delayed Release Oral Capsule,duloxetine 60 MG Delayed Release Oral Capsule,flat,crt,15.0,25.0,60.0,35,False,Other antidepressants
+00378347101,856377,trazodone hydrochloride 50 MG Oral Tablet,trazodone 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,40,False,Other antidepressants
+00093007401,854873,zolpidem tartrate 10 MG Oral Tablet,zolpidem tartrate 10 MG Oral Tablet,flat,crt,15.0,25.0,60.0,25,False,Benzodiazepine related drugs
+00093075201,197381,atenolol 50 MG Oral Tablet,atenolol 50 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,"Beta blocking agents, selective"
+00228212710,884173,clonidine hydrochloride 0.1 MG Oral Tablet,clonidine 0.1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False,Imidazoline receptor agonists
+00615858005,198116,potassium chloride 20 MEQ Extended Release Oral Tablet,potassium chloride 20 MEQ Extended Release Oral Tablet,flat,crt,15.0,25.0,60.0,40,False,Potassium
+00143124801,310410,folic acid 1 MG Oral Tablet,folic acid 1 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Folic acid and derivatives
+00536100901,310325,ferrous sulfate 325 MG Oral Tablet,ferrous sulfate 325 MG Oral Tablet,flat,crt,15.0,25.0,60.0,35,False,"Iron bivalent, oral preparations"
+00761009840,199362,cholecalciferol 0.025 MG Oral Tablet,cholecalciferol 25 MCG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Vitamin D and analogues
+00603459321,259966,methylprednisolone 4 MG Oral Tablet,methylprednisolone 4 MG Oral Tablet,flat,crt,15.0,25.0,60.0,20,False,Glucocorticoids
+00143992801,309309,ciprofloxacin 500 MG Oral Tablet,ciprofloxacin 500 MG Oral Tablet,flat,crt,15.0,25.0,60.0,30,False,Fluoroquinolones
+00143916201,1807513,vancomycin 1000 MG Injection,vancomycin 1000 MG Injection,flat,crt,15.0,25.0,60.0,20,False,Glycopeptide antibacterials
+00069005901,1361615,"heparin sodium, porcine 5000 UNT/ML Injectable Solution",heparin sodium 5000 UNT/ML Injectable Solution,flat,crt,15.0,25.0,60.0,40,False,Heparin group
+00548560200,854235,0.4 ML enoxaparin sodium 100 MG/ML Prefilled Syringe,enoxaparin sodium 40 MG in 0.4 ML Prefilled Syringe,flat,crt,15.0,25.0,60.0,25,False,Heparin group
+00527459313,312122,oseltamivir 75 MG Oral Capsule,oseltamivir 75 MG Oral Capsule,winter,crt,15.0,25.0,60.0,40,False,Neuraminidase inhibitors
+00093310901,308191,amoxicillin 500 MG Oral Capsule,amoxicillin 500 MG Oral Capsule,winter,crt,15.0,25.0,60.0,80,True,Penicillins with extended spectrum
+00093227534,562508,amoxicillin 875 MG / clavulanate 125 MG Oral Tablet,amoxicillin 875 MG / clavulanate potassium 125 MG Oral Tablet,winter,crt,15.0,25.0,60.0,45,False,"Combinations of penicillins, incl. beta-lactamase inhibitors"
+00378153356,308460,azithromycin 250 MG Oral Tablet,azithromycin 250 MG Oral Tablet,winter,crt,15.0,25.0,60.0,60,False,Macrolides
+00054003721,197517,clarithromycin 500 MG Oral Tablet,clarithromycin 500 MG Oral Tablet,winter,crt,15.0,25.0,60.0,25,False,Macrolides
+00143314205,1649988,doxycycline hyclate 100 MG Oral Capsule,doxycycline hyclate 100 MG Oral Capsule,winter,crt,15.0,25.0,60.0,40,False,Tetracyclines
+00904754210,309097,cefuroxime 250 MG Oral Tablet,cefuroxime axetil 250 MG Oral Tablet,winter,crt,15.0,25.0,60.0,30,False,Second-generation cephalosporins
+00093314701,309114,cephalexin 500 MG Oral Capsule,cephalexin 500 MG Oral Capsule,winter,crt,15.0,25.0,60.0,45,False,First-generation cephalosporins
+00378121789,199885,levofloxacin 500 MG Oral Tablet,levofloxacin 500 MG Oral Tablet,winter,crt,15.0,25.0,60.0,35,False,Fluoroquinolones
+00143985701,1665021,ceftriaxone 1000 MG Injection,ceftriaxone 1000 MG Injection,winter,crt,15.0,25.0,60.0,30,False,Third-generation cephalosporins
+00615840305,197397,benzonatate 100 MG Oral Capsule,benzonatate 100 MG Oral Capsule,winter,crt,15.0,25.0,60.0,35,False,Other cough suppressants
+00363053201,359601,guaifenesin 400 MG Oral Tablet,guaifenesin 400 MG Oral Tablet,winter,crt,15.0,25.0,60.0,30,False,Expectorants
+00173068220,859088,NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler [Ventolin],Ventolin HFA 0.09 MG/ACTUAT Metered Dose Inhaler,winter,crt,15.0,25.0,60.0,50,True,Selective beta-2-adrenoreceptor agonists
+00378797031,836358,ipratropium bromide 0.2 MG/ML Inhalation Solution,ipratropium bromide 0.2 MG/ML Inhalation Solution,winter,crt,15.0,25.0,60.0,20,False,Anticholinergics
+49281042550,2719212,0.5 ML influenza A virus A/Croatia/10136RV/2023 (H3N2) antigen 0.03 MG/ML / influenza A virus A/Victoria/4897/2022 (H1N1) antigen 0.03 MG/ML / influenza B virus B/Michigan/01/2021 antigen 0.03 MG/ML Prefilled Syringe [Fluzone 2025-2026],Fluzone 2025-2026,winter,refrigerated,2.0,8.0,75.0,30,False,Influenza vaccines
+00113945813,1014678,cetirizine hydrochloride 10 MG Oral Tablet,cetirizine hydrochloride 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,50,False,Piperazine derivatives
+00067067410,311372,loratadine 10 MG Oral Tablet,loratadine 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,45,False,Other antihistamines for systemic use
+00113057122,997420,fexofenadine hydrochloride 180 MG Oral Tablet,fexofenadine hydrochloride 180 MG Oral Tablet,summer,crt,15.0,25.0,60.0,35,False,Other antihistamines for systemic use
+00113005253,1049909,diphenhydramine hydrochloride 25 MG Oral Capsule,diphenhydramine hydrochloride 25 MG Oral Capsule,summer,crt,15.0,25.0,60.0,40,False,Aminoalkyl ethers
+00054327099,1797907,fluticasone propionate 0.05 MG/ACTUAT Metered Dose Nasal Spray,fluticasone propionate 0.05 MG/ACTUAT Nasal Spray,summer,crt,15.0,25.0,60.0,30,False,"Anti-Inflammatories,Nasal"
+00093598619,1870207,NDA019430 0.3 ML epinephrine 1 MG/ML Auto-Injector,epinephrine 1 MG/ML Auto-Injector,summer,crt,15.0,25.0,60.0,10,False,Adrenergic and dopaminergic agents
+00054025922,200224,montelukast 10 MG Oral Tablet,montelukast 10 MG Oral Tablet,summer,crt,15.0,25.0,60.0,45,False,Leukotriene receptor antagonists
+00113054164,106258,hydrocortisone 10 MG/ML Topical Cream,hydrocortisone 1 % Topical Cream,summer,crt,15.0,25.0,60.0,25,False,"Corticosteroids, weak (group I)"
+00115164501,1648759,"nitrofurantoin, macrocrystals 100 MG Oral Capsule",nitrofurantoin 100 MG Oral Capsule,summer,crt,15.0,25.0,60.0,25,False,Nitrofuran derivatives
+00169418103,2619154,"0.25 MG, 0.5 MG Dose 3 ML semaglutide 0.68 MG/ML Pen Injector [Ozempic]",Ozempic 2 MG/1.5 ML Pen Injector,trending_up,refrigerated,2.0,8.0,75.0,12,True,Glucagon-like peptide-1 (GLP-1) analogues
+00002149501,2601746,0.5 ML tirzepatide 10 MG/ML Auto-Injector [Mounjaro],Mounjaro 5 MG per 0.5 ML Auto-Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False,"Other blood glucose lowering drugs, excl. insulins"
+00002143401,1551306,0.5 ML dulaglutide 3 MG/ML Auto-Injector [Trulicity],Trulicity 1.5 MG per 0.5 ML Auto-Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False,Glucagon-like peptide-1 (GLP-1) analogues
+00169406012,897126,3 ML liraglutide 6 MG/ML Pen Injector [Victoza],Victoza 6 MG/ML Pen Injector,trending_up,refrigerated,2.0,8.0,75.0,8,False,Glucagon-like peptide-1 (GLP-1) analogues
+00597015207,1545664,empagliflozin 10 MG Oral Tablet [Jardiance],Jardiance 10 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,30,False,Sodium-glucose co-transporter 2 (SGLT2) inhibitors
+00115172201,1364445,apixaban 5 MG Oral Tablet,apixaban 5 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,55,False,Direct factor Xa inhibitors
+14445018400,1232086,rivaroxaban 20 MG Oral Tablet,rivaroxaban 20 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,35,False,Direct factor Xa inhibitors
+00904758204,1656349,sacubitril 49 MG / valsartan 51 MG Oral Tablet,sacubitril 49 MG / valsartan 51 MG Oral Tablet,trending_up,crt,15.0,25.0,60.0,20,False,"Angiotensin II receptor blockers (ARBs), other combinations"
+00093172101,855332,warfarin sodium 5 MG Oral Tablet,warfarin sodium 5 MG Oral Tablet,trending_down,crt,15.0,25.0,60.0,25,False,Vitamin K antagonists
+00615799305,312961,simvastatin 20 MG Oral Tablet,simvastatin 20 MG Oral Tablet,trending_down,crt,15.0,25.0,60.0,30,False,HMG CoA reductase inhibitors
+00955172801,847230,3 ML insulin glargine 100 UNT/ML Pen Injector,insulin glargine 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,25,False,"Insulins and analogues for injection, long-acting"
+00002822201,1652639,3 ML insulin lispro 100 UNT/ML Pen Injector,insulin lispro 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,20,False,"Insulins and analogues for injection, fast-acting"
+50090495600,1653202,"3 ML insulin aspart, human 100 UNT/ML Pen Injector",insulin aspart 100 UNT/ML Pen Injector,flat,refrigerated,2.0,8.0,75.0,20,False,"Insulins and analogues for injection, fast-acting"
+00002831501,311026,"insulin isophane, human 100 UNT/ML Injectable Suspension [Humulin N]",Humulin N 100 UNT/ML Injectable Suspension,flat,refrigerated,2.0,8.0,75.0,12,False,"Insulins and analogues for injection, intermediate-acting"
+00002021301,311036,"insulin, regular, human 100 UNT/ML Injectable Solution [Humulin R]",Humulin R 100 UNT/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,15,False,"Insulins and analogues for injection, fast-acting"
+00378964532,314072,latanoprost 0.05 MG/ML Ophthalmic Solution,latanoprost 0.05 MG/ML Ophthalmic Solution,flat,refrigerated,2.0,8.0,75.0,10,False,Prostaglandin analogues
+55513014801,205923,1 ML epoetin alfa 4000 UNT/ML Injection [Epogen],Epogen 4000 UNT/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,6,False,Other antianemic preparations
+00143933801,1594589,succinylcholine chloride 20 MG/ML Injectable Solution,succinylcholine chloride 20 MG/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,8,False,Choline derivatives
+00143925001,1234995,rocuronium bromide 10 MG/ML Injectable Solution,rocuronium bromide 10 MG/ML Injectable Solution,flat,refrigerated,2.0,8.0,75.0,10,False,Other quaternary ammonium compounds
+00006482600,1292459,0.5 ML varicella-zoster virus vaccine live (Oka-Merck) strain 2700 UNT/ML Injection [Varivax],Varivax 0.5 ML Injection,flat,freezer,-25.0,-15.0,75.0,5,False,Varicella zoster vaccines
+00006417100,1292443,"0.5 ML measles virus vaccine live, Enders' attenuated Edmonston strain 2000 UNT/ML / mumps virus vaccine live, Jeryl Lynn strain 40000 UNT/ML / rubella virus vaccine live (Wistar RA 27-3 strain) 2000 UNT/ML / varicella-zoster virus vaccine live (Oka-Merck) strain 20000 UNT/ML Injection [ProQuad]",ProQuad,flat,freezer,-25.0,-15.0,75.0,3,False,Measles vaccines
