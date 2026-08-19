@@ -1,0 +1,243 @@
+name: renew-cert
+
+# The button for "the certificate is broken". Manual only — this is an
+# operational action against the shared sandbox, and it can consume a Let's
+# Encrypt issuance slot, so it is something someone decides to do.
+#
+# Why here and not in the web app: re-issuing a TLS certificate means deleting
+# and rewriting a Secret in the cluster. Giving the `web` pod RBAC to do that
+# would put secret-write permission on the one deployment that is exposed to
+# the public internet and serves the clinical UI — a browser-reachable button
+# is exactly the wrong shape for this. The Actions run is already
+# authenticated, already least-privilege via workload identity, and already
+# records who pressed it and when, which is what an audit trail for a
+# HIPAA-track system needs anyway.
+#
+# The default mode is `diagnose`, which changes nothing. That is deliberate:
+# most "the cert is broken" reports are not a broken certificate (the leaf can
+# be perfectly valid while a Challenge is stuck, or while nothing is wrong at
+# all), and burning a rate-limit slot to find that out is the expensive way to
+# ask the question.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "diagnose = read-only report (start here). renew = graceful re-issue, no downtime. recreate = delete and rebuild, brief outage."
+        type: choice
+        options: [diagnose, renew, recreate]
+        default: diagnose
+      reason:
+        description: "Why you are doing this — recorded in the run log."
+        type: string
+        default: ""
+
+concurrency:
+  group: renew-cert
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GKE_CLUSTER: medstock-dev
+  GKE_ZONE: europe-west1-b
+  NAMESPACE: medstock
+  # cert-manager's ingress-shim names the Certificate after the secretName in
+  # the Ingress tls block — deploy/overlays/dev/kustomization.yaml.
+  CERT_NAME: medstock-dev-tls
+  SECRET_NAME: medstock-dev-tls
+
+jobs:
+  cert:
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: azure/setup-kubectl@v4
+
+      - name: Record intent
+        run: |
+          echo "mode:   ${{ inputs.mode }}"
+          echo "reason: ${{ inputs.reason }}"
+          echo "actor:  ${{ github.actor }}"
+
+      # The hostname embeds the ingress IP, which does not survive a
+      # destroy/recreate of the sandbox — read it from the live Service rather
+      # than trusting the placeholder committed in git (same reasoning as
+      # deploy-dev.yml's "Resolve ingress host" step).
+      - name: Resolve ingress host
+        run: |
+          ip="$(kubectl -n ingress-nginx get svc ingress-nginx-controller \
+                  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+          if [ -z "$ip" ]; then
+            echo "::error::ingress-nginx has no LoadBalancer IP — nothing can be issued until it does."
+            exit 1
+          fi
+          echo "INGRESS_HOST=medstock-dev.${ip//./-}.sslip.io" >> "$GITHUB_ENV"
+          echo "Host: medstock-dev.${ip//./-}.sslip.io"
+
+      # ---------------------------------------------------------------- state
+      # Always runs, in every mode. If you are about to re-issue, the "before"
+      # picture is the only way to tell afterwards whether it helped.
+      - name: Current state
+        run: |
+          echo "::group::Certificate"
+          kubectl -n "$NAMESPACE" get certificate "$CERT_NAME" -o wide || echo "(no Certificate object)"
+          kubectl -n "$NAMESPACE" describe certificate "$CERT_NAME" 2>/dev/null | sed -n '/Status:/,$p' || true
+          echo "::endgroup::"
+
+          echo "::group::CertificateRequests (newest last)"
+          kubectl -n "$NAMESPACE" get certificaterequest \
+            --sort-by=.metadata.creationTimestamp -o wide || true
+          echo "::endgroup::"
+
+          echo "::group::Orders and Challenges"
+          # A stuck Challenge is the usual cause of "issuance never finishes",
+          # and it is invisible from outside the cluster.
+          kubectl -n "$NAMESPACE" get order,challenge -o wide 2>/dev/null || echo "(none — nothing in flight)"
+          kubectl -n "$NAMESPACE" describe challenge 2>/dev/null | grep -E "Reason:|Message:|State:" || true
+          echo "::endgroup::"
+
+          echo "::group::Secret"
+          if kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" >/dev/null 2>&1; then
+            kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" \
+              -o jsonpath='{.data.tls\.crt}' | base64 -d \
+              | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+          else
+            echo "(no Secret — nginx is serving its own self-signed default)"
+          fi
+          echo "::endgroup::"
+
+      # What the world actually sees. The Secret being correct and the site
+      # serving it are two different claims, and only this checks the second.
+      - name: Served certificate
+        run: |
+          echo | timeout 20 openssl s_client -connect "${INGRESS_HOST}:443" \
+                   -servername "$INGRESS_HOST" 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -dates || echo "(nothing served)"
+          code="$(curl -sS -o /dev/null -m 20 -w '%{http_code} verify=%{ssl_verify_result}' \
+                    "https://${INGRESS_HOST}/login" || true)"
+          echo "GET /login -> $code   (verify=0 means the chain validated)"
+
+      # ------------------------------------------------------------ ratelimit
+      # Let's Encrypt allows 5 duplicate certificates per exact hostname set
+      # per 168 hours. A regenerate button is precisely the thing that burns
+      # that, and the failure mode is a WEEK of no issuance — far worse than
+      # whatever prompted the click. So count first and refuse to be the fifth.
+      - name: Rate-limit guard
+        if: inputs.mode != 'diagnose'
+        run: |
+          week_ago="$(date -u -d '7 days ago' +%s)"
+          recent=0
+          for ts in $(kubectl -n "$NAMESPACE" get certificaterequest \
+                        -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' 2>/dev/null); do
+            [ "$(date -u -d "$ts" +%s)" -ge "$week_ago" ] && recent=$((recent + 1))
+          done
+          echo "CertificateRequests in the last 7 days: $recent (Let's Encrypt allows 5)"
+          if [ "$recent" -ge 4 ]; then
+            echo "::error::$recent issuances already this week. One more risks a 7-day lockout with no certificate at all. Wait, or use the staging issuer."
+            exit 1
+          fi
+          [ "$recent" -ge 2 ] && echo "::warning::$recent issuances this week — close to the limit."
+          exit 0
+
+      # --------------------------------------------------------------- renew
+      # Graceful: cert-manager issues a new certificate and swaps the Secret
+      # only once the new one is Ready, so the site never stops serving a
+      # valid chain. This is the mode that should fix almost everything.
+      - name: Renew (graceful)
+        if: inputs.mode == 'renew'
+        run: |
+          # Pinned, not `latest`: this is the release that tracks the
+          # cert-manager v1.16.2 the cluster runs (infra/terraform/dev/addons.tf).
+          # An unpinned cmctl would silently drift ahead of the server.
+          curl -fsSL -o /tmp/cmctl.tar.gz \
+            https://github.com/cert-manager/cmctl/releases/download/v2.1.1/cmctl_linux_amd64.tar.gz
+          tar xzf /tmp/cmctl.tar.gz -C /tmp cmctl
+          sudo install /tmp/cmctl /usr/local/bin/cmctl
+          cmctl version --client 2>/dev/null || true
+          cmctl renew "$CERT_NAME" -n "$NAMESPACE"
+
+      # ------------------------------------------------------------ recreate
+      # For when the Certificate object itself is wedged — a bad spec, a
+      # secret cert-manager will not adopt, an Order that will never clear.
+      # This DOES drop the served certificate for as long as issuance takes
+      # (typically under a minute, HTTP-01). Called out loudly because HSTS is
+      # in force on this host: while the cert is missing, browsers that have
+      # visited before will refuse to connect and will NOT offer a click-through.
+      - name: Recreate (brief outage)
+        if: inputs.mode == 'recreate'
+        run: |
+          echo "::warning::Dropping the certificate. HSTS is in force on this host, so browsers will hard-fail — not warn — until issuance completes."
+          kubectl -n "$NAMESPACE" delete certificaterequest --all --ignore-not-found
+          kubectl -n "$NAMESPACE" delete order --all --ignore-not-found
+          kubectl -n "$NAMESPACE" delete certificate "$CERT_NAME" --ignore-not-found
+          kubectl -n "$NAMESPACE" delete secret "$SECRET_NAME" --ignore-not-found
+          # The ingress-shim recreates the Certificate from the Ingress
+          # annotation; nudging the Ingress makes it notice now rather than on
+          # its next resync.
+          kubectl -n "$NAMESPACE" annotate ingress medstock-web \
+            cert-manager.io/renew-trigger="$(date -u +%s)" --overwrite
+
+      # ----------------------------------------------------------- wait/verify
+      - name: Wait for Ready
+        if: inputs.mode != 'diagnose'
+        run: |
+          # The Certificate is recreated asynchronously in `recreate` mode, so
+          # wait for the object to exist before waiting on its condition.
+          for _ in $(seq 1 30); do
+            kubectl -n "$NAMESPACE" get certificate "$CERT_NAME" >/dev/null 2>&1 && break
+            sleep 5
+          done
+          if ! kubectl -n "$NAMESPACE" wait --for=condition=Ready \
+                 "certificate/$CERT_NAME" --timeout=300s; then
+            echo "::group::Why it did not become Ready"
+            kubectl -n "$NAMESPACE" describe certificate "$CERT_NAME" || true
+            kubectl -n "$NAMESPACE" describe order,challenge || true
+            echo "::endgroup::"
+            echo "::error::Issuance did not complete. HTTP-01 needs port 80 reachable and the ACME path un-redirected — see infra/README.md."
+            exit 1
+          fi
+
+      - name: Verify what is served now
+        if: inputs.mode != 'diagnose'
+        run: |
+          # nginx reloads on Secret change, but not instantly — poll rather
+          # than assert on the first read and call a timing artefact a failure.
+          for _ in $(seq 1 20); do
+            out="$(echo | timeout 20 openssl s_client -connect "${INGRESS_HOST}:443" \
+                     -servername "$INGRESS_HOST" 2>/dev/null \
+                   | openssl x509 -noout -subject -issuer -dates 2>/dev/null || true)"
+            case "$out" in
+              *"Let's Encrypt"*) echo "$out"; break ;;
+              *) sleep 10 ;;
+            esac
+          done
+          echo "$out"
+          case "$out" in
+            *"Let's Encrypt"*) ;;
+            *) echo "::error::Still not serving a Let's Encrypt certificate."; exit 1 ;;
+          esac
+          curl -sS -o /dev/null -m 20 -w 'GET /login -> %{http_code} verify=%{ssl_verify_result}\n' \
+            "https://${INGRESS_HOST}/login"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Certificate — \`${{ inputs.mode }}\`"
+            echo
+            echo "- Host: \`${INGRESS_HOST:-unresolved}\`"
+            echo "- Actor: @${{ github.actor }}"
+            [ -n "${{ inputs.reason }}" ] && echo "- Reason: ${{ inputs.reason }}"
+            echo
+            echo "Full \`Certificate\`, \`Order\`, \`Challenge\` and served-chain output is in the step logs above."
+          } >> "$GITHUB_STEP_SUMMARY"
