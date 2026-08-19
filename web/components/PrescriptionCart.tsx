@@ -99,6 +99,11 @@ type AnalogueVerdict = {
   verdict: string;
   score?: number | null;
   findings: Warning[];
+  /** What this drug adds on top of the patient's existing regimen, as opposed
+   *  to how it scores alone. Lower is better. */
+  added_burden?: number;
+  /** Organs it stacks onto that the rest of the regimen already loads. */
+  compounds?: string[];
   // Where on the body this candidate bears, derived server-side from the
   // findings above. Optional because an older patient-profiling will not send
   // it, and a missing diagram is better than a guessed one.
@@ -131,6 +136,13 @@ const UNASSESSED_SAFETY = 2.5;
  * and sort last: dropping them would hide that an obvious substitute was
  * considered and ruled out, which is a thing worth knowing.
  */
+/** How many substitutes to offer.
+ *
+ *  A physician mid-prescription is choosing, not browsing. Twenty ranked
+ *  options is a list to read; five is a decision to make. The cut is on the
+ *  ranked list, so what is dropped is always what ranked worst. */
+const MAX_SUGGESTIONS = 5;
+
 function bySafetyThenStock(
   verdicts: Map<string, AnalogueVerdict>,
 ): (a: AnalogueHit, b: AnalogueHit) => number {
@@ -140,8 +152,21 @@ function bySafetyThenStock(
       ? UNASSESSED_SAFETY
       : (VERDICT_SAFETY[verdict] ?? UNASSESSED_SAFETY);
   };
-  // Descending safety, then descending stock.
-  return (a, b) => safety(b) - safety(a) || (b.quantity ?? 0) - (a.quantity ?? 0);
+  // What the drug adds to THIS patient, on top of what they already take.
+  // Lower is better; undefined sorts last so an unassessed candidate never
+  // outranks one we actually checked.
+  const burden = (h: AnalogueHit) =>
+    verdicts.get(h.rxcui)?.added_burden ?? Number.MAX_SAFE_INTEGER;
+  // In stock beats out of stock at equal safety — a safer drug the hospital
+  // cannot dispense today is not the better answer to "what do I prescribe
+  // now", but it must never outrank a genuinely safer one, so this is the
+  // last tiebreak rather than the first.
+  const stocked = (h: AnalogueHit) => ((h.quantity ?? 0) > 0 ? 1 : 0);
+  return (a, b) =>
+    safety(b) - safety(a) ||
+    burden(a) - burden(b) ||
+    stocked(b) - stocked(a) ||
+    (b.quantity ?? 0) - (a.quantity ?? 0);
 }
 
 type CartState = {
@@ -503,7 +528,13 @@ export function PrescriptionCart() {
       // at the patient — so assess them before offering one as a swap.
       const verdicts = await checkAnaloguesForPatient(item.rxcui, items);
       setAnalogueVerdicts(verdicts);
-      setAnalogues(verdicts.size ? [...items].sort(bySafetyThenStock(verdicts)) : items);
+      // Ranked first, then cut — so the five shown are the best five, not
+      // the first five the analogue service happened to return.
+      setAnalogues(
+        verdicts.size
+          ? [...items].sort(bySafetyThenStock(verdicts)).slice(0, MAX_SUGGESTIONS)
+          : items.slice(0, MAX_SUGGESTIONS),
+      );
     } catch (err) {
       setAnalogueError(err instanceof Error ? err.message : "analogue search failed");
     } finally {
@@ -531,6 +562,11 @@ export function PrescriptionCart() {
         body: JSON.stringify({
           patient_id: cart.patientId,
           replacing,
+          // Everything else the patient is on, so a substitute is judged by
+          // what it adds rather than in isolation.
+          regimen: cart.items
+            .filter((i) => i.rxcui !== replacing)
+            .map((i) => ({ rxcui: i.rxcui, name: i.name })),
           candidates: items.map((i) => ({ rxcui: i.rxcui, name: i.name })),
         }),
       });
@@ -992,6 +1028,31 @@ export function PrescriptionCart() {
                                     findings — an empty body would read as "checked
                                     and clear", which is not the same as "no
                                     organ-specific finding". */}
+                                {/* Stock, said plainly. "Safer but unavailable"
+                                    is a different answer from "safer", and a
+                                    physician choosing now needs to see which
+                                    one they are being offered. */}
+                                <p className="text-[11px]">
+                                  {(a.quantity ?? 0) > 0 ? (
+                                    <span className="text-emerald-700 dark:text-emerald-400">
+                                      In stock here · {a.quantity}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">
+                                      Not stocked at this facility
+                                    </span>
+                                  )}
+                                </p>
+                                {/* The reason this ranked where it did. An
+                                    organ already loaded by another drug in the
+                                    cart is the thing a verdict alone cannot
+                                    tell you. */}
+                                {checked?.compounds && checked.compounds.length > 0 && (
+                                  <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                                    Adds to {checked.compounds.join(", ")} — already loaded by
+                                    this patient&apos;s other drugs
+                                  </p>
+                                )}
                                 {/* Where this substitute bears on the patient.
                                     Only rendered when the assessment produced
                                     organ findings — an empty figure would read

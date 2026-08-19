@@ -166,7 +166,11 @@ export function AnatomyImpact({
 
   if (dense) {
     return (
-      <div className="flex items-start gap-3">
+      <div className="flex flex-col gap-1.5">
+        <p className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+          Where this regimen bears
+        </p>
+        <div className="flex items-start gap-3">
         <Figure
           template={template}
           organs={organs}
@@ -177,7 +181,7 @@ export function AnatomyImpact({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           {organs.length === 0 ? (
             <span className="text-[11px] text-muted-foreground">
-              No organ findings
+              Nothing in this regimen bears on a specific organ.
             </span>
           ) : (
             organs.map((o) => {
@@ -189,16 +193,18 @@ export function AnatomyImpact({
                   onMouseLeave={() => setHovered(null)}
                   className={`truncate rounded border px-1.5 py-0.5 text-[10px] ${sev.badge}`}
                 >
-                  {ORGAN_LABEL[o.organ] ?? o.organ} · {sev.label}
+                  {ORGAN_LABEL[o.organ] ?? o.organ} — {sev.label} risk · {o.weight} pts
                 </span>
               );
             })
           )}
           {unmapped.length > 0 && (
             <span className="text-[10px] text-muted-foreground">
-              +{unmapped.length} not organ-specific
+              {unmapped.length} further finding{unmapped.length === 1 ? "" : "s"} not
+              specific to any organ — see the full impact.
             </span>
           )}
+        </div>
         </div>
       </div>
     );
@@ -245,7 +251,7 @@ export function AnatomyImpact({
                         {ORGAN_LABEL[o.organ] ?? o.organ}
                       </span>
                       <span className={`rounded border px-1.5 py-0.5 text-xs ${s.badge}`}>
-                        {s.label} · {o.weight} pts
+                        {s.label} risk · {o.weight} pts
                       </span>
                     </div>
                     {/* The findings themselves. A mark a reader cannot trace to

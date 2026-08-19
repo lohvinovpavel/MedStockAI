@@ -97,6 +97,10 @@ class AnalogueCheckBody(BaseModel):
     # a substitute is assessed on its own merits, not relative to what it
     # replaces, or a bad line would make a worse one look acceptable.
     replacing: str | None = Field(default=None, max_length=32)
+    # What the patient is already on, minus the line being replaced. Without it
+    # a substitute can only be judged in isolation, and "safe on its own" is not
+    # the question a physician swapping one drug in a regimen is asking.
+    regimen: list[CartItem] = Field(default_factory=list)
 
 
 def _norm_codes(codes: list[str] | None) -> list[str]:
@@ -901,6 +905,22 @@ def analogue_check(
         vector = patient_row_to_vector(row)
         patient_payload = _patient_dict(row)
 
+    # The organs the rest of the regimen already loads. Assessed with the same
+    # eight stages as everything else -- a burden derived some cheaper way would
+    # not agree with the figure the same screen draws.
+    standing: dict[str, int] = {}
+    regimen_rxcuis = [i.rxcui.strip() for i in body.regimen if i.rxcui.strip()]
+    if regimen_rxcuis:
+        r_profiles = approved_profiles(regimen_rxcuis)
+        r_pgx = pgx_for(regimen_rxcuis)
+        r_adr = adr_signals_for(regimen_rxcuis)
+        for other in regimen_rxcuis:
+            other_assessment = assess(
+                vector, other, risk_profiles=r_profiles, pgx=r_pgx, adr_signals=r_adr
+            )
+            for impact in organ_impacts(other_assessment.findings, class_of(other))[0]:
+                standing[impact.organ] = standing.get(impact.organ, 0) + impact.weight
+
     # One lookup for the whole candidate list, as /cart-check does — twenty
     # analogues must not become sixty queries.
     profiles = approved_profiles(candidates)
@@ -913,6 +933,7 @@ def analogue_check(
         if not rxcui:
             continue
         assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
+        shaded, unmapped = organ_impacts(assessment.findings, class_of(rxcui))
         results.append(
             {
                 "rxcui": rxcui,
@@ -924,6 +945,20 @@ def analogue_check(
                 # tells them apart.
                 "stages_completed": list(assessment.stages_completed),
                 "findings": [_finding_dict(f) for f in assessment.findings],
+                # Where this candidate bears. Absent until now: the organ work
+                # was added to /assess, not here, so the analogue list has been
+                # rendering without a figure the whole time.
+                "organs": [i.as_dict() for i in shaded],
+                "organs_unmapped": unmapped,
+                # What it ADDS to this patient, as opposed to how it scores on
+                # its own. Stacking onto an organ the rest of the regimen
+                # already loads counts for more than landing on a clear one --
+                # that is the difference between "safe drug" and "safe for
+                # her". Blunt on purpose: it orders a short list, it does not
+                # claim a dose-response relationship.
+                "added_burden": (assessment.score or 0)
+                + sum(i.weight + standing.get(i.organ, 0) // 2 for i in shaded),
+                "compounds": [i.organ for i in shaded if i.organ in standing],
             }
         )
 
@@ -936,6 +971,9 @@ def analogue_check(
         # Echoed so a reader of the audit row can see what was being replaced,
         # not just what was offered.
         "replacing": body.replacing.strip() if body.replacing else None,
+        # What "compounds" is measured against, so a reader can see the baseline
+        # rather than trusting a number.
+        "standing_burden": standing,
         "results": results,
         # Same three counters as /cart-check, and meaningful for the same reason:
         # zero distinguishes "no guideline covers these candidates" from "that
