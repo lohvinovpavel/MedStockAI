@@ -36,7 +36,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 from medstock_shared.db import SessionLocal, iter_hospitals
-from medstock_shared.models import NewsSignal, StockSnapshot
+from medstock_shared.models import Drug, NewsSignal, StockSnapshot
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -202,7 +202,9 @@ def shelf() -> list[tuple[str, str]]:
         all_shelf: set[tuple[str, str]] = set()
         for _ in iter_hospitals(session):
             rows = session.execute(
-                select(StockSnapshot.ndc, StockSnapshot.drug_name).distinct()
+                select(StockSnapshot.ndc, Drug.name)
+                .join(Drug, Drug.ndc == StockSnapshot.ndc)
+                .distinct()
             ).all()
             for ndc, name in rows:
                 if name and ndc:
