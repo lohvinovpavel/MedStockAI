@@ -3,7 +3,7 @@ resource "random_password" "db" {
   special = false # goes straight into a postgresql:// URL; skip URL-escaping headaches
 }
 
-# db-f1-micro, zonal, HDD: cheapest tier that still takes automated backups.
+# db-g1-small, zonal, HDD: shared-core tier with 1.7GB RAM.
 # Backups stay on even in dev — this is a shared DB and someone will drop a
 # table.
 resource "google_sql_database_instance" "dev" {
@@ -17,11 +17,11 @@ resource "google_sql_database_instance" "dev" {
 
   settings {
     # New projects default new instances to Enterprise Plus edition, whose
-    # tiers are all db-perf-optimized-*. db-f1-micro is a legacy shared-core
+    # tiers are all db-perf-optimized-*. db-g1-small is a shared-core
     # tier that only exists under Enterprise edition — must be pinned or the
     # API rejects the tier outright.
     edition           = "ENTERPRISE"
-    tier              = "db-f1-micro"
+    tier              = "db-g1-small"
     availability_type = "ZONAL"
     disk_type         = "PD_HDD"
     disk_size         = 10
