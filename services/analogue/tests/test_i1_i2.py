@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 from medstock_shared.ai.tools import ToolDenied, declarations_for, execute
 from medstock_shared.auth import Principal, current_principal
 from medstock_shared.db import engine, session_scope
-from medstock_shared.models import CopilotConversation, CopilotMessage, Facility, Hospital
+from medstock_shared.models import (
+    CopilotConversation,
+    CopilotMessage,
+    Facility,
+    Hospital,
+    ReviewDecision,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -54,6 +60,7 @@ def _cleanup() -> None:
                 CopilotConversation.hospital_id.in_([HOSPITAL_A, HOSPITAL_B])
             )
         )
+        s.execute(delete(ReviewDecision).where(ReviewDecision.hospital_id.in_([HOSPITAL_A, HOSPITAL_B])))
         s.execute(delete(Facility).where(Facility.hospital_id.in_([HOSPITAL_A, HOSPITAL_B])))
         s.commit()
 
@@ -69,9 +76,13 @@ def seeded():
             hospital_id=HOSPITAL_A, code="i2-a", name="I2 A",
             type="Hospital", lat=50.45, lon=30.52, operated=True,
         )
-        s.add(fa)
+        fb = Facility(
+            hospital_id=HOSPITAL_B, code="i2-b", name="I2 B",
+            type="Hospital", lat=50.45, lon=30.52, operated=True,
+        )
+        s.add_all([fa, fb])
         s.commit()
-        ids = {"a": fa.id}
+        ids = {"a": fa.id, "b": fb.id}
     yield ids
     _cleanup()
 
@@ -93,6 +104,53 @@ def test_physician_draft_order_is_tool_denied():
                 Principal(str(ACTOR), str(HOSPITAL_A), "physician"),
             )
         )
+
+
+def test_list_pending_restock_recommendations_scoped_and_filtered(seeded):
+    """Only pending restock_recommendation rows, only this hospital's --
+    excludes another hospital's pending row, a decided row, and a pending
+    row of the table's other entity_type (analogue_substitution)."""
+    with session_scope(str(HOSPITAL_A), str(ACTOR)) as s:
+        s.add(ReviewDecision(
+            hospital_id=HOSPITAL_A, facility_id=seeded["a"], entity_type="restock_recommendation",
+            entity_ref="00000000001", decision="pending",
+            payload={"ndc": "00000000001", "name": "Test Drug", "quantity": 50,
+                     "supplier_id": 1, "supplier_name": "Acme"},
+        ))
+        s.add(ReviewDecision(
+            hospital_id=HOSPITAL_A, facility_id=seeded["a"], entity_type="restock_recommendation",
+            entity_ref="00000000002", decision="approved",
+            payload={"ndc": "00000000002", "quantity": 5},
+        ))
+        s.add(ReviewDecision(
+            hospital_id=HOSPITAL_A, facility_id=seeded["a"], entity_type="analogue_substitution",
+            entity_ref="not-restock", decision="pending", payload={},
+        ))
+    with session_scope(str(HOSPITAL_B), str(OTHER)) as s:
+        s.add(ReviewDecision(
+            hospital_id=HOSPITAL_B, facility_id=seeded["b"], entity_type="restock_recommendation",
+            entity_ref="cross-tenant", decision="pending",
+            payload={"ndc": "cross-tenant", "quantity": 1},
+        ))
+
+    result = asyncio.run(execute(
+        "list_pending_restock_recommendations", {}, Principal(str(ACTOR), str(HOSPITAL_A), "admin")
+    ))
+    assert result["pending_total"] == 1
+    assert not result["truncated"]
+    item = result["items"][0]
+    assert item["ndc"] == "00000000001"
+    assert item["quantity"] == 50
+    assert item["supplier_name"] == "Acme"
+    assert item["facility_id"] == seeded["a"]
+
+    # facility_id filter narrows to a facility with nothing pending
+    empty = asyncio.run(execute(
+        "list_pending_restock_recommendations",
+        {"facility_id": seeded["b"]},
+        Principal(str(ACTOR), str(HOSPITAL_A), "admin"),
+    ))
+    assert empty["pending_total"] == 0
 
 
 def test_conversation_crud_isolation_and_soft_delete(seeded):

@@ -1,0 +1,49 @@
+# Full demo dataset: facility/supplier registry, 3 years of daily consumption
+# history, the seeded forecast run, and the wave5 demo purchase orders /
+# review decisions (docs/populating-a-new-environment.md §5, docs/demo-data.md
+# §6). One-off, run by hand or via deploy-dev.yml's seed_demo input --
+# deliberately not in kustomization.yaml, same reason seed-job.yaml and
+# seed-stock-job.yaml are not: seeding is something you decide to do, not
+# something a rollout does to you.
+#
+# Without this, seed-stock alone still upserts the facility registry and the
+# shelf NDCs, but consumption_daily, forecast_point, supplier and the wave5
+# review_decision rows stay empty -- Warehouse/Forecasts read empty, and no
+# AI copilot draft_order call can ever cite a review_decision_id.
+#
+# Refuses to run unless ENVIRONMENT=demo is set (docs/demo-data.md §2) -- the
+# artifacts are synthetic tenant data and must never land in a real tenant's
+# database.
+#
+# Run after `migrate` and (on a fresh cluster) `seed`, before `seed-stock`:
+#   kubectl -n medstock apply -f deploy/k8s/seed-demo-job.yaml
+#   kubectl -n medstock wait --for=condition=complete job/seed-demo --timeout=600s
+#
+# Re-running is safe: upserts for reference/registry rows, delete-and-reload
+# for the two bulk time series, scoped to the demo tenant only.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-demo
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: seed-demo
+        # Must be the ingest image -- app.seed_demo and the committed
+        # data/demo/*.csv.gz artifacts it reads are ingest's own (root
+        # Dockerfile), not a "any image carries this" module like scripts/.
+        image: ghcr.io/medstockai/ingest:latest
+        workingDir: /srv/services/ingest
+        command: ["python", "-m", "app.seed_demo"]
+        env:
+        - name: ENVIRONMENT
+          value: demo
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef: { name: medstock-db, key: url }
+        resources:
+          requests: { cpu: 100m, memory: 128Mi }
+          limits: { memory: 512Mi }
