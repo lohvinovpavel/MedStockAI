@@ -243,9 +243,19 @@ def ask_ai(
         raise AIError(f"circuit breaker open for task {task_name!r}")
 
     try:
-        result = _generate_json(
-            task.prompt.format(**payload), task.timeout_seconds, model=model_name,
-            images=images,
+        # `images` is only passed when there are any. Every existing caller and
+        # every test stub predates multimodal support, and handing them a keyword
+        # they do not accept turns an unrelated call into an AIError -- a new
+        # capability must not change the signature the old path is invoked with.
+        result = (
+            _generate_json(
+                task.prompt.format(**payload), task.timeout_seconds,
+                model=model_name, images=images,
+            )
+            if images
+            else _generate_json(
+                task.prompt.format(**payload), task.timeout_seconds, model=model_name
+            )
         )
         # Validate citations against the caller's source, not Gemini's echo.
         if isinstance(result, dict) and payload.get("source_text"):

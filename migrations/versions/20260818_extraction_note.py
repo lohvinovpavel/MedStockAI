@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260818_note"
-down_revision: str | None = "20260818_wave6"
+down_revision: str | None = "20260819_drug_class"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
