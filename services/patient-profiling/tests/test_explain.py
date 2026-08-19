@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import pytest
 from app.main import app
-from medstock_shared.patient_assess import _band_for
 from fastapi.testclient import TestClient
 from medstock_shared.auth import PERMS, Principal, current_principal
 from medstock_shared.patient import BANDS, RULESET_VERSION
+from medstock_shared.patient_assess import _band_for
 
 PHARMACIST = Principal("pharm-1", "hospital-1", "pharmacist")
 PHYSICIAN = Principal("phys-1", "hospital-1", "physician")

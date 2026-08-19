@@ -25,7 +25,7 @@ from medstock_shared.models import (
     StockSnapshot,
     StorageLocation,
 )
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 HOSPITAL_ID = uuid.uuid4()

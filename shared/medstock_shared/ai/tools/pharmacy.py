@@ -34,7 +34,6 @@ from ...models import (
     StockSnapshot,
     StorageLocation,
 )
-from ...ordering import create_purchase_order
 from ...patient import age_band_from_dob
 from ...patient_assess import NOT_FOUND, UNAVAILABLE, resolve_patient_ref
 from ...patient_assess import assess_for_drug as _assess_for_drug
@@ -976,8 +975,9 @@ class ProposeOrderArgs(BaseModel):
 )
 def propose_order(args: ProposeOrderArgs, principal: Principal) -> dict:
     import uuid as uuid_mod
-    from ..cards import store_proposal
+
     from ...models import ReviewDecision, Supplier
+    from ..cards import store_proposal
 
     clean_ndc = args.ndc
     try:

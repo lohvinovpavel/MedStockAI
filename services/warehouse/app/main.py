@@ -28,7 +28,7 @@ from medstock_shared.models import (
 )
 from medstock_shared.warehouse import excursions
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import select, text
 
 from .pricing import adjust_quantity, quote_totals
 from .transfers import transfers
