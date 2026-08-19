@@ -6,7 +6,6 @@ import { Repeat2, Stethoscope } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DrugSearch } from "@/components/DrugSearch";
 import { PrescriptionCart } from "@/components/PrescriptionCart";
-import { ServiceHealth } from "@/components/ServiceHealth";
 import { useSession } from "@/lib/session";
 
 type TabId = "analogues" | "pryznachennia";
@@ -72,7 +71,6 @@ export function AnalogueWorkspace() {
         </TabsList>
 
         <TabsContent value="analogues" className="flex flex-col gap-3">
-          <ServiceHealth service="analogue" />
           <DrugSearch key={searchParams.get("q") ?? ""} initialQuery={searchParams.get("q") ?? ""} />
         </TabsContent>
 

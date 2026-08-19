@@ -579,8 +579,13 @@ def project_audit(result: dict, principal: Principal, request_id: str, args: dic
 
 @register_projector("propose_order")
 @register_projector("draft_order")
+@register_projector("recommend_restock")
 def project_proposal(result: dict, principal: Principal, request_id: str, args: dict | None) -> CardBase | None:
     if "error" in result and result.get("error") not in ("compliance_blocked", "review_decision_mismatch"):
+        return None
+    # recommend_restock's "nothing to recommend" case: a note, no proposal
+    # fields. Let it degrade to prose instead of rendering a zeroed-out card.
+    if "proposal_id" not in result and "review_decision_id" not in result:
         return None
     return ProposalCard(
         tool="propose_order",

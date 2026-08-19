@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from decimal import Decimal
 
 import pytest
 from app.main import app
@@ -16,7 +17,11 @@ from medstock_shared.models import (
     CopilotMessage,
     Facility,
     Hospital,
+    ParLevel,
     ReviewDecision,
+    StockSnapshot,
+    Supplier,
+    SupplierCatalog,
 )
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -44,7 +49,23 @@ def _client(
     return TestClient(app)
 
 
+def _wipe_par_supplier(hospital_id: uuid.UUID, actor_id: uuid.UUID) -> None:
+    """par_level/stock_snapshot/supplier carry an audit trigger that reads the
+    `app.hospital_id` session GUC -- only session_scope() sets that, so a bare
+    Session(engine) delete 500s on the trigger's own NOT NULL constraint
+    (matches test_wave5.py's _wipe, same tables)."""
+    with session_scope(str(hospital_id), str(actor_id), "test_teardown") as s:
+        s.execute(delete(StockSnapshot).where(StockSnapshot.hospital_id == hospital_id))
+        s.execute(delete(ParLevel).where(ParLevel.hospital_id == hospital_id))
+        sids = list(s.scalars(select(Supplier.id).where(Supplier.hospital_id == hospital_id)))
+        if sids:
+            s.execute(delete(SupplierCatalog).where(SupplierCatalog.supplier_id.in_(sids)))
+        s.execute(delete(Supplier).where(Supplier.hospital_id == hospital_id))
+
+
 def _cleanup() -> None:
+    _wipe_par_supplier(HOSPITAL_A, ACTOR)
+    _wipe_par_supplier(HOSPITAL_B, OTHER)
     with Session(engine) as s:
         convs = list(
             s.scalars(
@@ -151,6 +172,69 @@ def test_list_pending_restock_recommendations_scoped_and_filtered(seeded):
         Principal(str(ACTOR), str(HOSPITAL_A), "admin"),
     ))
     assert empty["pending_total"] == 0
+
+
+def test_recommend_restock_materialises_and_proposes(seeded):
+    """The gap this closes: 'create an order' had no way to reach a
+    review_decision_id when list_pending_restock_recommendations was empty.
+    recommend_restock computes one from par/on-hand/catalog, writes it as a
+    pending restock_recommendation, and hands back the same proposal shape
+    propose_order does -- so the chat flow no longer dead-ends."""
+    ndc = "00000000009"
+    with session_scope(str(HOSPITAL_A), str(ACTOR)) as s:
+        supplier = Supplier(
+            hospital_id=HOSPITAL_A, name="Recommend Test Pharma", lead_time_days=4,
+            reliability_pct=Decimal("95.00"), shipping_flat=Decimal("60.00"),
+            currency="USD", active=True,
+        )
+        s.add(supplier)
+        s.flush()
+        s.add(SupplierCatalog(
+            supplier_id=supplier.id, ndc=ndc, unit_cost=Decimal("11.4000"),
+            pack_size=10, min_order_qty=10,
+        ))
+        s.add(ParLevel(
+            hospital_id=HOSPITAL_A, facility_id=seeded["a"], ndc=ndc,
+            reorder_point=20, target_qty=180,
+        ))
+        s.add(StockSnapshot(hospital_id=HOSPITAL_A, facility_id=seeded["a"], ndc=ndc, quantity=6))
+        s.flush()
+        supplier_id = supplier.id
+
+    principal = Principal(str(ACTOR), str(HOSPITAL_A), "pharmacist")
+    result = asyncio.run(execute(
+        "recommend_restock", {"facility_id": seeded["a"], "ndc": ndc}, principal,
+    ))
+    assert result["ndc"] == ndc
+    assert result["supplier_id"] == supplier_id
+    assert result["quantity"] > 0
+    assert result["blocked"] is False
+    review_decision_id = result["review_decision_id"]
+    assert review_decision_id
+
+    with session_scope(str(HOSPITAL_A), str(ACTOR)) as s:
+        row = s.get(ReviewDecision, review_decision_id)
+        assert row.decision == "pending"
+        assert row.entity_type == "restock_recommendation"
+        assert row.payload["ndc"] == ndc
+
+    # Now reachable exactly the way draft_order/propose_order already are.
+    followup = asyncio.run(execute(
+        "list_pending_restock_recommendations", {"facility_id": seeded["a"]}, principal,
+    ))
+    assert any(item["review_decision_id"] == review_decision_id for item in followup["items"])
+
+
+def test_recommend_restock_no_par_returns_note_not_error(seeded):
+    """No par level for this NDC -- compute_recommendations returns nothing.
+    Must degrade to an informative note, not a crash or a fabricated card."""
+    result = asyncio.run(execute(
+        "recommend_restock",
+        {"facility_id": seeded["a"], "ndc": "00000000099"},
+        Principal(str(ACTOR), str(HOSPITAL_A), "pharmacist"),
+    ))
+    assert "note" in result
+    assert "review_decision_id" not in result
 
 
 def test_conversation_crud_isolation_and_soft_delete(seeded):

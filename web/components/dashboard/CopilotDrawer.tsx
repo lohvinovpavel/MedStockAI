@@ -1581,25 +1581,24 @@ export function CopilotDrawer() {
         <div className="flex flex-col gap-3" role="log" aria-live="polite" aria-relevant="additions" aria-busy={pending}>
           {messages.map((m, idx) => {
             const allCards = m.cards?.length ? m.cards : m.card ? [m.card] : [];
-            // Only the last message can be the in-flight reply — its empty
-            // bubble is otherwise indistinguishable from "nothing happened".
+            // Only the last message can be the in-flight reply. Stays true
+            // through tool calls and cards — Gemini often keeps writing a
+            // closing remark after a card lands, and the reply isn't done
+            // until text shows up, not until the first card does.
             const isThinking =
               pending &&
               idx === messages.length - 1 &&
               m.role === "assistant" &&
               m.live &&
               !m.text &&
-              allCards.length === 0 &&
-              !(m.tools && m.tools.length) &&
               !m.patientPicker;
             return (
               <div key={m.id} className={cn("flex flex-col gap-1.5", m.role === "user" && "items-end")}>
                 {m.tools && <ToolActivityRow tools={m.tools} />}
-                {isThinking && <ThinkingDots />}
                 {allCards.map((c, i) => {
                   const cardKey = c.kind === "proposal" ? c.proposal_id : `${m.id}-${i}`;
                   return (
-                    <div key={cardKey} className="flex w-full flex-col gap-1">
+                    <div key={cardKey} className="flex max-w-[92%] flex-col gap-1">
                       <ResponseCardView
                         card={c}
                         onCreateDraft={c.kind === "po" ? () => createDraftFromCard(cardKey, c as Extract<ResponseCard, { kind: "po" }>) : undefined}
@@ -1626,6 +1625,7 @@ export function CopilotDrawer() {
                     </div>
                   );
                 })}
+                {isThinking && <ThinkingDots />}
                 {m.text && (
                   <div
                     className={cn(
@@ -1651,7 +1651,7 @@ export function CopilotDrawer() {
                   </div>
                 )}
                 {m.patientPicker && (
-                  <div className="flex w-full flex-col gap-1">
+                  <div className="flex max-w-[92%] flex-col gap-1">
                     {m.patientPicker.candidates.map((c) => (
                       <Button
                         key={c.id}
