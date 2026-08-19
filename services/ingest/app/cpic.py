@@ -37,7 +37,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from medstock_shared.db import SessionLocal
+from medstock_shared.db import SessionLocal, iter_hospitals
 from medstock_shared.models import FormularyItem, PgxGuideline
 from medstock_shared.patient import is_baseline_phenotype
 from sqlalchemy import select
@@ -129,7 +129,13 @@ def recommendations(levels: dict[str, str]) -> list[dict]:
 
 def formulary_rxcuis() -> set[str]:
     with SessionLocal() as session:
-        return {str(r) for r in session.scalars(select(FormularyItem.rxcui).distinct()).all()}
+        all_rxcuis: set[str] = set()
+        for _ in iter_hospitals(session):
+            for r in session.scalars(
+                select(FormularyItem.rxcui).where(FormularyItem.rxcui.is_not(None))
+            ):
+                all_rxcuis.add(str(r))
+        return all_rxcuis
 
 
 def write(rows: list[dict]) -> int:

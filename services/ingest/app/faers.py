@@ -40,7 +40,7 @@ import sys
 from datetime import UTC, datetime
 
 import httpx
-from medstock_shared.db import SessionLocal
+from medstock_shared.db import SessionLocal, iter_hospitals
 from medstock_shared.models import AdrSignal, FormularyItem
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -145,11 +145,20 @@ def signals_for(rxcui: str, reaction_totals: dict[str, int], grand_total: int) -
 
 
 def formulary_rxcuis(limit: int) -> list[str]:
+    if limit <= 0:
+        return []
     with SessionLocal() as session:
-        return [
-            str(r)
-            for r in session.scalars(select(FormularyItem.rxcui).distinct().limit(limit)).all()
-        ]
+        all_rxcuis: set[str] = set()
+        for _ in iter_hospitals(session):
+            for r in session.scalars(
+                select(FormularyItem.rxcui).where(FormularyItem.rxcui.is_not(None))
+            ):
+                all_rxcuis.add(str(r))
+                if len(all_rxcuis) >= limit:
+                    break
+            if len(all_rxcuis) >= limit:
+                break
+        return list(all_rxcuis)
 
 
 def write(rows: list[dict]) -> int:

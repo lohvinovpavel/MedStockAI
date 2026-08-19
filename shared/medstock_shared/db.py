@@ -7,8 +7,9 @@ read those settings. The app role has no BYPASSRLS and does not own the tables.
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Iterator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
@@ -43,6 +44,24 @@ def set_ai_dedupe_key(session: Session, key: str | None) -> None:
         text("SELECT set_config('app.ai_dedupe_key', :k, true)"),
         {"k": key or ""},
     )
+
+
+def iter_hospitals(session: Session) -> Iterator[str]:
+    """Yield each hospital id, setting `app.hospital_id` for the rest of the
+    transaction before each yield so a per-tenant query right after sees only
+    that hospital's rows under RLS.
+
+    For batch/ingest code that needs to scan every tenant's data rather than
+    one request's — callers loop `for hid in iter_hospitals(session): ...`.
+    """
+    from .models import Hospital  # local import: models.py does not import db.py
+
+    for hid in session.scalars(select(Hospital.id)).all():
+        session.execute(
+            text("SELECT set_config('app.hospital_id', :h, true)"),
+            {"h": str(hid)},
+        )
+        yield str(hid)
 
 
 @contextmanager
