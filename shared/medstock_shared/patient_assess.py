@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from .auth import Principal
 from .db import engine, session_scope
+from .drug_class import ensure_drug_class
 from .models import AdrSignal, AssessmentLog, DrugRiskProfile, Patient, PgxGuideline
 from .patient import (
     BANDS,
@@ -274,13 +275,26 @@ def assess_for_drug(principal: Principal, patient_id: str, rxcui: str) -> dict:
     profiles = approved_profiles([rxcui])
     pgx = pgx_for([rxcui])
     adr = adr_signals_for([rxcui])
-    assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
-    warnings = [_finding_dict(f) for f in assessment.findings]
 
+    # Ingredients first: they feed both the avoid-warning check below and class
+    # resolution, which has to run before assess() or the class-gated stages are
+    # skipped on a drug we could have classed. One RxNorm fetch serves both.
+    rxnorm_unavailable = False
     try:
         ingredients = ingredients_for_rxcui(rxcui)
     except RxNormError:
         ingredients = []
+        rxnorm_unavailable = True
+    ensure_drug_class(
+        rxcui,
+        ingredient_names=[str(i.get("name") or "") for i in ingredients],
+        principal=principal,
+    )
+
+    assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
+    warnings = [_finding_dict(f) for f in assessment.findings]
+
+    if rxnorm_unavailable:
         warnings.append(
             {
                 "code": "RXNORM_UNAVAILABLE",

@@ -30,5 +30,13 @@
   "prognosis_section": {
     "prompt_version": "v1",
     "sha256": "61e595fbdfaa14d9b6522cdf5ab880ac65c1ded32913b67db4e59f3838dd4762"
+  },
+  "drug_class": {
+    "prompt_version": "v1",
+    "sha256": "c83ab6a9d1a73cacd7fde9c51ecc754264d80d73221b3dcd7e2c3a5756cc2f58"
+  },
+  "organ_impact": {
+    "prompt_version": "v1",
+    "sha256": "f3198879c3e1d37245dfda6a626111bb11b4bed13879a68d431bf44152339f83"
   }
 }

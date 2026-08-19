@@ -115,6 +115,24 @@ function Figure({
         className="absolute inset-0 h-full w-full select-none object-contain"
         draggable={false}
       />
+      {/* The template artwork carries a drawn face. This figure is a neutral
+          anatomical frame, not a depiction of the patient, so the head is
+          blurred out: a second copy of the same image, clipped to an ellipse
+          over the face and Gaussian-blurred, sits exactly on top. The ellipse
+          is placed in fractions of the container, which shares the template's
+          proportions, so it tracks the head at any size. Every shaded organ is
+          thoracic or abdominal, so nothing informative is touched, and the
+          organ overlay below is drawn after this, so a neck-high thyroid mark
+          still renders crisply. aria-hidden: it adds no information. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={template.src}
+        alt=""
+        aria-hidden
+        className="absolute inset-0 h-full w-full select-none object-contain"
+        draggable={false}
+        style={{ clipPath: "ellipse(8% 5.5% at 49.2% 8.5%)", filter: "blur(7px)" }}
+      />
       {/* The overlay shares the template's viewBox, so anchors are used as-is —
           no scaling maths, and nothing to drift when the figure is resized. */}
       <svg

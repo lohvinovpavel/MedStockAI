@@ -20,7 +20,7 @@ organs and believes they have seen everything.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 # The organs the front-end can draw. Kept small and anatomical: this is a body
@@ -43,6 +43,10 @@ ORGANS = (
     "blood",
     "skin",
 )
+
+# The drawable set, for O(1) membership checks when filtering a model's answer
+# down to organs the figure actually has an anchor for.
+_ORGAN_SET = frozenset(ORGANS)
 
 # Finding code -> organs it bears on. Every code the ruleset can emit appears
 # here, including the ones that map to nothing, so a new finding cannot be
@@ -210,6 +214,20 @@ REACTION_ORGANS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Avoided-ingredient advisories name an ingredient, not a reaction, and the
+# organ they bear on is the ingredient's, not the drug's. Matched on the
+# ingredient name the finding message carries -- the same message-driven
+# resolution the population signals use, kept separate because the vocabulary is
+# ingredients (what the profile flags), not reaction words. Add a line here when
+# an ingredient is added to AVOID_INGREDIENT_CODES; an ingredient with no entry
+# is reported unmapped rather than shading a guessed organ.
+INGREDIENT_ORGANS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # A stimulant: palpitations and tachycardia in the heart, tremor and
+    # sleeplessness in the brain.
+    ("caffeine", ("heart", "brain")),
+)
+
+
 @dataclass(frozen=True)
 class OrganImpact:
     """One organ, and why it is shaded."""
@@ -247,24 +265,55 @@ def organs_for_reaction(reaction: str) -> tuple[str, ...]:
     return tuple(hits)
 
 
+def organs_for_ingredient(text: str) -> tuple[str, ...]:
+    """Where an avoided ingredient bears on the body, or `()` if we cannot tell.
+
+    Substring matching on the ingredient name the finding message carries, the
+    same way `organs_for_reaction` reads a reaction name -- the avoid list is
+    small and its names are exact, but a substring keeps 'caffeine' matching
+    'caffeine citrate' without a second table.
+    """
+    haystack = (text or "").casefold()
+    hits: list[str] = []
+    for needle, organs in INGREDIENT_ORGANS:
+        if needle in haystack:
+            hits.extend(o for o in organs if o not in hits)
+    return tuple(hits)
+
+
 def organs_for_finding(
     code: str, message: str = "", drug_class: str | None = None
 ) -> tuple[str, ...]:
     """Where one finding bears on the body.
 
-    `message` is used only for the codes whose organ genuinely depends on the
-    reaction named in it -- the population signals. Reading it for the rest
-    would let a phrase in a sentence shade an organ the ruleset never implicated.
+    `message` is used only for the codes whose organ genuinely depends on what
+    the message names -- the population signals (a reaction) and the avoided
+    ingredient (an ingredient). Reading it for the rest would let a phrase in a
+    sentence shade an organ the ruleset never implicated.
     """
     if code in ("ADR_SIGNAL", "ADR_SIGNAL_STRONG"):
         return organs_for_reaction(message)
+    if code == "AVOIDED_INGREDIENT":
+        return organs_for_ingredient(message)
     if code == "DUPLICATE_CLASS" and drug_class:
         return DUPLICATE_CLASS_ORGANS.get(drug_class.casefold(), ())
     return FINDING_ORGANS.get(code, ())
 
 
+# Findings whose organ is carried in their message as prose -- a reaction name
+# or an avoided ingredient. When the substring tables miss the phrase, these are
+# the only codes the LLM fallback is allowed to place: they describe a concrete
+# effect on the body. A code deliberately mapped to "no single organ"
+# (NARROW_THERAPEUTIC_INDEX, CONDITION_WORSENED, ...) is a design decision, not a
+# gap, so it is never sent to the model.
+_LLM_PLACEABLE_CODES = frozenset({"ADR_SIGNAL", "ADR_SIGNAL_STRONG", "AVOIDED_INGREDIENT"})
+
+
 def impacts(
-    findings: Iterable, drug_class: str | None = None
+    findings: Iterable,
+    drug_class: str | None = None,
+    *,
+    infer_organs: Callable[[str], Sequence[str]] | None = None,
 ) -> tuple[list[OrganImpact], list[str]]:
     """Turn an assessment's findings into shaded organs.
 
@@ -272,6 +321,14 @@ def impacts(
     belong nowhere on the diagram, and the caller is expected to show it: a
     picture that quietly omits a finding invites the reader to believe the
     organs are the whole story.
+
+    `infer_organs` is an optional model-backed fallback (organ_infer.py): when
+    the substring tables cannot place a prose-carrying effect (a rare reaction,
+    an unlisted ingredient), it is asked where the effect acts. It is only
+    consulted for `_LLM_PLACEABLE_CODES`, and only after the deterministic
+    lookup comes back empty, so it fills gaps and never overrides a rule or a
+    deliberate "no single organ" decision. An empty answer leaves the finding
+    unmapped, exactly as without it.
     """
     collected: dict[str, dict] = {}
     unmapped: list[str] = []
@@ -283,6 +340,8 @@ def impacts(
         severity = str(getattr(getattr(finding, "severity", None), "value", "") or "low")
 
         organs = organs_for_finding(code, message, drug_class)
+        if not organs and infer_organs is not None and code in _LLM_PLACEABLE_CODES and message:
+            organs = tuple(o for o in infer_organs(message) if o in _ORGAN_SET)
         if not organs:
             if code not in unmapped:
                 unmapped.append(code)

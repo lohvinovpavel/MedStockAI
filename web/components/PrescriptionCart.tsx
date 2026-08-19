@@ -466,9 +466,13 @@ export function PrescriptionCart() {
     setSearchBusy(true);
     setSearchError(null);
     try {
+      // A tight cap: the backend returns generics (SCD) and best name-fit
+      // first, so the top handful are the strengths a prescriber actually
+      // means. Without a limit this defaulted to 20 — every strength, form and
+      // brand of one drug — which is the "too many variants" noise.
       const data = await apiFetch(
         "analogue",
-        `/drugs/search?q=${encodeURIComponent(q)}`,
+        `/drugs/search?q=${encodeURIComponent(q)}&limit=8`,
       );
       setHits(data.items ?? []);
     } catch (err) {
@@ -569,26 +573,30 @@ export function PrescriptionCart() {
     setAnalogueVerdicts(new Map());
     setAnalogueCheckFailed(false);
     const line = resultsByRxcui.get(item.rxcui);
-    const hasContraindication = (line?.warnings?.length ?? 0) > 0;
-    const exclude =
-      line?.exclude_ingredient ||
-      line?.exclude_ingredient_name ||
-      "1886";
+    // Only a line that actually flagged an ingredient carries an exclusion. A
+    // clean line has nothing to hide, so the AI shortens the full therapeutic
+    // list rather than dropping candidates for an arbitrary ingredient — the
+    // old "1886" (caffeine) default did exactly that on lines with no warning.
+    const exclude = line?.exclude_ingredient || line?.exclude_ingredient_name || "";
     try {
-      // With contraindications + Gemini key: UC-5 AI filter on Full list.
-      // Without a key, analogue defaults use_ai=false; never force true (409).
+      // AI shortens the list on every lookup during prescribing, not only
+      // contraindicated lines: the physician always gets the ranked top-5 with
+      // a rationale instead of an unfiltered Full list. Gated only on the
+      // service being configured — analogue 409s on an explicit true with no
+      // key (docs/analog-search-flow.md), so ask ai-status first.
       let useAi = false;
-      if (hasContraindication) {
-        try {
-          const status = await apiFetch("analogue", "/analogues/ai-status");
-          useAi = Boolean(status?.available);
-        } catch {
-          useAi = false;
-        }
+      try {
+        const status = await apiFetch("analogue", "/analogues/ai-status");
+        useAi = Boolean(status?.available);
+      } catch {
+        useAi = false;
       }
+      const excludeParam = exclude
+        ? `&exclude_ingredient=${encodeURIComponent(exclude)}`
+        : "";
       const data = await apiFetch(
         "analogue",
-        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}&exclude_ingredient=${encodeURIComponent(exclude)}&facility_id=${facility.id}`,
+        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}${excludeParam}&facility_id=${facility.id}`,
       );
       const items: AnalogueHit[] = data.items ?? [];
       setAnalogueUsedAi(Boolean(data.use_ai));
@@ -967,6 +975,21 @@ export function PrescriptionCart() {
                             Warning ({warnings.length})
                           </Button>
                         )}
+                        {/* Analogues are findable for any line, not only flagged
+                            ones: a physician may want a cheaper or better-stocked
+                            equivalent for a drug that raised no warning, and the
+                            AI shortens that list the same way. */}
+                        {!hasWarning && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => (open ? setOpenWarningFor(null) : void findAnalogues(item))}
+                          >
+                            Find analogues
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="outline"
@@ -980,15 +1003,19 @@ export function PrescriptionCart() {
                     </div>
                     {open && (
                       <div className="mt-3 flex flex-col gap-2 border-t pt-3">
-                        <h3 className="text-sm font-medium">Why this warning</h3>
-                        <ul className="flex flex-col gap-1.5 text-xs">
-                          {warnings.map((w, idx) => (
-                            <li key={`${w.code}-${idx}`}>
-                              <span className="font-medium">{w.code}</span>: {w.message}{" "}
-                              <span className="text-muted-foreground">({w.source})</span>
-                            </li>
-                          ))}
-                        </ul>
+                        {hasWarning && (
+                          <>
+                            <h3 className="text-sm font-medium">Why this warning</h3>
+                            <ul className="flex flex-col gap-1.5 text-xs">
+                              {warnings.map((w, idx) => (
+                                <li key={`${w.code}-${idx}`}>
+                                  <span className="font-medium">{w.code}</span>: {w.message}{" "}
+                                  <span className="text-muted-foreground">({w.source})</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        )}
                         {(line?.exclude_ingredient || line?.exclude_ingredient_name) && (
                           <p className="text-xs">
                             Suggested filter: exclude{" "}
@@ -1006,7 +1033,9 @@ export function PrescriptionCart() {
                         >
                           {analogueBusy
                             ? "Finding analogues…"
-                            : "Find analogues without this ingredient"}
+                            : hasWarning
+                              ? "Find analogues without this ingredient"
+                              : "Find analogues (AI-ranked)"}
                         </Button>
                         {analogueError && <p className="text-xs text-destructive">{analogueError}</p>}
                         {analogueUsedAi && !analogueRationaleUnavailable && (
@@ -1014,8 +1043,11 @@ export function PrescriptionCart() {
                         )}
                         {analogueRationaleUnavailable && (
                           <p className="text-[11px] text-muted-foreground">
-                            AI rationale unavailable — showing unfiltered Full list (still excluding the
-                            avoided ingredient).
+                            AI rationale unavailable — showing unfiltered Full list
+                            {line?.exclude_ingredient || line?.exclude_ingredient_name
+                              ? " (still excluding the avoided ingredient)"
+                              : ""}
+                            .
                           </p>
                         )}
                         {analogueCheckFailed && (
