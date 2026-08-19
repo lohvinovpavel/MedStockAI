@@ -71,7 +71,7 @@ def test_a_candidate_can_carry_the_same_pgx_finding_as_the_drug_it_replaces():
     about the genotype, so a candidate that is wrong for this patient has to be
     able to come back marked."""
     assessed = assess(POOR_METABOLIZER, CLOPIDOGREL, pgx=[_guideline()], risk_profiles=())
-    assert any(f.source == "cpic" for f in assessed.findings), (
+    assert any(f.code.startswith("PGX_") for f in assessed.findings), (
         "a CPIC guideline matching the patient's phenotype must produce a finding "
         "on the candidate, or substituting silently drops Tier 3"
     )
@@ -81,7 +81,7 @@ def test_an_untyped_candidate_is_not_penalised():
     """Nothing known about this drug for this genotype is not the same as a
     problem with it. The stage must stay silent rather than guess."""
     assessed = assess(POOR_METABOLIZER, PRASUGREL, pgx=[_guideline()], risk_profiles=())
-    assert not [f for f in assessed.findings if f.source == "cpic"]
+    assert not [f for f in assessed.findings if f.code.startswith("PGX_")]
 
 
 def test_a_label_risk_reaches_a_candidate():
@@ -105,7 +105,7 @@ def test_an_adr_signal_reaches_a_candidate():
     exactly the thing a stock-ranked list would never show."""
     signal = AdrSignalRow(rxcui=PRASUGREL, reaction="haemorrhage", prr=8.0, ror=9.1, n_reports=400)
     assessed = assess(POOR_METABOLIZER, PRASUGREL, risk_profiles=(), adr_signals=[signal])
-    assert any(f.source == "faers" for f in assessed.findings)
+    assert any(f.code.startswith("ADR_SIGNAL") for f in assessed.findings)
 
 
 def test_a_blocked_candidate_has_no_score():
