@@ -485,3 +485,23 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* The impact window sizes itself.
+ *
+ * DialogContent ships `sm:max-w-sm`, and that survives every ordinary attempt
+ * to override it here: utility classes lose the cascade, tailwind-merge strips
+ * the default but arbitrary replacements were not generated, and even an inline
+ * `width` computed to 384px. So the rule that wins is declared once, here, with
+ * the specificity it needs -- rather than a fourth layer of override stacked on
+ * three that did not work. */
+[data-impact-window="expanded"] {
+  width: 95vw !important;
+  max-width: 95vw !important;
+  height: 95vh !important;
+  max-height: 95vh !important;
+}
+[data-impact-window="normal"] {
+  width: min(56rem, 92vw) !important;
+  max-width: min(56rem, 92vw) !important;
+  max-height: 90vh !important;
+}

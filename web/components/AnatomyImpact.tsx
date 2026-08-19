@@ -38,11 +38,22 @@ export type OrganImpact = {
 
 /** Ring colour and legend styling per severity. The ring does the work on the
  *  figure; the fill is a light wash that only tints what is already there. */
+/** Blue on the figure, warm colours in the legend.
+ *
+ *  The rings were red and amber, which is the obvious choice and the wrong one
+ *  here: the artwork is a photographic body in pink and red-brown, so a red
+ *  ring sits on top of red tissue and has almost no contrast. Blue is the one
+ *  hue nothing in the anatomy occupies, so a marker reads instantly whatever
+ *  it is drawn over.
+ *
+ *  Severity still separates, by depth rather than hue -- darker and heavier as
+ *  it worsens. The legend badges stay warm, because there the background is
+ *  neutral and red genuinely means what a reader expects. */
 const SEVERITY = {
-  block: { ring: "#B91C1C", wash: "#DC2626", label: "Blocked", badge: "bg-red-100 text-red-900 border-red-300" },
-  high: { ring: "#DC2626", wash: "#EF4444", label: "High", badge: "bg-red-100 text-red-900 border-red-300" },
-  moderate: { ring: "#D97706", wash: "#F59E0B", label: "Moderate", badge: "bg-amber-100 text-amber-900 border-amber-300" },
-  low: { ring: "#CA8A04", wash: "#FDE047", label: "Low", badge: "bg-yellow-100 text-yellow-900 border-yellow-300" },
+  block: { ring: "#1E3A8A", wash: "#1D4ED8", label: "Blocked", badge: "bg-red-100 text-red-900 border-red-300" },
+  high: { ring: "#1D4ED8", wash: "#2563EB", label: "High", badge: "bg-red-100 text-red-900 border-red-300" },
+  moderate: { ring: "#2563EB", wash: "#3B82F6", label: "Moderate", badge: "bg-amber-100 text-amber-900 border-amber-300" },
+  low: { ring: "#60A5FA", wash: "#93C5FD", label: "Low", badge: "bg-yellow-100 text-yellow-900 border-yellow-300" },
 } as const;
 
 const ORGAN_LABEL: Record<string, string> = {

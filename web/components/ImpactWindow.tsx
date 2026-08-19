@@ -103,16 +103,10 @@ export function ImpactWindow({
 
       <DialogContent
         className="overflow-y-auto"
-        // Inline rather than utility classes, and not by preference.
-        // DialogContent defaults to `sm:max-w-sm`; tailwind-merge strips that,
-        // but the arbitrary replacements only exist if the JIT happened to see
-        // them, and the dialog sat at 384px regardless of what the class said.
-        // A style attribute is not subject to either problem.
-        style={
-          expanded
-            ? { width: "95vw", maxWidth: "95vw", height: "95vh", maxHeight: "95vh" }
-            : { width: "min(56rem, 92vw)", maxWidth: "min(56rem, 92vw)", maxHeight: "90vh" }
-        }
+        // Sized by a rule in globals.css keyed off this attribute. Utility
+        // classes, tailwind-merge and an inline style all lost to
+        // DialogContent's own `sm:max-w-sm`; see the note there.
+        data-impact-window={expanded ? "expanded" : "normal"}
       >
         <DialogHeader>
           <div className="flex items-center justify-between gap-3 pr-8">
