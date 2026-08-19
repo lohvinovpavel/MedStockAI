@@ -189,6 +189,63 @@ class Assessment:
 # build the real ones from CPIC, label text and FAERS.
 
 DRUG_CLASS: dict[str, str] = {
+    # --- demo formulary ------------------------------------------------
+    # Derived from the ingredient names in data/demo/drugs.csv. Before this
+    # the map held 35 entries against a 100-drug formulary, so most stages
+    # were gated shut: a patient with eGFR 31 on metformin scored GREEN
+    # because the renal stage never ran, not because it looked and passed.
+    # A stopgap -- RxNorm should derive this, and ingest already talks to it.
+    "1049621": "opioid",  # oxycodone hydrochloride 5 MG Oral Tablet
+    "106258": "corticosteroid",  # hydrocortisone 10 MG/ML Topical Cream
+    "1232086": "anticoagulant",  # rivaroxaban 20 MG Oral Tablet
+    "1364445": "anticoagulant",  # apixaban 5 MG Oral Tablet
+    "1652639": "hypoglycaemic",  # 3 ML insulin lispro 100 UNT/ML Pen Injector
+    "1653202": "hypoglycaemic",  # 3 ML insulin aspart, human 100 UNT/ML Pen In
+    "1656349": "arb",  # sacubitril 49 MG / valsartan 51 MG Oral Tabl
+    "1807513": "glycopeptide",  # vancomycin 1000 MG Injection
+    "197361": "calcium_blocker",  # amlodipine 5 MG Oral Tablet
+    "197381": "beta_blocker",  # atenolol 50 MG Oral Tablet
+    "197517": "macrolide",  # clarithromycin 500 MG Oral Tablet
+    "197604": "digoxin",  # digoxin 0.125 MG Oral Tablet
+    "197806": "nsaid",  # ibuprofen 600 MG Oral Tablet
+    "197901": "benzodiazepine",  # lorazepam 1 MG Oral Tablet
+    "198014": "nsaid",  # naproxen 500 MG Oral Tablet
+    "198051": "ppi",  # omeprazole 20 MG Delayed Release Oral Capsul
+    "198145": "corticosteroid",  # prednisone 10 MG Oral Tablet
+    "198440": "paracetamol",  # acetaminophen 500 MG Oral Tablet
+    "199885": "fluoroquinolone",  # levofloxacin 500 MG Oral Tablet
+    "200032": "beta_blocker",  # carvedilol 12.5 MG Oral Tablet
+    "259966": "corticosteroid",  # methylprednisolone 4 MG Oral Tablet
+    "308048": "benzodiazepine",  # alprazolam 0.5 MG Oral Tablet
+    "308416": "nsaid",  # aspirin 81 MG Delayed Release Oral Tablet
+    "308460": "macrolide",  # azithromycin 250 MG Oral Tablet
+    "309309": "fluoroquinolone",  # ciprofloxacin 500 MG Oral Tablet
+    "309362": "antiplatelet",  # clopidogrel 75 MG Oral Tablet
+    "310273": "h2_blocker",  # famotidine 20 MG Oral Tablet
+    "310385": "ssri",  # fluoxetine 20 MG Oral Capsule
+    "310431": "gabapentinoid",  # gabapentin 300 MG Oral Capsule
+    "310488": "hypoglycaemic",  # glipizide 10 MG Oral Tablet
+    "311026": "hypoglycaemic",  # insulin isophane, human 100 UNT/ML Injectabl
+    "311036": "hypoglycaemic",  # insulin, regular, human 100 UNT/ML Injectabl
+    "312743": "antipsychotic",  # quetiapine 100 MG Oral Tablet
+    "312941": "ssri",  # sertraline 50 MG Oral Tablet
+    "312961": "statin",  # simvastatin 20 MG Oral Tablet
+    "313096": "potassium_sparing",  # spironolactone 25 MG Oral Tablet
+    "313988": "loop_diuretic",  # furosemide 40 MG Oral Tablet
+    "314154": "antipsychotic",  # olanzapine 10 MG Oral Tablet
+    "314200": "ppi",  # pantoprazole 40 MG Delayed Release Oral Tabl
+    "349199": "arb",  # valsartan 80 MG Oral Tablet
+    "349332": "ssri",  # escitalopram 10 MG Oral Tablet
+    "483450": "gabapentinoid",  # pregabalin 75 MG Oral Capsule
+    "596934": "snri",  # duloxetine 60 MG Delayed Release Oral Capsul
+    "835603": "opioid",  # tramadol hydrochloride 50 MG Oral Tablet
+    "847230": "hypoglycaemic",  # 3 ML insulin glargine 100 UNT/ML Pen Injecto
+    "854873": "z_drug",  # zolpidem tartrate 10 MG Oral Tablet
+    "855332": "anticoagulant",  # warfarin sodium 5 MG Oral Tablet
+    "859747": "statin",  # rosuvastatin calcium 10 MG Oral Tablet
+    "866514": "beta_blocker",  # metoprolol tartrate 50 MG Oral Tablet
+    "966221": "thyroid_hormone",  # levothyroxine sodium 0.05 MG Oral Tablet
+    "979492": "arb",  # losartan potassium 50 MG Oral Tablet
     "308182": "penicillin",  # amoxicillin
     "723": "penicillin",  # ampicillin
     "617310": "statin",  # atorvastatin

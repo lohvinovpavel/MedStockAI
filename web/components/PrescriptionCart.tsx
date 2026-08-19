@@ -30,7 +30,6 @@ import { StockBand } from "@/components/StockBand";
 import { apiFetch } from "@/lib/api";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
-import { AnatomyImpact, type OrganImpact } from "@/components/AnatomyImpact";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
