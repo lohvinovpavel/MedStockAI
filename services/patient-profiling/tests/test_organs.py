@@ -181,3 +181,10 @@ def test_the_comparison_surfaces_unmapped_from_both_sides():
         [f("PRIOR_ADR_SAME_CLASS", "", 45)],
     )
     assert set(got["unmapped"]) == {"NARROW_THERAPEUTIC_INDEX", "PRIOR_ADR_SAME_CLASS"}
+
+
+def test_condition_worsened_has_an_organ_decision():
+    """It maps to nothing on purpose -- which organ depends on the condition and
+    class pair, and that pair lives in the message rather than a structured
+    field. Recorded as a decision so the reachability guard stays honest."""
+    assert FINDING_ORGANS.get("CONDITION_WORSENED", "missing") == ()

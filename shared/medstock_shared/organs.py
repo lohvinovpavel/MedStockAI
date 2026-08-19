@@ -66,6 +66,11 @@ FINDING_ORGANS: dict[str, tuple[str, ...]] = {
     "INTERACTION_MODERATE": ("liver",),
     # A narrow index means the gap between dose and toxicity is small. That is a
     # property of the drug, not of one organ.
+    # Which organ depends entirely on which condition and which class -- a
+    # steroid in diabetes is pancreatic, a beta blocker in asthma is pulmonary.
+    # The pair is in the message, not in a structured field, so there is nothing
+    # here to map from. Unmapped and reported, rather than guessed.
+    "CONDITION_WORSENED": (),
     "NARROW_THERAPEUTIC_INDEX": (),
     # Age-inappropriate prescribing in the Beers sense is mostly anticholinergic
     # and sedative burden -- falls and confusion.

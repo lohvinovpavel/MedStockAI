@@ -41,6 +41,10 @@ FINDING_REQUIRES: dict[str, str | None] = {
     "RENAL_DOSE_EXCEEDED": "egfr_value",
     "HEPATIC_IMPAIRED": "hepatic",
     "AGE_INAPPROPRIATE": "date_of_birth",
+    # Needs a coded diagnosis on the record. Only 19% of the cohort carries one,
+    # so this fires for a minority -- which is correct, not a coverage gap: a
+    # patient with no recorded condition has no condition to be worsened.
+    "CONDITION_WORSENED": "condition_codes",
     "DUPLICATE_CLASS": None,          # from the cart, not the record
     "INTERACTION_MAJOR": None,
     "INTERACTION_MODERATE": None,

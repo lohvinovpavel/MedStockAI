@@ -53,6 +53,14 @@ WEIGHTS: dict[str, int] = {
     "RENAL_DOSE_EXCEEDED": 30,
     "DUPLICATE_CLASS": 25,
     "HEPATIC_IMPAIRED": 20,
+    # A documented condition the drug class is known to worsen. Weighted at 30
+    # deliberately: that is the amber threshold, and this finding is raised at
+    # HIGH severity. At 25 it scored below the band and a diabetic prescribed a
+    # corticosteroid came back GREEN with a high-severity warning attached --
+    # the verdict contradicting the finding under it is worse than either alone.
+    # Same weight as RENAL_DOSE_EXCEEDED, which is the same kind of claim:
+    # patient-specific, documented, and a reason to look before prescribing.
+    "CONDITION_WORSENED": 30,
     "AGE_INAPPROPRIATE": 20,
     "INTERACTION_MODERATE": 15,
     "NARROW_THERAPEUTIC_INDEX": 10,
@@ -373,6 +381,75 @@ RENAL_MIN_BAND: dict[str, str] = {
     "ace_inhibitor": "15-29",
     "loop_diuretic": "15-29",
 }
+
+
+# (ICD-10 prefix, drug class) -> why the pair matters.
+#
+# Prefixes, not whole codes: a record holds E11.9 and the rule is about E11.
+# Ordered longest-prefix-first is unnecessary -- a code matching two rules
+# should raise both, because they are two different clinical reasons.
+CONDITION_CLASS_RISK: dict[tuple[str, str], str] = {
+    # Endocrine
+    ("E11", "corticosteroid"): "corticosteroids raise blood glucose",
+    ("E10", "corticosteroid"): "corticosteroids raise blood glucose",
+    ("E11", "thiazide"): "thiazides impair glucose tolerance",
+    ("E11", "antipsychotic"): "antipsychotics worsen glycaemic control",
+    ("E03", "amiodarone"): "amiodarone alters thyroid function",
+    # Cardiac
+    ("I50", "nsaid"): "NSAIDs cause fluid retention in heart failure",
+    ("I50", "calcium_blocker"): "negative inotropy worsens heart failure",
+    ("I48", "nsaid"): "NSAIDs raise bleeding risk on anticoagulation",
+    ("I10", "nsaid"): "NSAIDs raise blood pressure",
+    ("I10", "corticosteroid"): "corticosteroids cause sodium retention",
+    # Respiratory
+    ("J45", "beta_blocker"): "beta blockade can provoke bronchospasm in asthma",
+    ("J44", "beta_blocker"): "beta blockade can worsen airflow obstruction",
+    ("J45", "nsaid"): "NSAIDs can trigger bronchospasm in aspirin-sensitive asthma",
+    # Gastrointestinal
+    ("K25", "nsaid"): "NSAIDs cause ulceration and bleeding",
+    ("K27", "nsaid"): "NSAIDs cause ulceration and bleeding",
+    ("K25", "corticosteroid"): "corticosteroids add to ulcer risk",
+    ("K70", "paracetamol"): "hepatic impairment lowers the paracetamol threshold",
+    # Renal
+    ("N18", "nsaid"): "NSAIDs reduce renal perfusion in chronic kidney disease",
+    ("N18", "metformin"): "metformin accumulates in chronic kidney disease",
+    ("N18", "biguanide"): "metformin accumulates in chronic kidney disease",
+    # Neurological and psychiatric
+    ("G40", "fluoroquinolone"): "fluoroquinolones lower the seizure threshold",
+    ("G40", "tramadol"): "tramadol lowers the seizure threshold",
+    ("G40", "opioid"): "some opioids lower the seizure threshold",
+    ("F32", "corticosteroid"): "corticosteroids can precipitate mood disturbance",
+    ("G20", "antipsychotic"): "dopamine blockade worsens parkinsonism",
+    ("G30", "anticholinergic"): "anticholinergic burden worsens cognition in dementia",
+    ("G30", "benzodiazepine"): "benzodiazepines worsen confusion and falls in dementia",
+    # Urological and ocular
+    ("N40", "anticholinergic"): "anticholinergics precipitate urinary retention",
+    ("H40", "anticholinergic"): "anticholinergics can raise intraocular pressure",
+    # Musculoskeletal
+    ("M81", "corticosteroid"): "corticosteroids accelerate bone loss",
+    ("M10", "thiazide"): "thiazides raise urate and can provoke gout",
+}
+
+
+def condition_risks(
+    condition_codes: Sequence[str], drug_class: str | None
+) -> list[tuple[str, str]]:
+    """(condition code, reason) for every rule this drug trips on this patient.
+
+    Prefix-matched, so E11.9 answers a rule written about E11. Returns every
+    match rather than the first: two rules firing on one code are two distinct
+    clinical reasons, and collapsing them would hide one.
+    """
+    if not drug_class:
+        return []
+    out: list[tuple[str, str]] = []
+    for code in condition_codes:
+        normalised = str(code or "").upper().replace(".", "")
+        for (prefix, cls), reason in CONDITION_CLASS_RISK.items():
+            if cls == drug_class and normalised.startswith(prefix):
+                out.append((str(code), reason))
+    return out
+
 
 HEPATIC_RISK = {"statin", "benzodiazepine"}
 NARROW_THERAPEUTIC_INDEX = {"anticoagulant"}
@@ -1076,6 +1153,23 @@ def assess(
                         "Liver function not supplied — hepatic check skipped",
                         "feature vector", 6)
             )
+
+    # A condition this drug class is known to worsen. Same stage as the organ
+    # gates above and for the same reason: it is patient-specific knowledge, not
+    # a population statistic. Every matching rule is reported -- two rules on one
+    # code are two clinical reasons, and a reader deciding whether to prescribe
+    # needs both.
+    for code, reason in condition_risks(vector.condition_codes, candidate_class):
+        findings.append(
+            Finding(
+                "CONDITION_WORSENED",
+                Severity.HIGH,
+                WEIGHTS["CONDITION_WORSENED"],
+                f"Patient has {code} — {reason}",
+                "condition rules",
+                6,
+            )
+        )
 
     # --- stage 7a: population signal (Tier 1, FAERS) ------------------------
     # patient-pipeline.md §2 puts the FAERS ratio at stage 7 and
