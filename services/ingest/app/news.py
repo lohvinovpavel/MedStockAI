@@ -35,9 +35,9 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 import httpx
-from medstock_shared.db import SessionLocal
-from medstock_shared.models import Hospital, NewsSignal, StockSnapshot
-from sqlalchemy import select, text
+from medstock_shared.db import SessionLocal, iter_hospitals
+from medstock_shared.models import NewsSignal, StockSnapshot
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from ._source import fetch_json
@@ -199,13 +199,8 @@ def shelf() -> list[tuple[str, str]]:
     """(drug name, ndc) for what is actually stocked. Querying the whole
     formulary would spend a lot of requests on drugs nobody holds."""
     with SessionLocal() as session:
-        hospital_ids = session.scalars(select(Hospital.id)).all()
         all_shelf: set[tuple[str, str]] = set()
-        for hid in hospital_ids:
-            session.execute(
-                text("SELECT set_config('app.hospital_id', :h, true)"),
-                {"h": str(hid)},
-            )
+        for _ in iter_hospitals(session):
             rows = session.execute(
                 select(StockSnapshot.ndc, StockSnapshot.drug_name).distinct()
             ).all()
