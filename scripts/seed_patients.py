@@ -167,6 +167,27 @@ DEMO_PATIENTS = (
 
 SEED = 20260818
 
+# Which names are which. `_FIRST` stays a single flat list because
+# `rng.choice(_FIRST)` is part of the identity stream and re-pooling it would
+# renumber the whole cohort (see the note on `feature_rng` below).
+_FEMALE_NAMES = frozenset({
+    "Amara", "Priya", "Elena", "Doreen", "Ruth", "Ana", "Leila", "Mei",
+    "Sofia", "Fatima", "Hana", "Clara", "Nadia", "Rosa", "Aisha", "Lucia",
+    "Greta", "Mira", "Zara", "Ines", "Talia",
+})
+
+
+def sex_for_name(full_name: str) -> str:
+    """F or M from the given name.
+
+    Derived rather than drawn. Drawing it independently produced patients whose
+    recorded sex contradicted their name, and the body diagram then drew a male
+    figure for a woman -- correct against the record, and indefensible on screen.
+    """
+    given = full_name.strip().split(" ")[0]
+    return "F" if given in _FEMALE_NAMES else "M"
+
+
 _FIRST = [
     "Amara",
     "Priya",
@@ -348,7 +369,12 @@ def generated_patients(count: int, seed: int = SEED) -> list[dict]:
         # Renal function declines with age, so eGFR is drawn from the birth-year
         # bucket rather than flat; otherwise the renal findings fire on nobody
         # in particular instead of on the patients a ward round would catch.
-        person["sex"] = feature_rng.choice(("F", "M"))
+        # Drawn and discarded. The value is derived from the name below, but
+        # the draw has to stay: `feature_rng` is a single stream, and removing
+        # one call shifts every eGFR, hepatic status and prior reaction after
+        # it. Reproducibility of an existing cohort is worth one wasted call.
+        feature_rng.choice(("F", "M"))
+        person["sex"] = sex_for_name(person["full_name"])
         person["egfr_value"] = _pick(feature_rng, _EGFR_BY_AGE[bucket])
         person["hepatic"] = _pick(feature_rng, _HEPATIC)
         # The heaviest finding in the ruleset (45 pts), so deliberately uncommon:
