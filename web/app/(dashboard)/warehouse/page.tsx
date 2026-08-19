@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
-import { Building2, Refrigerator, ThermometerSun } from "lucide-react";
+import { Refrigerator, ThermometerSun } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,6 +17,7 @@ import { SortableHead, compareValues, nextSortState, type SortState } from "@/co
 import { DrugName } from "@/components/dashboard/DrugName";
 import { apiFetch } from "@/lib/api";
 import { useCopilot } from "@/lib/copilot-context";
+import { useFacility } from "@/lib/facility-context";
 import { parseDrugName } from "@/lib/drug-name";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +30,6 @@ const CLASS_RANGES: Record<string, { minC: number; maxC: number; maxRh: number }
   freezer: { minC: -25, maxC: -15, maxRh: 75 },
 };
 
-interface Facility { id: number; code: string; name: string; type: string; operated: boolean }
 interface Location { id: number; code: string; name: string; kind: string }
 interface StockItem { ndc: string; name: string | null; location: string; quantity: number; storage_class: string | null; drug_class: string | null }
 interface ConsumptionPoint { date: string; qty: number; stockout: boolean }
@@ -132,8 +132,8 @@ function stockoutSpans(points: ConsumptionPoint[]) {
 
 export default function WarehousePage() {
   const { setFocus } = useCopilot();
-  const [facilities, setFacilities] = useState<Facility[]>([]);
-  const [facilityId, setFacilityId] = useState<number | null>(null);
+  const { facility } = useFacility();
+  const facilityId = facility.id;
   const [locations, setLocations] = useState<Location[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
   const [excursions, setExcursions] = useState<Excursion[]>([]);
@@ -156,18 +156,13 @@ export default function WarehousePage() {
     toast.error(`Failed to load ${what}`, { description: err instanceof Error ? err.message : undefined });
   }, []);
 
+  // Only the very first load shows the full-page skeleton. Facility switches
+  // (via the sidebar) re-run this effect too — without this guard every
+  // switch would blank the whole page again instead of just refreshing its
+  // data in place.
+  const hasLoadedOnce = useRef(false);
   useEffect(() => {
-    apiFetch("warehouse", "/facilities?operated=true")
-      .then((body) => {
-        setFacilities(body.items);
-        setFacilityId((prev) => prev ?? body.items[0]?.id ?? null);
-      })
-      .catch(fail("facilities"))
-      .finally(() => setLoading(false));
-  }, [fail]);
-
-  useEffect(() => {
-    if (facilityId == null) return;
+    if (!hasLoadedOnce.current) setLoading(true);
     apiFetch("warehouse", `/locations?facility_id=${facilityId}`)
       .then((body) => {
         setLocations(body.items);
@@ -179,7 +174,11 @@ export default function WarehousePage() {
         setStock(body.items);
         setDrugNdc((prev) => (prev && body.items.some((i: StockItem) => i.ndc === prev) ? prev : body.items[0]?.ndc ?? null));
       })
-      .catch(fail("stock"));
+      .catch(fail("stock"))
+      .finally(() => {
+        hasLoadedOnce.current = true;
+        setLoading(false);
+      });
     apiFetch("warehouse", `/excursions?facility_id=${facilityId}`)
       .then((body) => setExcursions(body.items))
       .catch(fail("excursions"));
@@ -203,7 +202,6 @@ export default function WarehousePage() {
       .catch(fail("conditions"));
   }, [locationId, fail]);
 
-  const facility = facilities.find((f) => f.id === facilityId) ?? null;
   const drugs = useMemo(() => {
     const seen = new Map<string, StockItem>();
     for (const item of stock) if (!seen.has(item.ndc)) seen.set(item.ndc, item);
@@ -303,12 +301,9 @@ export default function WarehousePage() {
   if (loading) {
     return (
       <div className="flex flex-col gap-4 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col gap-1.5">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-3 w-72" />
-          </div>
-          <Skeleton className="h-8 w-64" />
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-3 w-72" />
         </div>
         <div className="grid gap-4 lg:grid-cols-[2fr_3fr]">
           <Card className="gap-2 py-4">
@@ -330,26 +325,11 @@ export default function WarehousePage() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Warehouse</h1>
-          <p className="text-xs text-muted-foreground">
-            Facility structure, stock placement, consumption history and storage conditions.
-          </p>
-        </div>
-        <Select value={facilityId != null ? String(facilityId) : undefined} onValueChange={(v) => setFacilityId(Number(v))}>
-          <SelectTrigger size="sm" className="h-8 w-64 text-xs">
-            <Building2 className="mr-1 size-3.5" />
-            <SelectValue placeholder="Facility" />
-          </SelectTrigger>
-          <SelectContent>
-            {facilities.map((f) => (
-              <SelectItem key={f.id} value={String(f.id)} className="text-xs">
-                {f.name} · {f.type}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight">Warehouse</h1>
+        <p className="text-xs text-muted-foreground">
+          Facility structure, stock placement, consumption history and storage conditions. Switch facilities from the sidebar.
+        </p>
       </div>
 
       {excursionGroups.length > 0 ? (

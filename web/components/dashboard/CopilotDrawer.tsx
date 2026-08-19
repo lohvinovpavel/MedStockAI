@@ -37,7 +37,7 @@ import { StatusBadge } from "@/components/dashboard/StatusBadge";
 import { useCopilot } from "@/lib/copilot-context";
 import { useFacility } from "@/lib/facility-context";
 import { useOrders } from "@/lib/orders-context";
-import { useSession } from "@/lib/session";
+import { COPILOT_FRESH_LOGIN_KEY, useSession } from "@/lib/session";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { apiFetch, streamCopilotMessage, type PatientCandidate } from "@/lib/api";
 import type { CertStatus } from "@/components/CertificationBadge";
@@ -458,6 +458,32 @@ export const ROLE_ACTIONS: Record<string, QuickAction[]> = {
         "Summarise this hospital's AI-assisted decisions over the last 30 days.",
     },
   ],
+};
+
+// Role lists above default to whatever's in view most of the time for that
+// role — drug/patient context for physician/pharmacist/admin, hospital-wide
+// for director. That default is wrong on the Warehouse page: no drug or
+// patient is ever focused there, so "Shortage Brief"/"Find Bio-Equivalent"
+// style actions would fire with nothing to act on. Swap in facility-scoped
+// actions instead when that's what's in view. Reuses the existing
+// hospital/facility-wide actions by reference rather than re-typing their
+// prompts. Director's list is already facility/hospital-wide everywhere, so
+// it needs no override; sku/alert/forecast/patient focus is exactly what the
+// default lists already assume, so those need no override either.
+const byKey = (role: string, key: string) => ROLE_ACTIONS[role].find((a) => a.key === key)!;
+const FACILITY_STOCK_ACTION: QuickAction = {
+  key: "wh_stock",
+  label: "Facility Stock Summary",
+  icon: FileText,
+  prompt: "Summarise stock levels and any at-risk SKUs for the facility currently in context.",
+};
+const WAREHOUSE_ACTIONS: Partial<Record<string, QuickAction[]>> = {
+  physician: [
+    { key: "wh_excursions", label: "Storage Excursions", icon: AlertTriangle, prompt: "Report any storage condition violations or temperature excursions recorded in telemetry for the facility currently in context." },
+    FACILITY_STOCK_ACTION,
+  ],
+  pharmacist: [byKey("pharmacist", "excursions"), byKey("pharmacist", "sweep"), FACILITY_STOCK_ACTION],
+  admin: [byKey("admin", "excursions"), byKey("admin", "sweep")],
 };
 
 function ComplianceChip({ status, codes }: { status?: string; codes?: string[] }) {
@@ -1172,7 +1198,8 @@ export function CopilotDrawer() {
   const { facility } = useFacility();
   const { reload: reloadOrders } = useOrders();
   const role = user?.role ?? "pharmacist";
-  const quickActions = ROLE_ACTIONS[role] ?? ROLE_ACTIONS.pharmacist;
+  const quickActions =
+    (focus?.kind === "warehouse" ? WAREHOUSE_ACTIONS[role] : undefined) ?? ROLE_ACTIONS[role] ?? ROLE_ACTIONS.pharmacist;
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [draft, setDraft] = useState("");
@@ -1186,6 +1213,7 @@ export function CopilotDrawer() {
   const lastHandledNonce = useRef<number | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => streamAbortRef.current?.abort(), []);
+  const freshLoginRef = useRef<boolean | null>(null);
 
   function mapApiMessages(
     items: { id: number; role: string; text: string | null; card?: ResponseCard | null; tool_name?: string | null }[],
@@ -1230,6 +1258,20 @@ export function CopilotDrawer() {
   }
 
   useEffect(() => {
+    // A fresh login should open on a clean greeting, not silently reopen
+    // whoever was signed in before's last conversation (this effect re-runs
+    // on every mount, and logout unmounts the drawer). The flag is one-shot,
+    // consumed here — but React 18 StrictMode double-invokes mount effects
+    // in dev (mount -> cleanup -> mount again), so a plain read-then-remove
+    // right here would clear the flag on the first pass and find nothing on
+    // the second, silently falling through to the restore. The ref survives
+    // that double-invoke (it's the same component instance), so it's read
+    // and removed at most once per real mount regardless of StrictMode.
+    if (freshLoginRef.current === null) {
+      freshLoginRef.current = window.localStorage.getItem(COPILOT_FRESH_LOGIN_KEY) === "1";
+      if (freshLoginRef.current) window.localStorage.removeItem(COPILOT_FRESH_LOGIN_KEY);
+    }
+    const freshLogin = freshLoginRef.current;
     let cancelled = false;
     (async () => {
       try {
@@ -1246,7 +1288,7 @@ export function CopilotDrawer() {
             messages: [],
           })),
         );
-        if (!items[0]) return;
+        if (freshLogin || !items[0]) return;
         const conv = (await apiFetch("copilot", `/conversations/${items[0].id}`)) as {
           id: string;
           items: { id: number; role: string; text: string | null; card?: ResponseCard | null; tool_name?: string | null }[];
@@ -1578,7 +1620,13 @@ export function CopilotDrawer() {
       </div>
 
       <ScrollArea className="min-h-0 flex-1 px-3 py-3">
-        <div className="flex flex-col gap-3" role="log" aria-live="polite" aria-relevant="additions" aria-busy={pending}>
+        {/* Radix's ScrollArea Viewport wraps children in `display:table`, which
+            sizes to its widest content instead of the visible width — long
+            messages would grow past the drawer and get silently clipped by
+            the viewport's overflow:hidden rather than wrapping. `w-full`
+            pins this back to the viewport so `max-w-[92%]` below has an
+            actual width to shrink against. */}
+        <div className="flex w-full min-w-0 flex-col gap-3" role="log" aria-live="polite" aria-relevant="additions" aria-busy={pending}>
           {messages.map((m, idx) => {
             const allCards = m.cards?.length ? m.cards : m.card ? [m.card] : [];
             // Only the last message can be the in-flight reply. Stays true
@@ -1629,14 +1677,14 @@ export function CopilotDrawer() {
                 {m.text && (
                   <div
                     className={cn(
-                      "max-w-[92%] rounded-lg px-3 py-2 text-sm",
+                      "max-w-[92%] min-w-0 rounded-lg px-3 py-2 text-sm break-words",
                       m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted",
                       m.degraded && "border border-amber-500/40",
                     )}
                   >
                     {m.role === "assistant" ? (
                       m.degraded ? (
-                        <p className="flex items-start gap-1.5 text-sm leading-relaxed text-muted-foreground">
+                        <p className="flex items-start gap-1.5 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
                           <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
                           {m.text}
                         </p>
@@ -1646,7 +1694,7 @@ export function CopilotDrawer() {
                         <StreamingText text={m.text} />
                       )
                     ) : (
-                      m.text
+                      <span className="whitespace-pre-wrap">{m.text}</span>
                     )}
                   </div>
                 )}

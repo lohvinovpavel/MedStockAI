@@ -519,3 +519,15 @@
   0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
   40% { transform: translateY(-3px); opacity: 1; }
 }
+
+/* Radix ScrollArea (components/ui/scroll-area.tsx, used by the Copilot chat
+ * log) wraps its children in an internal div it renders itself — not
+ * reachable via className — with an inline `display:table; min-width:100%`.
+ * A table sizes to its widest content instead of the visible viewport, so a
+ * long chat message grows the whole scroll area sideways and the excess is
+ * just clipped by the viewport's overflow:hidden instead of wrapping. Only
+ * a stylesheet rule can win against that inline style, hence !important. */
+[data-radix-scroll-area-viewport] > div {
+  display: block !important;
+  min-width: 0 !important;
+}

@@ -631,8 +631,12 @@ export default function InventoryPage() {
   const certNdcs = useMemo(() => items.map((i) => i.ndc).filter(Boolean), [items]);
   const certification = useCertificationStatuses(certNdcs);
 
-  const certFor = (item: ShelfItem): CertResult | undefined =>
-    item.ndc ? certification[item.ndc] : { status: "unknown", reasons: 0 };
+  // Mirrors CertificationBadge's own fallback: no ndc to look up is "unknown",
+  // an ndc whose result hasn't arrived (or failed) is "unavailable" — not the
+  // same bucket, or the two filters collide (see cert filter below).
+  const certFor = (item: ShelfItem): CertResult =>
+    (item.ndc ? certification[item.ndc] : undefined) ??
+    { status: item.ndc ? "unavailable" : "unknown", reasons: 0 };
 
   const kpis = useMemo(() => {
     return {
@@ -653,7 +657,7 @@ export default function InventoryPage() {
     return items.filter((item) => {
       if (!itemMatchesInventoryQuery(item, search, rxcuiNdcs)) return false;
       if (status !== "all" && item.status !== status) return false;
-      if (certStatus !== "all" && (certFor(item)?.status ?? "unknown") !== certStatus) return false;
+      if (certStatus !== "all" && certFor(item).status !== certStatus) return false;
       if (range?.from && item.earliest_expiry) {
         const expiry = new Date(item.earliest_expiry);
         if (expiry < range.from) return false;
@@ -719,83 +723,85 @@ export default function InventoryPage() {
         <StatTile icon={ShieldAlert} label="Certification alerts" value={kpis.certAlerts} tone="warning" />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Filter by name, NDC, or analogue…"
-            className="h-8 w-80 pl-8 text-xs"
-          />
-        </div>
-        {search.trim() || rxcuiFilter ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs"
-            onClick={() => {
-              setSearch("");
-              clearInventoryDeepLink();
-            }}
-          >
-            Clear filter
-          </Button>
-        ) : null}
-
-        <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
-          <SelectTrigger size="sm" className="h-8 w-36 text-xs">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">All statuses</SelectItem>
-              <SelectItem value="stockout">Stockout</SelectItem>
-              <SelectItem value="critical">Critical</SelectItem>
-              <SelectItem value="normal">Normal</SelectItem>
-              <SelectItem value="surplus">Surplus</SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-
-        <Select value={certStatus} onValueChange={(v) => setCertStatus(v as typeof certStatus)}>
-          <SelectTrigger size="sm" className="h-8 w-40 text-xs">
-            <SelectValue placeholder="Certificate" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">All certificates</SelectItem>
-              {(Object.keys(CERT_LABELS) as CertStatus[]).map((s) => (
-                <SelectItem key={s} value={s}>{CERT_LABELS[s]}</SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs font-normal">
-              <CalendarIcon className="size-3.5" />
-              {range?.from ? (range.to ? `${range.from.toLocaleDateString()} – ${range.to.toLocaleDateString()}` : range.from.toLocaleDateString()) : "Expiry date range"}
-              <ChevronDown className="size-3.5 text-muted-foreground" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar mode="range" selected={range} onSelect={setRange} numberOfMonths={2} />
-            {range?.from && (
-              <div className="border-t p-2">
-                <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={() => setRange(undefined)}>Clear</Button>
-              </div>
-            )}
-          </PopoverContent>
-        </Popover>
-
-        {can(user?.role, "receiveBatch") && (
-          <div className="ml-auto">
-            <ReceiveBatchDialog items={items} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Filter by name, NDC, or analogue…"
+              className="h-8 w-80 pl-8 text-xs"
+            />
           </div>
-        )}
+          {search.trim() || rxcuiFilter ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => {
+                setSearch("");
+                clearInventoryDeepLink();
+              }}
+            >
+              Clear filter
+            </Button>
+          ) : null}
+
+          <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+            <SelectTrigger size="sm" className="h-8 w-36 text-xs">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="stockout">Stockout</SelectItem>
+                <SelectItem value="critical">Critical</SelectItem>
+                <SelectItem value="normal">Normal</SelectItem>
+                <SelectItem value="surplus">Surplus</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+
+          <Select value={certStatus} onValueChange={(v) => setCertStatus(v as typeof certStatus)}>
+            <SelectTrigger size="sm" className="h-8 w-40 text-xs">
+              <SelectValue placeholder="Certificate" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">All certificates</SelectItem>
+                {(Object.keys(CERT_LABELS) as CertStatus[]).map((s) => (
+                  <SelectItem key={s} value={s}>{CERT_LABELS[s]}</SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs font-normal">
+                <CalendarIcon className="size-3.5" />
+                {range?.from ? (range.to ? `${range.from.toLocaleDateString()} – ${range.to.toLocaleDateString()}` : range.from.toLocaleDateString()) : "Expiry date range"}
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar mode="range" selected={range} onSelect={setRange} numberOfMonths={2} />
+              {range?.from && (
+                <div className="border-t p-2">
+                  <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={() => setRange(undefined)}>Clear</Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        </div>
+
+        {/* A sibling of the filter group (not ml-auto inside one flex row) so
+            that when the AI drawer narrows this page and the row wraps, this
+            button lands at the start of its own line instead of pinned to
+            the far right with a large empty gap above it. */}
+        {can(user?.role, "receiveBatch") && <ReceiveBatchDialog items={items} />}
       </div>
 
       <p className="text-[11px] text-muted-foreground">
