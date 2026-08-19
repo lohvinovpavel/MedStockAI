@@ -21,6 +21,11 @@ permission and runs the tool in a threadpool -- see that module for why
 
 `draft_order` is the only writing tool and always creates `status: draft`
 (I1). Nothing here places, cancels, or deletes an order.
+
+`settings.copilot_graph_enabled` switches the whole route to `_run_turn_graph`
+(`.graph`, docs/ai_workflows_migration_plan.md Phase 2) instead of the
+`_run_turn` loop below. Same SSE contract either way -- see `.graph`'s module
+docstring for what's ported and what isn't yet.
 """
 
 import json
@@ -32,6 +37,8 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from google.genai import types
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.errors import GraphRecursionError
 from medstock_shared.ai import client, shared_breaker, write_audit
 from medstock_shared.ai.cards import card_for
 from medstock_shared.ai.tools import ToolDenied, declarations_for, denied_tools_for, execute
@@ -40,6 +47,8 @@ from medstock_shared.config import settings
 from medstock_shared.patient_assess import PatientAmbiguous
 from pydantic import BaseModel
 
+from .graph import BreakerOpen, RuntimeCtx, build_graph, extract_text_delta
+
 copilot = APIRouter()
 _log = logging.getLogger("analogue.copilot")
 
@@ -47,6 +56,12 @@ _log = logging.getLogger("analogue.copilot")
 # this bounds the loop so a model that never stops calling tools can't hold
 # the connection open forever.
 _MAX_TOOL_ROUNDS = 6
+
+# LangGraph path (docs/ai_workflows_migration_plan.md §4.1): a recursion
+# limit bounds agent<->tools supersteps, not tool-call rounds directly, so
+# it is set roughly double _MAX_TOOL_ROUNDS to bound to the same real number
+# of tool rounds (each round is one "agent" + one "tools" superstep).
+_GRAPH_RECURSION_LIMIT = 12
 
 # All four roles share this one endpoint (PERMS in medstock_shared.auth), and
 # a physician asking "can I prescribe X" is not a pharmacist -- a prompt that
@@ -289,10 +304,98 @@ async def _run_turn(messages: list[ChatMessage], principal: Principal) -> AsyncI
     yield _sse("done", {"request_id": request_id})
 
 
+async def _run_turn_graph(messages: list[ChatMessage], principal: Principal) -> AsyncIterator[str]:
+    """LangGraph path (docs/ai_workflows_migration_plan.md Phase 2), gated by
+    `settings.copilot_graph_enabled`. Same SSE contract as `_run_turn` above
+    -- this function only differs in how it produces the frames, not which
+    frames it produces or what they carry, per §4.4 and §7 Phase 2's exit
+    criteria (byte-compatible frames)."""
+    request_id = uuid.uuid4().hex
+    started = time.monotonic()
+    tools_called: list[dict] = []
+
+    if not _ai_available():
+        yield _sse("degraded", {
+            "reason": "AI assistant is not configured. Deterministic search and "
+                       "compliance lookups still work from the regular pages.",
+        })
+        yield _sse("done", {"request_id": request_id})
+        return
+
+    lc_messages = [
+        AIMessage(content=m.text) if m.role == "model" else HumanMessage(content=m.text) for m in messages
+    ]
+    ctx = RuntimeCtx(
+        principal=principal,
+        request_id=request_id,
+        system_instruction=_system_instruction_for(principal),
+    )
+    graph = build_graph(principal.role)
+    config = {"configurable": {"thread_id": request_id}, "recursion_limit": _GRAPH_RECURSION_LIMIT}
+
+    outcome = "live"
+    try:
+        async for mode, payload in graph.astream(
+            {"messages": lc_messages}, context=ctx, config=config, stream_mode=["messages", "custom"]
+        ):
+            if mode == "messages":
+                chunk, meta = payload
+                # Only the "agent" node's tokens reach the user (§4.4) -- in
+                # Phase 2 that is every node that talks to the model, since
+                # the supervisor/specialist split is Phase 4.
+                if meta.get("langgraph_node") != "agent":
+                    continue
+                text = extract_text_delta(chunk.content)
+                if text:
+                    yield _sse("delta", {"text": text})
+                continue
+
+            event, data = payload["event"], payload["data"]
+            if event == "tool_end":
+                tools_called.append({"name": data["name"], "ok": data["ok"], **(
+                    {"error": data["error"]} if "error" in data else {}
+                )})
+            elif event == "patient_disambiguation":
+                outcome = "disambiguation"
+            yield _sse(event, data)
+            if event == "patient_disambiguation":
+                # Same short-circuit as the legacy loop's PatientAmbiguous
+                # branch: the turn ends here, the model is never re-invoked.
+                _write_copilot_audit(principal, request_id, outcome, started, tools_called)
+                yield _sse("done", {"request_id": request_id})
+                return
+    except BreakerOpen:
+        yield _sse("degraded", {
+            "reason": "AI assistant temporarily unavailable — too many recent failures, "
+                      "retrying automatically shortly.",
+        })
+        _write_copilot_audit(principal, request_id, "breaker_open", started, tools_called)
+        yield _sse("done", {"request_id": request_id})
+        return
+    except GraphRecursionError:
+        yield _sse("degraded", {"reason": "too many tool calls in one turn"})
+        _write_copilot_audit(principal, request_id, "error", started, tools_called)
+        yield _sse("done", {"request_id": request_id})
+        return
+    except Exception:  # noqa: BLE001 -- any Gemini/network failure degrades this turn, same as _run_turn
+        _log.exception("copilot graph turn failed request_id=%s", request_id)
+        yield _sse("degraded", {
+            "reason": "AI assistant temporarily unavailable — the last request to Gemini "
+                      "failed. Check server logs for details.",
+        })
+        _write_copilot_audit(principal, request_id, "error", started, tools_called)
+        yield _sse("done", {"request_id": request_id})
+        return
+
+    _write_copilot_audit(principal, request_id, outcome, started, tools_called)
+    yield _sse("done", {"request_id": request_id})
+
+
 @copilot.post("/copilot/chat")
 @copilot.post("/chat")
 async def copilot_chat(
     body: ChatRequest,
     principal: Principal = Depends(require("copilot:chat")),
 ) -> StreamingResponse:
-    return StreamingResponse(_run_turn(body.messages, principal), media_type="text/event-stream")
+    turn = _run_turn_graph if settings.copilot_graph_enabled else _run_turn
+    return StreamingResponse(turn(body.messages, principal), media_type="text/event-stream")
