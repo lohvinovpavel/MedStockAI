@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { PatientPicker } from "@/components/dashboard/PatientPicker";
 import { ImpactWindow } from "@/components/ImpactWindow";
+import { AnatomyImpact, type OrganImpact } from "@/components/AnatomyImpact";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -666,10 +667,23 @@ export function PrescriptionCart() {
                 {selectedPatient.blood_group ?? "—"}
               </p>
             )}
-            {/* Opened deliberately rather than pinned open: a physician asks
-                "show me the impact", they do not need a body on screen while
-                they type a drug name. Disabled with an empty cart, because a
-                regimen of nothing has no impact to show. */}
+            {/* On the card itself, so the shape of the risk is visible without
+                anyone asking for it. Only once there is something to show: an
+                empty body on a fresh cart reads as "checked and clear", which
+                is not the same as "nothing assessed yet". */}
+            {selectedPatient && regimenOrgans.length > 0 && (
+              <div className="rounded-md border bg-muted/30 p-2">
+                <AnatomyImpact
+                  organs={regimenOrgans}
+                  unmapped={regimenUnmapped}
+                  sex={patientSex}
+                  height={150}
+                  dense
+                />
+              </div>
+            )}
+            {/* The window behind it carries the reasons and the per-drug
+                breakdown -- detail the card has no room for. */}
             {selectedPatient && (
               <ImpactWindow
                 patientName={selectedPatient.full_name}

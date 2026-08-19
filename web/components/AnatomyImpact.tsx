@@ -143,6 +143,7 @@ export function AnatomyImpact({
   sex,
   title,
   height = 420,
+  dense = false,
 }: {
   organs: OrganImpact[];
   unmapped?: string[];
@@ -150,6 +151,10 @@ export function AnatomyImpact({
   sex?: string | null;
   title?: string;
   height?: number;
+  /** Card mode: figure + chips only. The reasons live in the window this
+   *  summary sits above, so repeating them here would crowd a sidebar and say
+   *  nothing new. */
+  dense?: boolean;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
   const { template, known } = templateFor(sex);
@@ -158,6 +163,46 @@ export function AnatomyImpact({
   // rather than dropped, for the same reason `unmapped` is: a reader counts
   // what is marked and believes they have seen everything.
   const unplaced = organs.filter((o) => !template.anchors[o.organ]).map((o) => o.organ);
+
+  if (dense) {
+    return (
+      <div className="flex items-start gap-3">
+        <Figure
+          template={template}
+          organs={organs}
+          hovered={hovered}
+          setHovered={setHovered}
+          height={height}
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          {organs.length === 0 ? (
+            <span className="text-[11px] text-muted-foreground">
+              No organ findings
+            </span>
+          ) : (
+            organs.map((o) => {
+              const sev = SEVERITY[o.severity];
+              return (
+                <span
+                  key={o.organ}
+                  onMouseEnter={() => setHovered(o.organ)}
+                  onMouseLeave={() => setHovered(null)}
+                  className={`truncate rounded border px-1.5 py-0.5 text-[10px] ${sev.badge}`}
+                >
+                  {ORGAN_LABEL[o.organ] ?? o.organ} · {sev.label}
+                </span>
+              );
+            })
+          )}
+          {unmapped.length > 0 && (
+            <span className="text-[10px] text-muted-foreground">
+              +{unmapped.length} not organ-specific
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
