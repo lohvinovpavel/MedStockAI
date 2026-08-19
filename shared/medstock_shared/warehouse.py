@@ -29,8 +29,12 @@ def excursions(session: Session, facility_id: int | str | None = None) -> list[d
                     | (Facility.name.ilike(f"%{facility_id}%"))
                 )
             ).scalars().first()
-            if fac_row is not None:
-                facility_id = fac_row
+            # An unresolved name/code (e.g. the model passed a location like
+            # "fridge-1" instead of a facility) must fall back to "no filter",
+            # same as an omitted facility_id -- leaving the raw string here
+            # would compare Facility.id (int) to text below, match nothing,
+            # and silently report a clean result instead of an unfiltered one.
+            facility_id = fac_row
 
     temp_breach = or_(
         LocationCondition.temperature_c < Drug.storage_min_c,

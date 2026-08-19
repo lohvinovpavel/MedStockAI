@@ -63,12 +63,14 @@ import { Badge } from "@/components/ui/badge";
 import { StatTile } from "@/components/dashboard/StatTile";
 import { SortableHead, nextSortState, compareValues, type SortState } from "@/components/dashboard/SortableHead";
 import {
+  CERT_LABELS,
   CertificationBadge,
   recheckCertification,
   useCertificateDetail,
   useCertificationStatuses,
   useRuleset,
   type CertResult,
+  type CertStatus,
 } from "@/components/CertificationBadge";
 import { explainCertification, exploreStance, gatesFor, type Gate } from "@/lib/certification";
 import { apiFetch } from "@/lib/api";
@@ -585,7 +587,7 @@ function CertificateDialog({
 
 export default function InventoryPage() {
   const router = useRouter();
-  const { setFocus } = useCopilot();
+  const { setFocus, setOpen: setCopilotOpen } = useCopilot();
   const { user } = useSession();
   const { facility } = useFacility();
   const { items, loading, error } = useInventory();
@@ -593,6 +595,7 @@ export default function InventoryPage() {
   const [rxcuiFilter, setRxcuiFilter] = useState<string | null>(null);
   const [rxcuiNdcs, setRxcuiNdcs] = useState<Set<string> | null>(null);
   const [status, setStatus] = useState<"all" | ShelfStatus>("all");
+  const [certStatus, setCertStatus] = useState<"all" | CertStatus>("all");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [certItem, setCertItem] = useState<{ drugName: string; ndc: string } | null>(null);
@@ -650,6 +653,7 @@ export default function InventoryPage() {
     return items.filter((item) => {
       if (!itemMatchesInventoryQuery(item, search, rxcuiNdcs)) return false;
       if (status !== "all" && item.status !== status) return false;
+      if (certStatus !== "all" && (certFor(item)?.status ?? "unknown") !== certStatus) return false;
       if (range?.from && item.earliest_expiry) {
         const expiry = new Date(item.earliest_expiry);
         if (expiry < range.from) return false;
@@ -659,7 +663,7 @@ export default function InventoryPage() {
       }
       return true;
     });
-  }, [items, search, rxcuiNdcs, status, range]);
+  }, [items, search, rxcuiNdcs, status, certStatus, certification, range]);
 
   function clearInventoryDeepLink() {
     if (!rxcuiFilter && !window.location.search) return;
@@ -692,6 +696,9 @@ export default function InventoryPage() {
         ndc: item.ndc,
         rxcui: item.rxcui ?? null,
       });
+      // Selecting a row is the user asking the assistant about this SKU —
+      // don't make them also hunt for the collapsed drawer toggle.
+      setCopilotOpen(true);
     }
   }
 
@@ -748,6 +755,20 @@ export default function InventoryPage() {
               <SelectItem value="critical">Critical</SelectItem>
               <SelectItem value="normal">Normal</SelectItem>
               <SelectItem value="surplus">Surplus</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+
+        <Select value={certStatus} onValueChange={(v) => setCertStatus(v as typeof certStatus)}>
+          <SelectTrigger size="sm" className="h-8 w-40 text-xs">
+            <SelectValue placeholder="Certificate" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="all">All certificates</SelectItem>
+              {(Object.keys(CERT_LABELS) as CertStatus[]).map((s) => (
+                <SelectItem key={s} value={s}>{CERT_LABELS[s]}</SelectItem>
+              ))}
             </SelectGroup>
           </SelectContent>
         </Select>
