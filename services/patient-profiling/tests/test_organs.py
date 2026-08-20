@@ -118,6 +118,109 @@ def test_only_population_signals_read_the_message():
     assert organs_for_finding("ADR_SIGNAL", "hepatic failure") == ("liver",)
 
 
+def test_an_avoided_ingredient_shades_the_ingredients_organ():
+    """The advisory names an ingredient, not a reaction, and caffeine is a
+    stimulant: it must reach the heart and the brain, not draw nothing. This is
+    the 'avoid caffeine does not work' gap -- the finding badged the line but
+    left the figure blank because it was in no organ table."""
+    message = "Patient profile flags 'caffeine' — this drug contains caffeine"
+    assert organs_for_finding("AVOIDED_INGREDIENT", message) == ("heart", "brain")
+
+
+def test_an_avoided_ingredient_with_no_organ_entry_is_reported_not_guessed():
+    """An ingredient with no line in INGREDIENT_ORGANS is unmapped, not shaded
+    somewhere plausible -- the same honesty the reaction table keeps."""
+    got, unmapped = impacts(
+        [f("AVOIDED_INGREDIENT", "this drug contains sorbitol", 0, Severity.LOW)]
+    )
+    assert got == []
+    assert unmapped == ["AVOIDED_INGREDIENT"]
+
+
+def test_an_avoided_caffeine_finding_shades_through_impacts():
+    """End to end through impacts(), the shape the cart figure consumes."""
+    got, unmapped = impacts(
+        [f("AVOIDED_INGREDIENT", "this drug contains caffeine", 0, Severity.LOW)]
+    )
+    assert {i.organ for i in got} == {"heart", "brain"}
+    assert unmapped == []
+
+
+# --- the model-backed organ fallback -----------------------------------------
+
+
+def test_the_llm_places_a_reaction_the_tables_miss():
+    """A rare reaction word REACTION_ORGANS has no line for is sent to the
+    fallback, and a valid organ comes back shaded rather than unmapped."""
+    got, unmapped = impacts(
+        [f("ADR_SIGNAL", "toxic epidermal necrolysis", 8, Severity.HIGH)],
+        infer_organs=lambda _msg: ("skin",),
+    )
+    assert {i.organ for i in got} == {"skin"}
+    assert unmapped == []
+
+
+def test_the_llm_is_only_asked_for_prose_carrying_codes():
+    """A code deliberately mapped to 'no single organ' is a design decision, not
+    a gap: the fallback must never be consulted for it, or the figure would
+    guess an organ the ruleset refused to name."""
+    calls: list[str] = []
+
+    def spy(msg):
+        calls.append(msg)
+        return ("liver",)
+
+    got, unmapped = impacts(
+        [f("NARROW_THERAPEUTIC_INDEX", "narrow index", 10)], infer_organs=spy
+    )
+    assert got == []
+    assert unmapped == ["NARROW_THERAPEUTIC_INDEX"]
+    assert calls == []  # never sent to the model
+
+
+def test_the_llm_is_not_asked_when_the_tables_already_placed_it():
+    """The deterministic path wins: a reaction the substring table catches must
+    not spend a model call."""
+    calls: list[str] = []
+
+    def spy(msg):
+        calls.append(msg)
+        return ("brain",)
+
+    got, _ = impacts([f("ADR_SIGNAL", "hepatic failure", 8)], infer_organs=spy)
+    assert {i.organ for i in got} == {"liver"}  # from REACTION_ORGANS, not the spy
+    assert calls == []
+
+
+def test_an_empty_llm_answer_leaves_the_finding_unmapped():
+    """The fallback declining is the same as before it existed: reported, not
+    shaded somewhere plausible."""
+    got, unmapped = impacts(
+        [f("ADR_SIGNAL", "some unplaceable effect", 8)], infer_organs=lambda _m: ()
+    )
+    assert got == []
+    assert unmapped == ["ADR_SIGNAL"]
+
+
+def test_an_off_list_organ_from_the_llm_is_dropped():
+    """impacts() filters the fallback to drawable organs, so a body part the
+    figure has no anchor for cannot be shaded even if the model returns it."""
+    got, unmapped = impacts(
+        [f("ADR_SIGNAL", "odd effect", 8)],
+        infer_organs=lambda _m: ("pineal_gland", "liver"),
+    )
+    assert {i.organ for i in got} == {"liver"}
+    assert unmapped == []
+
+
+def test_without_a_resolver_behaviour_is_unchanged():
+    """The fallback is opt-in: no resolver, and an unplaceable reaction is
+    unmapped exactly as it always was."""
+    got, unmapped = impacts([f("ADR_SIGNAL", "some unplaceable effect", 8)])
+    assert got == []
+    assert unmapped == ["ADR_SIGNAL"]
+
+
 # --- aggregation --------------------------------------------------------------
 
 

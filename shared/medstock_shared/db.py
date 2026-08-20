@@ -5,9 +5,9 @@ Every request opens a transaction and declares who it is acting as; RLS policies
 read those settings. The app role has no BYPASSRLS and does not own the tables.
 """
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker

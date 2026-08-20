@@ -536,3 +536,78 @@ def test_therapeutic_scd_sbd_empty_class_is_valid(monkeypatch):
     rx._CACHE.clear()
     monkeypatch.setattr(rx, "_get", lambda path, params=None: {})
     assert therapeutic_scd_sbd("212033") == []
+
+
+def _byrxcui(*classes):
+    """A byRxcui.json payload from (classId, relaSource) pairs."""
+    return {
+        "rxclassDrugInfoList": {
+            "rxclassDrugInfo": [
+                {
+                    "minConcept": {"rxcui": "src", "name": "x", "tty": "SCD"},
+                    "rxclassMinConceptItem": {
+                        "classId": class_id,
+                        "className": class_id,
+                        "classType": "ATC1-4",
+                    },
+                    "rela": "",
+                    "relaSource": rela_source,
+                }
+                for class_id, rela_source in classes
+            ]
+        }
+    }
+
+
+def test_atc_prefixes_truncates_to_the_group(monkeypatch):
+    """Level-2 (3-char) prefixes are the therapeutic main group. A drug in two
+    ATC classes contributes both, deduped once truncated."""
+    from medstock_shared import rxnorm as rx
+
+    rx._CACHE.clear()
+    monkeypatch.setattr(
+        rx, "_get", lambda path, params=None: _byrxcui(("A10BA02", "ATC"), ("A10BJ06", "ATCPROD"))
+    )
+    assert rx.atc_prefixes("861007") == frozenset({"A10"})
+
+
+def test_atc_prefixes_ignores_non_atc_sources(monkeypatch):
+    """VA/MESHPA classes are not ATC codes and must not be truncated as if they
+    were -- only ATC-sourced classes count toward the group."""
+    from medstock_shared import rxnorm as rx
+
+    rx._CACHE.clear()
+    monkeypatch.setattr(
+        rx, "_get", lambda path, params=None: _byrxcui(("J01CA04", "ATC"), ("CN103", "VA"))
+    )
+    assert rx.atc_prefixes("308191") == frozenset({"J01"})
+
+
+def test_atc_prefixes_empty_without_atc(monkeypatch):
+    from medstock_shared import rxnorm as rx
+
+    rx._CACHE.clear()
+    monkeypatch.setattr(rx, "_get", lambda path, params=None: _byrxcui(("CN103", "VA")))
+    assert rx.atc_prefixes("212033") == frozenset()
+
+
+def test_primary_atc_prefix_uses_only_the_dominant_group(monkeypatch):
+    """Amoxicillin carries a secondary A02 code (H. pylori combination therapy);
+    its dominant group is still the antibacterial J01. primary_atc_prefix must
+    pick the one, so a PPI is never offered as an antibiotic substitute."""
+    from medstock_shared import rxnorm as rx
+
+    rx._CACHE.clear()
+    # ATCPROD ranks first in _ranked_classes, so the dominant group is J01.
+    monkeypatch.setattr(
+        rx, "_get", lambda path, params=None: _byrxcui(("J01CA04", "ATCPROD"), ("A02BD", "ATC"))
+    )
+    assert rx.primary_atc_prefix("308191") == "J01"
+
+
+def test_primary_atc_prefix_none_without_atc(monkeypatch):
+    from medstock_shared import rxnorm as rx
+
+    rx._CACHE.clear()
+    monkeypatch.setattr(rx, "_get", lambda path, params=None: _byrxcui(("CN103", "VA")))
+    assert rx.primary_atc_prefix("212033") is None

@@ -17,21 +17,23 @@
  * independent of how large the organ looks in the artwork. A high kidney reads
  * as urgent whether or not it is small.
  *
- * The figure is anatomical context, not a picture of the patient. It is chosen
- * by recorded sex and captioned when that is unknown.
+ * The figure is anatomical context, not a picture of the patient — one neutral
+ * frame for everybody. It used to be picked by recorded sex, which bought no
+ * accuracy (viscera sit the same either way at this scale) and cost a caption
+ * apologising for a guessed body whenever sex was unrecorded.
  */
 
 import { useState } from "react";
 import {
   ANATOMY_CREDIT,
   ORGAN_RADIUS,
-  templateFor,
+  anatomyFigure,
   type AnatomyTemplate,
 } from "@/lib/anatomy";
 
 export type OrganImpact = {
   organ: string;
-  severity: "block" | "high" | "moderate" | "low";
+  severity: "block" | "high" | "moderate" | "low" | "info";
   weight: number;
   reasons: string[];
 };
@@ -54,6 +56,13 @@ const SEVERITY = {
   high: { ring: "#1D4ED8", wash: "#2563EB", label: "High", badge: "bg-red-100 text-red-900 border-red-300" },
   moderate: { ring: "#2563EB", wash: "#3B82F6", label: "Moderate", badge: "bg-amber-100 text-amber-900 border-amber-300" },
   low: { ring: "#60A5FA", wash: "#93C5FD", label: "Low", badge: "bg-yellow-100 text-yellow-900 border-yellow-300" },
+  // Not a severity: "nobody could check this organ". The ruleset emits INFO for
+  // RENAL_UNKNOWN and HEPATIC_UNKNOWN, and the tier was simply missing here --
+  // `SEVERITY[severity]` came back undefined and the marker threw rather than
+  // drawing. Grey and hollow (see strokeDasharray below) so it cannot be read
+  // as a mild version of the blue scale: an unchecked kidney is a gap in the
+  // assessment, not a small amount of harm.
+  info: { ring: "#94A3B8", wash: "#CBD5E1", label: "Not assessed", badge: "bg-slate-100 text-slate-700 border-slate-300" },
 } as const;
 
 const ORGAN_LABEL: Record<string, string> = {
@@ -106,6 +115,24 @@ function Figure({
         className="absolute inset-0 h-full w-full select-none object-contain"
         draggable={false}
       />
+      {/* The template artwork carries a drawn face. This figure is a neutral
+          anatomical frame, not a depiction of the patient, so the head is
+          blurred out: a second copy of the same image, clipped to an ellipse
+          over the face and Gaussian-blurred, sits exactly on top. The ellipse
+          is placed in fractions of the container, which shares the template's
+          proportions, so it tracks the head at any size. Every shaded organ is
+          thoracic or abdominal, so nothing informative is touched, and the
+          organ overlay below is drawn after this, so a neck-high thyroid mark
+          still renders crisply. aria-hidden: it adds no information. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={template.src}
+        alt=""
+        aria-hidden
+        className="absolute inset-0 h-full w-full select-none object-contain"
+        draggable={false}
+        style={{ clipPath: "ellipse(8% 5.5% at 49.2% 8.5%)", filter: "blur(7px)" }}
+      />
       {/* The overlay shares the template's viewBox, so anchors are used as-is —
           no scaling maths, and nothing to drift when the figure is resized. */}
       <svg
@@ -141,7 +168,8 @@ function Figure({
                 r={r}
                 fill="none"
                 stroke={s.ring}
-                strokeWidth={m.severity === "low" ? 5 : 8}
+                strokeWidth={m.severity === "low" || m.severity === "info" ? 5 : 8}
+              strokeDasharray={m.severity === "info" ? "10 8" : undefined}
                 strokeOpacity={0.95}
               />
               {hovered === m.organ && (
@@ -158,15 +186,12 @@ function Figure({
 export function AnatomyImpact({
   organs,
   unmapped = [],
-  sex,
   title,
   height = 420,
   dense = false,
 }: {
   organs: OrganImpact[];
   unmapped?: string[];
-  /** "F" | "M"; anything else draws a frame and says the sex is unrecorded. */
-  sex?: string | null;
   title?: string;
   height?: number;
   /** Card mode: figure + chips only. The reasons live in the window this
@@ -175,7 +200,7 @@ export function AnatomyImpact({
   dense?: boolean;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const { template, known } = templateFor(sex);
+  const template = anatomyFigure();
 
   // Organs the mapping produced but this template has no anchor for. Surfaced
   // rather than dropped, for the same reason `unmapped` is: a reader counts
@@ -298,12 +323,6 @@ export function AnatomyImpact({
             <p className="text-xs text-amber-700 dark:text-amber-400">
               No position on this figure for: {unplaced.join(", ")}. Listed above
               but not marked.
-            </p>
-          )}
-          {!known && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sex not recorded; showing the {template.label} figure as anatomical
-              context only.
             </p>
           )}
           <p className="pt-1 text-[11px] text-slate-400 dark:text-slate-500">

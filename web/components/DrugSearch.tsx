@@ -48,7 +48,7 @@ export function DrugSearch({ initialQuery = "" }: { initialQuery?: string }) {
     setPackages(null);
     setSourceStock(null);
     try {
-      const body = await apiFetch("analogue", `/drugs/search?q=${encodeURIComponent(q)}&limit=20`);
+      const body = await apiFetch("analogue", `/drugs/search?q=${encodeURIComponent(q)}&limit=8`);
       setItems(body.items as DrugIdentity[]);
     } catch (err) {
       setItems(null);

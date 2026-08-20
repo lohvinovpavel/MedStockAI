@@ -205,6 +205,50 @@ function saveCart(state: CartState) {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+/**
+ * Per-patient drafts, so switching patients does not carry a regimen across.
+ *
+ * The cart used to be a single object with a `patientId` field, and selecting a
+ * different patient swapped only that field. The lines stayed. Whoever was
+ * picked second inherited the first patient's prescription, silently, and the
+ * assessment beneath it re-ran against the new patient's profile -- so the
+ * screen showed a plausible, fully-scored regimen that nobody had written for
+ * that person. On a prescribing surface that is the worst kind of bug: it does
+ * not look like an error, it looks like a decision.
+ *
+ * Drafts live beside the active cart rather than inside it so an interrupted
+ * session comes back to what was being typed. sessionStorage, matching the
+ * cart: a draft prescription is not something to leave on a shared clinical
+ * workstation after the tab closes.
+ */
+const DRAFTS_KEY = "medstock-prescribe-drafts";
+
+function loadDrafts(): Record<string, CartItem[]> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(DRAFTS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDraft(patientId: string, items: CartItem[]) {
+  if (typeof window === "undefined") return;
+  const drafts = loadDrafts();
+  // An empty cart is a deletion, not a draft worth keeping: leaving `[]` behind
+  // would grow the store with one key per patient ever opened.
+  if (items.length === 0) delete drafts[patientId];
+  else drafts[patientId] = items;
+  sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+}
+
+function draftFor(patientId: string | null): CartItem[] {
+  if (!patientId) return [];
+  const items = loadDrafts()[patientId];
+  return Array.isArray(items) ? items : [];
+}
+
 function codesToInput(codes: string[]) {
   return codes.join(", ");
 }
@@ -251,9 +295,6 @@ export function PrescriptionCart() {
   const [analogueUsedAi, setAnalogueUsedAi] = useState(false);
   const [analogueRationaleUnavailable, setAnalogueRationaleUnavailable] =
     useState(false);
-  // The figure the analogue view draws. Null until an assessment returns it,
-  // and the component says so rather than assuming a sex.
-  const [patientSex, setPatientSex] = useState<string | null>(null);
   // The whole regimen on one body, as opposed to each line separately. Comes
   // from /cart-check rather than being summed here: the union is a clinical
   // claim, and a front-end that derived it could drift from what was logged.
@@ -265,6 +306,11 @@ export function PrescriptionCart() {
   // Distinct from an empty verdict map: "not assessed" and "assessed, nothing
   // found" must not render the same, or a failed check looks like a clean bill.
   const [analogueCheckFailed, setAnalogueCheckFailed] = useState(false);
+  // Candidates assessed as contraindicated for this patient. Kept out of the
+  // proposed list -- the tool must not offer a swap it has just ruled unsafe --
+  // but shown, so "considered and ruled out" is visible rather than a silent
+  // drop that hides an obvious substitute was looked at.
+  const [analogueRuledOut, setAnalogueRuledOut] = useState<AnalogueHit[]>([]);
 
   const [prescription, setPrescription] = useState<PrescriptionSnapshot | null>(null);
 
@@ -277,6 +323,39 @@ export function PrescriptionCart() {
     if (!hydrated) return;
     saveCart(cart);
   }, [cart, hydrated]);
+
+  /**
+   * Move to another patient: bank the current regimen, open theirs.
+   *
+   * The clearing below is the substance of it. Every piece of state named here
+   * is an *assessment of a particular person* — verdicts, organ burden,
+   * substitute rankings — and none of it is recomputed until the pharmacist
+   * presses Check. Leaving any of it on screen means the new patient's card
+   * displays the previous patient's clinical conclusions, which is precisely
+   * the confusion this screen exists to prevent. Erring toward a blank card is
+   * safe; erring toward a stale one is not.
+   */
+  function switchPatient(picked: Patient | null) {
+    setCart((prev) => {
+      if (prev.patientId) saveDraft(prev.patientId, prev.items);
+      return { patientId: picked?.id ?? null, items: draftFor(picked?.id ?? null) };
+    });
+    setSelectedPatient(picked);
+
+    setCheckResults([]);
+    setCheckError(null);
+    setRegimenOrgans([]);
+    setRegimenUnmapped([]);
+    setAnalogues([]);
+    setAnalogueError(null);
+    setAnalogueUsedAi(false);
+    setAnalogueRationaleUnavailable(false);
+    setAnalogueVerdicts(new Map());
+    setAnalogueCheckFailed(false);
+    setAnalogueRuledOut([]);
+    setOpenWarningFor(null);
+    setPrescription(null);
+  }
 
   const { setFocus } = useCopilot();
 
@@ -370,7 +449,6 @@ export function PrescriptionCart() {
           setCheckResults(data.results ?? []);
           setRegimenOrgans(data.regimen_organs ?? []);
           setRegimenUnmapped(data.regimen_organs_unmapped ?? []);
-          if (data.sex) setPatientSex(String(data.sex));
         }
       } catch (err) {
         if (!cancelled) {
@@ -394,9 +472,13 @@ export function PrescriptionCart() {
     setSearchBusy(true);
     setSearchError(null);
     try {
+      // A tight cap: the backend returns generics (SCD) and best name-fit
+      // first, so the top handful are the strengths a prescriber actually
+      // means. Without a limit this defaulted to 20 — every strength, form and
+      // brand of one drug — which is the "too many variants" noise.
       const data = await apiFetch(
         "analogue",
-        `/drugs/search?q=${encodeURIComponent(q)}`,
+        `/drugs/search?q=${encodeURIComponent(q)}&limit=8`,
       );
       setHits(data.items ?? []);
     } catch (err) {
@@ -496,27 +578,32 @@ export function PrescriptionCart() {
     setAnalogueRationaleUnavailable(false);
     setAnalogueVerdicts(new Map());
     setAnalogueCheckFailed(false);
+    setAnalogueRuledOut([]);
     const line = resultsByRxcui.get(item.rxcui);
-    const hasContraindication = (line?.warnings?.length ?? 0) > 0;
-    const exclude =
-      line?.exclude_ingredient ||
-      line?.exclude_ingredient_name ||
-      "1886";
+    // Only a line that actually flagged an ingredient carries an exclusion. A
+    // clean line has nothing to hide, so the AI shortens the full therapeutic
+    // list rather than dropping candidates for an arbitrary ingredient — the
+    // old "1886" (caffeine) default did exactly that on lines with no warning.
+    const exclude = line?.exclude_ingredient || line?.exclude_ingredient_name || "";
     try {
-      // With contraindications + Gemini key: UC-5 AI filter on Full list.
-      // Without a key, analogue defaults use_ai=false; never force true (409).
+      // AI shortens the list on every lookup during prescribing, not only
+      // contraindicated lines: the physician always gets the ranked top-5 with
+      // a rationale instead of an unfiltered Full list. Gated only on the
+      // service being configured — analogue 409s on an explicit true with no
+      // key (docs/analog-search-flow.md), so ask ai-status first.
       let useAi = false;
-      if (hasContraindication) {
-        try {
-          const status = await apiFetch("analogue", "/analogues/ai-status");
-          useAi = Boolean(status?.available);
-        } catch {
-          useAi = false;
-        }
+      try {
+        const status = await apiFetch("analogue", "/analogues/ai-status");
+        useAi = Boolean(status?.available);
+      } catch {
+        useAi = false;
       }
+      const excludeParam = exclude
+        ? `&exclude_ingredient=${encodeURIComponent(exclude)}`
+        : "";
       const data = await apiFetch(
         "analogue",
-        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}&exclude_ingredient=${encodeURIComponent(exclude)}&facility_id=${facility.id}`,
+        `/analogues/${encodeURIComponent(item.rxcui)}?mode=full&use_ai=${useAi}${excludeParam}&facility_id=${facility.id}`,
       );
       const items: AnalogueHit[] = data.items ?? [];
       setAnalogueUsedAi(Boolean(data.use_ai));
@@ -527,13 +614,20 @@ export function PrescriptionCart() {
       // at the patient — so assess them before offering one as a swap.
       const verdicts = await checkAnaloguesForPatient(item.rxcui, items);
       setAnalogueVerdicts(verdicts);
-      // Ranked first, then cut — so the five shown are the best five, not
-      // the first five the analogue service happened to return.
-      setAnalogues(
-        verdicts.size
-          ? [...items].sort(bySafetyThenStock(verdicts)).slice(0, MAX_SUGGESTIONS)
-          : items.slice(0, MAX_SUGGESTIONS),
-      );
+      if (verdicts.size) {
+        // Safest first (in-stock breaks a safety tie), then split: a
+        // contraindicated substitute is not offered as a one-click swap, it is
+        // listed as ruled out. Proposing a drug the check just blocked is the
+        // "you still suggest drugs with issues" complaint — the assessment now
+        // decides what is offered, not only how it is ordered.
+        const ranked = [...items].sort(bySafetyThenStock(verdicts));
+        const isBlocked = (h: AnalogueHit) => verdicts.get(h.rxcui)?.verdict === "blocked";
+        setAnalogues(ranked.filter((h) => !isBlocked(h)).slice(0, MAX_SUGGESTIONS));
+        setAnalogueRuledOut(ranked.filter(isBlocked));
+      } else {
+        setAnalogues(items.slice(0, MAX_SUGGESTIONS));
+        setAnalogueRuledOut([]);
+      }
     } catch (err) {
       setAnalogueError(err instanceof Error ? err.message : "analogue search failed");
     } finally {
@@ -570,7 +664,6 @@ export function PrescriptionCart() {
         }),
       });
       for (const row of checked?.results ?? []) verdicts.set(row.rxcui, row);
-      if (checked?.sex) setPatientSex(String(checked.sex));
     } catch {
       setAnalogueCheckFailed(true);
     }
@@ -675,8 +768,7 @@ export function PrescriptionCart() {
                   onSelect={(picked) => {
                     // The picker returns the row it listed, which is the whole
                     // patient — no second fetch to show allergies below.
-                    setSelectedPatient(picked);
-                    setCart((prev) => ({ ...prev, patientId: picked?.id ?? null }));
+                    switchPatient(picked);
                   }}
                 />
               </div>
@@ -711,7 +803,6 @@ export function PrescriptionCart() {
                 <AnatomyImpact
                   organs={regimenOrgans}
                   unmapped={regimenUnmapped}
-                  sex={patientSex}
                   height={150}
                   dense
                 />
@@ -722,7 +813,6 @@ export function PrescriptionCart() {
             {selectedPatient && (
               <ImpactWindow
                 patientName={selectedPatient.full_name}
-                sex={patientSex}
                 regimenOrgans={regimenOrgans}
                 regimenUnmapped={regimenUnmapped}
                 lines={checkResults}
@@ -899,6 +989,21 @@ export function PrescriptionCart() {
                             Warning ({warnings.length})
                           </Button>
                         )}
+                        {/* Analogues are findable for any line, not only flagged
+                            ones: a physician may want a cheaper or better-stocked
+                            equivalent for a drug that raised no warning, and the
+                            AI shortens that list the same way. */}
+                        {!hasWarning && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => (open ? setOpenWarningFor(null) : void findAnalogues(item))}
+                          >
+                            Find analogues
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="outline"
@@ -912,15 +1017,19 @@ export function PrescriptionCart() {
                     </div>
                     {open && (
                       <div className="mt-3 flex flex-col gap-2 border-t pt-3">
-                        <h3 className="text-sm font-medium">Why this warning</h3>
-                        <ul className="flex flex-col gap-1.5 text-xs">
-                          {warnings.map((w, idx) => (
-                            <li key={`${w.code}-${idx}`}>
-                              <span className="font-medium">{w.code}</span>: {w.message}{" "}
-                              <span className="text-muted-foreground">({w.source})</span>
-                            </li>
-                          ))}
-                        </ul>
+                        {hasWarning && (
+                          <>
+                            <h3 className="text-sm font-medium">Why this warning</h3>
+                            <ul className="flex flex-col gap-1.5 text-xs">
+                              {warnings.map((w, idx) => (
+                                <li key={`${w.code}-${idx}`}>
+                                  <span className="font-medium">{w.code}</span>: {w.message}{" "}
+                                  <span className="text-muted-foreground">({w.source})</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        )}
                         {(line?.exclude_ingredient || line?.exclude_ingredient_name) && (
                           <p className="text-xs">
                             Suggested filter: exclude{" "}
@@ -938,7 +1047,9 @@ export function PrescriptionCart() {
                         >
                           {analogueBusy
                             ? "Finding analogues…"
-                            : "Find analogues without this ingredient"}
+                            : hasWarning
+                              ? "Find analogues without this ingredient"
+                              : "Find analogues (AI-ranked)"}
                         </Button>
                         {analogueError && <p className="text-xs text-destructive">{analogueError}</p>}
                         {analogueUsedAi && !analogueRationaleUnavailable && (
@@ -946,8 +1057,11 @@ export function PrescriptionCart() {
                         )}
                         {analogueRationaleUnavailable && (
                           <p className="text-[11px] text-muted-foreground">
-                            AI rationale unavailable — showing unfiltered Full list (still excluding the
-                            avoided ingredient).
+                            AI rationale unavailable — showing unfiltered Full list
+                            {line?.exclude_ingredient || line?.exclude_ingredient_name
+                              ? " (still excluding the avoided ingredient)"
+                              : ""}
+                            .
                           </p>
                         )}
                         {analogueCheckFailed && (
@@ -1062,7 +1176,6 @@ export function PrescriptionCart() {
                                     <AnatomyImpact
                                       organs={checked.organs}
                                       unmapped={checked.organs_unmapped ?? []}
-                                      sex={patientSex}
                                       height={260}
                                     />
                                   </div>
@@ -1091,8 +1204,42 @@ export function PrescriptionCart() {
                             );
                           })}
                         </ul>
-                        {!analogueBusy && analogues.length === 0 && !analogueError && (
-                          <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
+                        {!analogueBusy &&
+                          analogues.length === 0 &&
+                          analogueRuledOut.length === 0 &&
+                          !analogueError && (
+                            <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
+                          )}
+                        {!analogueBusy && analogues.length === 0 && analogueRuledOut.length > 0 && (
+                          <p className="text-xs text-amber-700 dark:text-amber-400">
+                            Every substitute found was contraindicated for this patient — none is
+                            offered. See ruled out below.
+                          </p>
+                        )}
+                        {/* Contraindicated candidates: considered, assessed, and
+                            not offered as a swap. Shown so the check is visible,
+                            not silently dropped. */}
+                        {analogueRuledOut.length > 0 && (
+                          <div className="mt-1 border-t pt-2">
+                            <p className="text-[11px] font-medium text-muted-foreground">
+                              Ruled out for this patient ({analogueRuledOut.length})
+                            </p>
+                            <ul className="mt-1 flex flex-col gap-1">
+                              {analogueRuledOut.map((a) => {
+                                const checked = analogueVerdicts.get(a.rxcui);
+                                return (
+                                  <li key={a.rxcui} className="text-[11px] text-muted-foreground">
+                                    <span className="font-medium text-destructive">{a.name}</span>
+                                    {checked?.findings?.length
+                                      ? ` — ${checked.findings
+                                          .map((f) => f.message)
+                                          .join("; ")}`
+                                      : " — contraindicated"}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
                         )}
                       </div>
                     )}

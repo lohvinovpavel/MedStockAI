@@ -77,7 +77,6 @@ export default function BodyPreviewPage() {
         <AnatomyImpact
           organs={IBUPROFEN}
           unmapped={["NARROW_THERAPEUTIC_INDEX"]}
-          sex="F"
           title="Single candidate"
         />
       </section>
@@ -87,8 +86,8 @@ export default function BodyPreviewPage() {
           Substitution
         </h2>
         <div className="grid gap-8 sm:grid-cols-2">
-          <AnatomyImpact organs={IBUPROFEN} sex="F" title="Current — ibuprofen" height={300} />
-          <AnatomyImpact organs={SERTRALINE} sex="F" title="Substitute — sertraline" height={300} />
+          <AnatomyImpact organs={IBUPROFEN} title="Current — ibuprofen" height={300} />
+          <AnatomyImpact organs={SERTRALINE} title="Substitute — sertraline" height={300} />
         </div>
         <p className="mt-4 border-t border-slate-200 pt-3 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-400">
           Relieves kidneys, stomach, oesophagus and the bleeding risk. Introduces a
@@ -98,8 +97,7 @@ export default function BodyPreviewPage() {
 
       <section className="rounded-xl border border-slate-200 p-6 dark:border-slate-700">
         <AnatomyImpact
-          organs={WIDE}
-          sex="M" title="Organs only the widened reaction table can reach"
+          organs={WIDE} title="Organs only the widened reaction table can reach"
         />
       </section>
     </main>

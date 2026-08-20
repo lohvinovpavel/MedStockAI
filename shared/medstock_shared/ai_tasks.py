@@ -31,6 +31,25 @@ class AITask:
     timeout_seconds: float | None = None
 
 
+def _organs_is_list(result: dict) -> None:
+    """The organ_impact task must return a list of organ labels. Membership in
+    the drawable ORGANS set is enforced by the caller (organ_infer.py) -- an
+    off-list organ is dropped there, so a stray label degrades to "could not
+    place" (the finding stays unmapped, as it was) rather than an AIError."""
+    if not isinstance(result, dict) or not isinstance(result.get("organs"), list):
+        raise TypeError("organ_impact task must return a list 'organs'")
+
+
+def _drug_class_is_string(result: dict) -> None:
+    """The drug_class task must return a string label. Membership in the allowed
+    set is enforced by the caller (drug_class.py), not here: an off-list label is
+    coerced to "unknown" there rather than failing the whole call, so a slightly
+    mislabelled answer degrades to the same DRUG_CLASS_UNKNOWN it would have been
+    without the model, not to an AIError."""
+    if not isinstance(result, dict) or not isinstance(result.get("drug_class"), str):
+        raise TypeError("drug_class task must return a string 'drug_class'")
+
+
 def _citation_must_be_verbatim(result: dict) -> None:
     """Drop hallucinated citations rather than rejecting the whole keep-set.
 
@@ -340,6 +359,58 @@ TASKS: dict[str, AITask] = {
             "Document: {source_text}"
         ),
         timeout_seconds=90.0,
+    ),
+    # patient-profiling — third tier of drug-class resolution (drug_class.py).
+    # The curated map and the ingredient-stem table are both small on purpose;
+    # when both miss, assess() emits DRUG_CLASS_UNKNOWN and skips every
+    # class-gated stage. This places the drug in a class the ruleset already
+    # knows -- constrained to the allowed list passed in, so the model cannot
+    # invent a label no rule can act on -- and the answer is cached per drug in
+    # ai_cache, so the model runs at most once for each novel rxcui.
+    "drug_class": AITask(
+        name="drug_class",
+        owner="Andrii",
+        prompt=(
+            "Classify this drug into exactly one therapeutic class, for a rules "
+            "engine that shades affected organs and checks interactions.\n\n"
+            "Choose one label from this list, or \"unknown\":\n{allowed}\n\n"
+            "Rules:\n"
+            "- Pick the single class matching the drug's primary mechanism.\n"
+            "- Judge by the active ingredient, not the brand or the salt form.\n"
+            "- If none of the listed classes genuinely fit, return \"unknown\". "
+            "A wrong class turns the wrong organ warnings on; \"unknown\" is the "
+            "honest answer and leaves the drug where it already was.\n\n"
+            'Return JSON: {{"drug_class": "<one label from the list, or unknown>"}}\n\n'
+            "Drug name: {drug_name}\n"
+            "Ingredients: {ingredients}"
+        ),
+        validate=_drug_class_is_string,
+    ),
+    # patient-profiling — organ placement for an effect the substring tables miss
+    # (organ_infer.py). REACTION_ORGANS covers the common FAERS/label phrasings,
+    # but a rare reaction or an avoided ingredient with no table line would draw
+    # nothing and be reported unmapped. This places it on the body, constrained
+    # to the organs the figure can actually draw, cached per effect. It fires
+    # only for prose-carrying findings (a reaction, an ingredient), never for a
+    # code deliberately mapped to "no single organ".
+    "organ_impact": AITask(
+        name="organ_impact",
+        owner="Andrii",
+        prompt=(
+            "Which organ or organs does this drug effect act on, for a body "
+            "diagram?\n\n"
+            "Choose only from this list:\n{allowed}\n\n"
+            "Rules:\n"
+            "- Name the organ(s) where the effect is seen or does its harm.\n"
+            "- Use only labels from the list. If none genuinely fit, return an "
+            "empty list -- a blank is honest, a wrong organ is a false clinical "
+            "claim on the figure.\n"
+            "- Most effects are one organ. Return several only when the effect "
+            "truly spans them (an anaphylactic reaction: skin and lungs).\n\n"
+            'Return JSON: {{"organs": ["<label from the list>", ...]}}\n\n'
+            "Effect: {effect}"
+        ),
+        validate=_organs_is_list,
     ),
     # prediction — Mykhailo
     # compliance (extract) — Andrii

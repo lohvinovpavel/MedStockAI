@@ -16,7 +16,9 @@ from importlib.metadata import version as pkg_version
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException
 from medstock_shared.auth import Principal, require
 from medstock_shared.db import engine, session_scope
+from medstock_shared.drug_class import ensure_drug_class
 from medstock_shared.models import AssessmentLog, Patient, PrognosisAssumption
+from medstock_shared.organ_infer import infer_organs_for_effect
 from medstock_shared.organs import impacts as organ_impacts
 from medstock_shared.patient import (
     BANDS,
@@ -25,12 +27,10 @@ from medstock_shared.patient import (
     PatientVector,
     assess,
     avoided_ingredient_warnings,
-    class_from_ingredients,
     class_of,
     patient_row_to_vector,
     plan_demand,
     profile_avoided_ingredients,
-    register_drug_class,
 )
 from medstock_shared.patient_assess import (
     NOT_FOUND,
@@ -340,6 +340,13 @@ def post_assess(
     profiles = approved_profiles(candidates)
     pgx = pgx_for(candidates)
     adr = adr_signals_for(candidates)
+    # Resolve class before assess() so the class-gated stages run. Deterministic
+    # tiers only here (allow_llm=False): this route takes up to MAX_CANDIDATES
+    # drugs at once, and a per-candidate model call would put fifty synchronous
+    # Gemini requests on one response. The cart path, a handful of lines, is
+    # where the LLM fallback earns its latency.
+    for rxcui in candidates:
+        ensure_drug_class(rxcui, principal=principal, allow_llm=False)
     assessments = [
         assess(patient, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         for rxcui in candidates
@@ -791,13 +798,25 @@ def cart_check(
             ingredients_by_rxcui[rx] = ingredients_for_rxcui(rx)
         except RxNormError:
             ingredients_by_rxcui[rx] = []
-        if class_of(rx) is None and ingredients_by_rxcui[rx]:
-            register_drug_class(
-                rx,
-                class_from_ingredients(
-                    str(i.get("name") or "") for i in ingredients_by_rxcui[rx]
-                ),
-            )
+        # Curated map, then ingredient stems, then the LLM for the long tail the
+        # stem table cannot reach -- cached per drug, so this is at most one model
+        # call the first time a novel drug reaches a cart. Ingredients are passed
+        # in so the resolver does not re-fetch what we already have.
+        ensure_drug_class(
+            rx,
+            ingredient_names=[
+                str(i.get("name") or "") for i in ingredients_by_rxcui[rx]
+            ],
+            principal=principal,
+        )
+
+    # The figure's model-backed gap-filler: a reaction or avoided ingredient the
+    # substring tables cannot place is sent to the model for an organ, cached per
+    # effect. Bound to this principal for the audit trail; passed into every
+    # organ_impacts call below so both the per-line and whole-regimen figures
+    # place the same effect the same way.
+    def infer_effect(effect: str) -> tuple[str, ...]:
+        return infer_organs_for_effect(effect, principal=principal)
 
     for item in body.items:
         rxcui = item.rxcui.strip()
@@ -820,7 +839,8 @@ def cart_check(
                 }
             )
 
-        for finding in avoided_ingredient_warnings(vector, rxcui, ingredients):
+        avoided_findings = avoided_ingredient_warnings(vector, rxcui, ingredients)
+        for finding in avoided_findings:
             warnings.append(_finding_dict(finding))
             # Prefer the first avoided ingredient hit for analogue filtering.
             if exclude_ingredient is None:
@@ -834,7 +854,13 @@ def cart_check(
                         exclude_ingredient_name = ing_name
                         break
 
-        shaded, unshaded = organ_impacts(assessment.findings, class_of(rxcui))
+        # Avoided-ingredient findings shade the figure too, not just the warning
+        # list: they name an organ (organs.py INGREDIENT_ORGANS), and a caffeine
+        # advisory that badges the line but leaves the body blank is the "impact
+        # does not work for avoid-caffeine" gap. They come from the profile +
+        # RxNorm, not from assess(), so they have to be added in by hand here.
+        line_findings = [*assessment.findings, *avoided_findings]
+        shaded, unshaded = organ_impacts(line_findings, class_of(rxcui), infer_organs=infer_effect)
         results.append(
             {
                 "rxcui": rxcui,
@@ -849,7 +875,7 @@ def cart_check(
                 "organs_unmapped": unshaded,
             }
         )
-        regimen_findings.extend(assessment.findings)
+        regimen_findings.extend(line_findings)
         if class_of(rxcui):
             regimen_classes.add(class_of(rxcui))
 
@@ -864,7 +890,9 @@ def cart_check(
     # and handing an arbitrary one to the mapping would attribute a stack to a
     # drug that did not cause it.
     only_class = next(iter(regimen_classes)) if len(regimen_classes) == 1 else None
-    regimen_shaded, regimen_unmapped = organ_impacts(regimen_findings, only_class)
+    regimen_shaded, regimen_unmapped = organ_impacts(
+        regimen_findings, only_class, infer_organs=infer_effect
+    )
 
     return {
         "ruleset_version": RULESET_VERSION,
@@ -918,7 +946,12 @@ def analogue_check(
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, body.patient_id)
-        if row is None or row.hospital_id != principal.hospital_id:
+        # hospital_uuid, not hospital_id: Patient.hospital_id is a UUID column and
+        # the JWT claim is a str, so `UUID != str` is always true (F-01) and this
+        # 404'd every valid patient -- which meant substitute assessment never ran
+        # and the cart offered analogues with no safety verdict. The other three
+        # patient routes already compare against hospital_uuid.
+        if row is None or row.hospital_id != principal.hospital_uuid:
             raise HTTPException(status_code=404, detail="patient not found")
         vector = patient_row_to_vector(row)
         patient_payload = _patient_dict(row)
@@ -933,6 +966,7 @@ def analogue_check(
         r_pgx = pgx_for(regimen_rxcuis)
         r_adr = adr_signals_for(regimen_rxcuis)
         for other in regimen_rxcuis:
+            ensure_drug_class(other, principal=principal, allow_llm=False)
             other_assessment = assess(
                 vector, other, risk_profiles=r_profiles, pgx=r_pgx, adr_signals=r_adr
             )
@@ -950,6 +984,14 @@ def analogue_check(
         rxcui = item.rxcui.strip()
         if not rxcui:
             continue
+        # LLM class resolution is ON here, unlike the bulk /assess path: this is
+        # the substitute-safety check, and a candidate whose class the curated
+        # map and stems both miss is exactly where a same-class contraindication
+        # slips through -- an uncurated penicillin offered to a penicillin-
+        # allergic patient because "class unknown" skipped the allergy gate. The
+        # list is the analogue service's already-narrowed top few, and answers
+        # are cached per drug, so this is a handful of one-time calls, not fifty.
+        ensure_drug_class(rxcui, principal=principal, allow_llm=True)
         assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         shaded, unmapped = organ_impacts(assessment.findings, class_of(rxcui))
         results.append(
