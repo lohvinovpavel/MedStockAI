@@ -10,14 +10,16 @@ from medstock_shared.auth import PERMS, Principal, require
 from medstock_shared.config import settings
 from medstock_shared.db import engine, session_scope
 from medstock_shared.formulary import shelf_ndcs_for_rxcuis
-from medstock_shared.models import Facility, FormularyItem, StockSnapshot
+from medstock_shared.models import Drug, Facility, FormularyItem, StockSnapshot
 from medstock_shared.rxnorm import (
     ANALOGUE_CANDIDATE_LIMIT,
     RxNormError,
     apply_formulary,
+    atc_prefixes,
     concept_properties,
     ingredients_for_rxcui,
     ndcs_for_rxcui,
+    primary_atc_prefix,
     related_scd_sbd,
     search_concepts,
     therapeutic_scd_sbd,
@@ -290,6 +292,66 @@ def analogue_ai_status(
     return {"available": _ai_available()}
 
 
+def _in_stock_group_candidates(
+    source: str, principal: Principal, facility_id: int | None
+) -> list[dict]:
+    """In-stock drugs in the source's therapeutic group.
+
+    The RxNorm therapeutic pool is theoretical equivalence, and when none of its
+    members are on the shelf the Full search returns a page of zeros -- real
+    equivalents the hospital does stock (a GLP-1 for metformin, a cephalosporin
+    for amoxicillin) never appear, because the pool is built from RxNorm, not
+    from the formulary. This adds the formulary side: what is on hand, filtered
+    to the source's ATC main group, handed to the same stock ranking and AI
+    suitability filter as any other candidate. Empty (no facility, nothing in
+    stock, or no ATC class) leaves Full exactly as it was.
+    """
+    source_group = primary_atc_prefix(source)
+    if not source_group:
+        return []
+    try:
+        with session_scope(principal.hospital_id, principal.user_id) as session:
+            rxcui_col = Drug.raw["rxcui"].astext
+            query = (
+                select(rxcui_col, func.max(Drug.name), func.sum(StockSnapshot.quantity))
+                .join(Drug, Drug.ndc == StockSnapshot.ndc)
+                .where(StockSnapshot.quantity > 0, rxcui_col.isnot(None))
+                .group_by(rxcui_col)
+            )
+            if facility_id is not None:
+                query = query.where(StockSnapshot.facility_id == facility_id)
+            rows = session.execute(query).all()
+    except (ProgrammingError, SQLAlchemyError):
+        return []
+
+    stock: dict[str, tuple[str, int]] = {}
+    for rxcui, name, qty in rows:
+        rid = str(rxcui or "").strip()
+        if rid and rid != source and int(qty or 0) > 0:
+            stock[rid] = (str(name or ""), int(qty or 0))
+    if not stock:
+        return []
+
+    # Keep the ones in the source's therapeutic group. ATC lookups are cached;
+    # parallelise the cold ones so a first search does not serialise dozens of
+    # RxNorm calls.
+    ids = list(stock)
+    workers = min(_NDC_WORKERS, len(ids)) or 1
+    kept: list[dict] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(atc_prefixes, rid): rid for rid in ids}
+        for fut in as_completed(futures):
+            rid = futures[fut]
+            try:
+                same_group = source_group in fut.result()
+            except RxNormError:
+                same_group = False
+            if same_group:
+                name, qty = stock[rid]
+                kept.append({"rxcui": rid, "name": name, "tty": "SCD", "_qty": qty})
+    return kept
+
+
 def _contains_excluded_ingredient(candidate_rxcui: str, exclude: str) -> bool:
     """True if candidate includes exclude (RxCUI or case-insensitive name)."""
     needle = exclude.strip().lower()
@@ -389,6 +451,30 @@ def get_analogues(
                 **stock_fields(quantity),
             }
         )
+
+    # Formulary reality on top of RxNorm theory: in-stock drugs in the source's
+    # therapeutic group. Their on-hand is read straight from stock_snapshot, so
+    # a stocked equivalent surfaces even when its NDCs never round-tripped
+    # through RxNorm's ndcs list -- which is why the RxNorm pool showed it at
+    # zero. A stocked row overwrites a zero-stock RxNorm duplicate; the ranking
+    # and AI filter treat both the same afterwards. Full only.
+    if mode == "full":
+        by_rxcui = {row["rxcui"]: row for row in items}
+        for cand in _in_stock_group_candidates(source, principal, facility_id):
+            existing = by_rxcui.get(cand["rxcui"])
+            if existing is not None:
+                if existing["quantity"] < cand["_qty"]:
+                    existing.update(stock_fields(cand["_qty"]))
+                continue
+            row = {
+                "rxcui": cand["rxcui"],
+                "tty": cand["tty"],
+                "name": cand["name"],
+                **stock_fields(cand["_qty"]),
+            }
+            items.append(row)
+            by_rxcui[cand["rxcui"]] = row
+
     items.sort(key=lambda row: (-row["quantity"], row["name"].lower(), row["rxcui"]))
     items = items[:ANALOGUE_CANDIDATE_LIMIT]
     if mode == "full":

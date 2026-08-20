@@ -306,6 +306,11 @@ export function PrescriptionCart() {
   // Distinct from an empty verdict map: "not assessed" and "assessed, nothing
   // found" must not render the same, or a failed check looks like a clean bill.
   const [analogueCheckFailed, setAnalogueCheckFailed] = useState(false);
+  // Candidates assessed as contraindicated for this patient. Kept out of the
+  // proposed list -- the tool must not offer a swap it has just ruled unsafe --
+  // but shown, so "considered and ruled out" is visible rather than a silent
+  // drop that hides an obvious substitute was looked at.
+  const [analogueRuledOut, setAnalogueRuledOut] = useState<AnalogueHit[]>([]);
 
   const [prescription, setPrescription] = useState<PrescriptionSnapshot | null>(null);
 
@@ -347,6 +352,7 @@ export function PrescriptionCart() {
     setAnalogueRationaleUnavailable(false);
     setAnalogueVerdicts(new Map());
     setAnalogueCheckFailed(false);
+    setAnalogueRuledOut([]);
     setOpenWarningFor(null);
     setPrescription(null);
   }
@@ -572,6 +578,7 @@ export function PrescriptionCart() {
     setAnalogueRationaleUnavailable(false);
     setAnalogueVerdicts(new Map());
     setAnalogueCheckFailed(false);
+    setAnalogueRuledOut([]);
     const line = resultsByRxcui.get(item.rxcui);
     // Only a line that actually flagged an ingredient carries an exclusion. A
     // clean line has nothing to hide, so the AI shortens the full therapeutic
@@ -607,13 +614,20 @@ export function PrescriptionCart() {
       // at the patient — so assess them before offering one as a swap.
       const verdicts = await checkAnaloguesForPatient(item.rxcui, items);
       setAnalogueVerdicts(verdicts);
-      // Ranked first, then cut — so the five shown are the best five, not
-      // the first five the analogue service happened to return.
-      setAnalogues(
-        verdicts.size
-          ? [...items].sort(bySafetyThenStock(verdicts)).slice(0, MAX_SUGGESTIONS)
-          : items.slice(0, MAX_SUGGESTIONS),
-      );
+      if (verdicts.size) {
+        // Safest first (in-stock breaks a safety tie), then split: a
+        // contraindicated substitute is not offered as a one-click swap, it is
+        // listed as ruled out. Proposing a drug the check just blocked is the
+        // "you still suggest drugs with issues" complaint — the assessment now
+        // decides what is offered, not only how it is ordered.
+        const ranked = [...items].sort(bySafetyThenStock(verdicts));
+        const isBlocked = (h: AnalogueHit) => verdicts.get(h.rxcui)?.verdict === "blocked";
+        setAnalogues(ranked.filter((h) => !isBlocked(h)).slice(0, MAX_SUGGESTIONS));
+        setAnalogueRuledOut(ranked.filter(isBlocked));
+      } else {
+        setAnalogues(items.slice(0, MAX_SUGGESTIONS));
+        setAnalogueRuledOut([]);
+      }
     } catch (err) {
       setAnalogueError(err instanceof Error ? err.message : "analogue search failed");
     } finally {
@@ -1190,8 +1204,42 @@ export function PrescriptionCart() {
                             );
                           })}
                         </ul>
-                        {!analogueBusy && analogues.length === 0 && !analogueError && (
-                          <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
+                        {!analogueBusy &&
+                          analogues.length === 0 &&
+                          analogueRuledOut.length === 0 &&
+                          !analogueError && (
+                            <p className="text-xs text-muted-foreground">No analogues returned yet.</p>
+                          )}
+                        {!analogueBusy && analogues.length === 0 && analogueRuledOut.length > 0 && (
+                          <p className="text-xs text-amber-700 dark:text-amber-400">
+                            Every substitute found was contraindicated for this patient — none is
+                            offered. See ruled out below.
+                          </p>
+                        )}
+                        {/* Contraindicated candidates: considered, assessed, and
+                            not offered as a swap. Shown so the check is visible,
+                            not silently dropped. */}
+                        {analogueRuledOut.length > 0 && (
+                          <div className="mt-1 border-t pt-2">
+                            <p className="text-[11px] font-medium text-muted-foreground">
+                              Ruled out for this patient ({analogueRuledOut.length})
+                            </p>
+                            <ul className="mt-1 flex flex-col gap-1">
+                              {analogueRuledOut.map((a) => {
+                                const checked = analogueVerdicts.get(a.rxcui);
+                                return (
+                                  <li key={a.rxcui} className="text-[11px] text-muted-foreground">
+                                    <span className="font-medium text-destructive">{a.name}</span>
+                                    {checked?.findings?.length
+                                      ? ` — ${checked.findings
+                                          .map((f) => f.message)
+                                          .join("; ")}`
+                                      : " — contraindicated"}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
                         )}
                       </div>
                     )}

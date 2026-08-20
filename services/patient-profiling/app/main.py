@@ -946,7 +946,12 @@ def analogue_check(
 
     with session_scope(principal.hospital_id, principal.user_id) as session:
         row = session.get(Patient, body.patient_id)
-        if row is None or row.hospital_id != principal.hospital_id:
+        # hospital_uuid, not hospital_id: Patient.hospital_id is a UUID column and
+        # the JWT claim is a str, so `UUID != str` is always true (F-01) and this
+        # 404'd every valid patient -- which meant substitute assessment never ran
+        # and the cart offered analogues with no safety verdict. The other three
+        # patient routes already compare against hospital_uuid.
+        if row is None or row.hospital_id != principal.hospital_uuid:
             raise HTTPException(status_code=404, detail="patient not found")
         vector = patient_row_to_vector(row)
         patient_payload = _patient_dict(row)
@@ -979,7 +984,14 @@ def analogue_check(
         rxcui = item.rxcui.strip()
         if not rxcui:
             continue
-        ensure_drug_class(rxcui, principal=principal, allow_llm=False)
+        # LLM class resolution is ON here, unlike the bulk /assess path: this is
+        # the substitute-safety check, and a candidate whose class the curated
+        # map and stems both miss is exactly where a same-class contraindication
+        # slips through -- an uncurated penicillin offered to a penicillin-
+        # allergic patient because "class unknown" skipped the allergy gate. The
+        # list is the analogue service's already-narrowed top few, and answers
+        # are cached per drug, so this is a handful of one-time calls, not fifty.
+        ensure_drug_class(rxcui, principal=principal, allow_llm=True)
         assessment = assess(vector, rxcui, risk_profiles=profiles, pgx=pgx, adr_signals=adr)
         shaded, unmapped = organ_impacts(assessment.findings, class_of(rxcui))
         results.append(

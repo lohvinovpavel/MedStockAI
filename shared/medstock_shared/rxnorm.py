@@ -306,6 +306,52 @@ def primary_class_name(rxcui: str) -> str | None:
     return _cached(("primary_class", str(rxcui)), _CLASS_TTL, fill)
 
 
+def atc_prefixes(rxcui: str, length: int = 3) -> frozenset[str]:
+    """The drug's ATC codes, each truncated to `length` characters. Cached.
+
+    Length 3 is the ATC level-2 therapeutic main group -- 'A10' (drugs used in
+    diabetes), 'J01' (systemic antibacterials), 'C10' (lipid modifying agents).
+    Two drugs that share a prefix are in the same therapeutic group, which is
+    how the Full analogue search decides whether an in-stock drug is a candidate
+    to replace a source: a stocked GLP-1 shares 'A10' with metformin and so
+    counts, a statin does not. Empty when the drug carries no ATC class -- the
+    caller then simply contributes nothing, and Full behaves as it did before.
+    """
+
+    def fill() -> frozenset[str]:
+        cut = max(length, 1)
+        out: set[str] = set()
+        for info in _rxclass_infos(str(rxcui)):
+            if (info.get("relaSource") or "") not in _ATC_SOURCES:
+                continue
+            code = str((info.get("rxclassMinConceptItem") or {}).get("classId") or "").strip()
+            if code:
+                out.add(code[:cut])
+        return frozenset(out)
+
+    return _cached(("atc_prefixes", str(rxcui), length), _CLASS_TTL, fill)
+
+
+def primary_atc_prefix(rxcui: str, length: int = 3) -> str | None:
+    """The drug's *dominant* ATC group prefix, e.g. 'A10' or 'J01'. Cached.
+
+    Only the top-ranked ATC class, not every class the drug touches. A drug's
+    secondary indication drags in an unrelated group otherwise -- amoxicillin's
+    H. pylori combination therapy sits in A02 (peptic ulcer), so matching on all
+    its codes would offer a PPI as an antibiotic substitute. The substitution
+    source must be judged by what it primarily is.
+    """
+
+    def fill() -> str | None:
+        picked = _pick_primary_class(str(rxcui), _rxclass_infos(str(rxcui)))
+        if not picked or picked.get("relaSource") not in _ATC_SOURCES:
+            return None
+        code = str(picked.get("classId") or "").strip()[: max(length, 1)]
+        return code or None
+
+    return _cached(("primary_atc_prefix", str(rxcui), length), _CLASS_TTL, fill)
+
+
 def _members_to_concepts(members: list) -> list[dict]:
     items: list[dict] = []
     for member in members:
